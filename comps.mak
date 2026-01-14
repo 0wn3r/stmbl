@@ -45,6 +45,7 @@ LV_SHARED_COMPS += shared/comps/reslimit.c
 LV_SHARED_COMPS += shared/comps/iit.c
 LV_SHARED_COMPS += shared/comps/vel_int.c
 LV_SHARED_COMPS += shared/comps/linrev.c
+LV_SHARED_COMPS += shared/comps/linrev_mt.c
 LV_SHARED_COMPS += shared/comps/psi.c
 LV_SHARED_COMPS += shared/comps/stp.c
 #LV_SHARED_COMPS += shared/comps/uf.c
