@@ -37,10 +37,21 @@ HAL_PIN(fb_d_out);
 HAL_PIN(rev_clear);
 HAL_PIN(rev);
 
+HAL_PIN(abs_en);
+HAL_PIN(abs_rev);
+
+static uint32_t abs_state_counter;
+
 struct linrev_ctx_t {
   int lastq;    //last quadrant
   int32_t rev;  //current multiturn
 };
+
+static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
+  // struct linrev_ctx_t *ctx      = (struct linrev_ctx_t *)ctx_ptr;
+
+  abs_state_counter = 0;
+}
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct linrev_ctx_t *ctx      = (struct linrev_ctx_t *)ctx_ptr;
@@ -51,14 +62,30 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(cmd_out)   = mod((PIN(cmd_in) / scale) * 2.0 * M_PI);
     PIN(cmd_d_out) = PIN(cmd_d_in) / scale * 2.0 * M_PI;
   }
+
   int q = quadrant(PIN(fb_in));
 
+  if (PIN(abs_en) > 0) {
+    if (q != 0 && q == ctx->lastq && abs_state_counter != 1) {
+      ctx->rev = PIN(abs_rev);
+      abs_state_counter = 1;
+    }
+  }
+
   if(q != 0 && q == 3 && ctx->lastq == 2) {
-    ctx->rev++;
+    if(PIN(abs_en) > 0){
+      ctx->rev = PIN(abs_rev);
+    } else {
+      ctx->rev++;
+    }
   }
 
   if(q != 0 && q == 2 && ctx->lastq == 3) {
-    ctx->rev--;
+    if(PIN(abs_en) > 0){
+      ctx->rev = PIN(abs_rev);
+    } else {
+      ctx->rev--;
+    }
   }
 
   ctx->lastq = q;
@@ -76,7 +103,7 @@ const hal_comp_t linrev_comp_struct = {
     .nrt       = 0,
     .rt        = rt_func,
     .frt       = 0,
-    .nrt_init  = 0,
+    .nrt_init  = nrt_init,
     .hw_init   = 0,
     .rt_start  = 0,
     .frt_start = 0,
