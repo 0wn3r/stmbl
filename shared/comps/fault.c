@@ -54,6 +54,7 @@ HAL_PIN(sat);
 HAL_PIN(max_sat);
 
 HAL_PIN(mot_brake);
+HAL_PIN(brake_during_phasing);
 HAL_PIN(dc_brake);
 
 HAL_PIN(hv_fan);
@@ -277,7 +278,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case PHASING:
-      PIN(mot_brake) = 1.0;
+      PIN(mot_brake) = !PIN(brake_during_phasing);
       ctx->fault     = NO_ERROR;
       PIN(en_pid)    = 0.0;
       PIN(en_fb)     = 1.0;
