@@ -57,6 +57,8 @@ HAL_PIN(slip_n);        // *parameter*, Nominal slip frequency of the motor (rad
 HAL_PIN(polecount);     // *parameter*, Number of pole pairs in the motor
 HAL_PIN(freq_n);        // *parameter*, Nominal frequency of the motor (Hz)
 HAL_PIN(vel_n);         // *parameter*, Nominal velocity of the motor (rad/s)
+HAL_PIN(flux_freq_n);   // *parameter*, Nominal frequency of the motor flux weakening region (Hz)
+HAL_PIN(flux_clamp_cur);     // *parameter*, Flux weakening current clamping coefficient
 HAL_PIN(u_n);           // *parameter*, Nominal voltage of the motor (V)
 HAL_PIN(u_boost);       // *parameter*, Voltage boost factor for startup
 HAL_PIN(t_boost);       // *parameter*, Torque boost factor for startup
@@ -89,6 +91,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(torque_n)                   = 23.0;
   PIN(cur_n)                      = 17.0;
   PIN(freq_n)                     = 60.0;
+  PIN(flux_freq_n)                = 0.0;
+  PIN(flux_clamp_cur)             = 0.45;
   PIN(u_n)                        = 80.0;
   PIN(u_boost)                    = 7.0;
   PIN(t_boost)                    = 1.3;
@@ -109,6 +113,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float t_n     = MAX(PIN(torque_n), 0.001);
   float freq_n  = MAX(PIN(freq_n), 1.0);
   float slip_n  = freq_n * 2.0 * M_PI - vel_n;
+  float flux_vel_n  = MAX(PIN(flux_freq_n), 0.0) * 2.0 * M_PI;
+  float flux_clamp_cur = CLAMP(PIN(flux_clamp_cur), 0.1, 1.0);
   float cur_n   = PIN(cur_n);
   float u_n     = PIN(u_n);
   float u_boost = PIN(u_boost);
@@ -136,8 +142,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 0:            // slip control
       cmd_mode = 1.0;  // cur cmd
       // d_cmd = MIN(id_n, id_n * freq_n * 2.0 * M_PI * v_boost / vel); // constant flux
-      d_cmd = id_n * PIN(scale);
       q_cmd = id_n / t_n * torque / PIN(scale);
+      if (flux_vel_n != 0 && ABS(vel) > flux_vel_n) {
+        id_n = CLAMP(id_n * (flux_vel_n / ABS(vel)), flux_clamp_cur * id_n, id_n);
+      }
+      d_cmd = id_n * PIN(scale);
       slip  = slip_n * q_cmd / d_cmd;
 
       // id = id_n
