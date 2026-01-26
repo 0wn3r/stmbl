@@ -22,6 +22,8 @@ HAL_PIN(index);
 HAL_PIN(batt);
 HAL_PIN(req_len);
 
+HAL_PIN(pos_offset);
+
 HAL_PIN(send_step);
 HAL_PIN(crc_ok);
 HAL_PIN(crc_er);
@@ -178,6 +180,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_SetBits(GPIOD, GPIO_Pin_15);  //tx enable
 
   pos_offset    = 0;
+  PIN(pos_offset) = 0;
   PIN(req_len)  = 2046;
   state_counter = 0;
   PIN(freq)     = 1024000;
@@ -257,7 +260,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(pos)      = PIN(abs_pos);
       } else {
         state_counter = 3;
-        PIN(pos)      = mod((float)(pos + pos_offset) * 2.0 * M_PI / (1 << 22));
+        PIN(pos)      = mod((float)(pos + pos_offset + ((uint32_t)PIN(pos_offset) << 6)) * 2.0 * M_PI / (1 << 22));
         PIN(state)    = 3;
       }
 
