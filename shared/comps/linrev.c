@@ -40,6 +40,8 @@ HAL_PIN(rev);
 HAL_PIN(abs_en);
 HAL_PIN(abs_rev);
 
+HAL_PIN(pos_offset);
+
 static uint32_t abs_state_counter;
 
 struct linrev_ctx_t {
@@ -49,8 +51,10 @@ struct linrev_ctx_t {
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct linrev_ctx_t *ctx      = (struct linrev_ctx_t *)ctx_ptr;
+  struct linrev_pin_ctx_t *pins = (struct linrev_pin_ctx_t *)pin_ptr;
 
   abs_state_counter = 0;
+  PIN(pos_offset) = 0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -94,7 +98,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->rev = 0;
   }
   PIN(rev)      = ctx->rev;
-  PIN(fb_out)   = ((PIN(fb_in) + ctx->rev * M_PI * 2.0) * scale) / (2.0 * M_PI);
+  PIN(fb_out)   = ((PIN(fb_in) + ctx->rev * M_PI * 2.0) * scale) / (2.0 * M_PI) + PIN(pos_offset) * scale;
   PIN(fb_d_out) = (PIN(fb_d_in) * scale) / (2.0 * M_PI);
 }
 
