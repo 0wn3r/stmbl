@@ -20,6 +20,7 @@ HAL_PIN(at_speed_th);
 HAL_PIN(vel_cmd);
 
 HAL_PIN(at_speed);
+HAL_PIN(zero_speed);
 HAL_PIN(en_out);
 HAL_PIN(en_timer);
 HAL_PIN(en_delay);
@@ -50,13 +51,20 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(vel_cmd) += LIMIT(vel_error, max_acc * period);
   }
 
-  if(ABS(vel_ext_cmd - PIN(vel_cmd)) < PIN(max_vel) * PIN(at_speed_th)) {
+  if(ABS(vel_ext_cmd - PIN(vel_cmd)) < PIN(max_vel) * PIN(at_speed_th) && PIN(vel_cmd) > 0.01) {
     PIN(at_speed) = 1;
   } else {
     PIN(at_speed) = 0;
   }
 
-  if((ABS(PIN(vel_cmd)) > 0.01) | (ABS(vel_ext_cmd) > 0.01)) {
+  if((ABS(PIN(vel_cmd)) < 0.01) && (ABS(vel_ext_cmd) < 0.01)) {
+    PIN(zero_speed) = 1;
+  } else {
+    PIN(zero_speed) = 0;
+  }
+
+
+  if((ABS(PIN(vel_cmd)) > 0.01) || (ABS(vel_ext_cmd) > 0.01)) {
     PIN(en_timer) = CLAMP(PIN(en_timer) + period, 0, PIN(en_delay));
   } else {
     PIN(en_timer) = CLAMP(PIN(en_timer) - period, 0, PIN(en_delay));
