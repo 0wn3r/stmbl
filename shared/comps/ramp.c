@@ -14,6 +14,7 @@ HAL_PIN(scale);
 
 HAL_PIN(max_vel);
 HAL_PIN(max_acc);
+HAL_PIN(max_dec);
 HAL_PIN(at_speed_th);
 
 // output
@@ -45,10 +46,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   float vel_error = vel_ext_cmd - PIN(vel_cmd);
+  float abs_vel_error = ABS(vel_ext_cmd) - ABS(PIN(vel_cmd));
   float max_acc   = PIN(max_acc) * PIN(scale);
+  float max_dec   = PIN(max_dec) * PIN(scale);
 
   if(PIN(en_timer) >= PIN(en_delay) * 0.9) {
-    PIN(vel_cmd) += LIMIT(vel_error, max_acc * period);
+    PIN(vel_cmd) += LIMIT(vel_error, (abs_vel_error > 0.f ? max_acc : max_dec) * period);
   }
 
   if(ABS(vel_ext_cmd - PIN(vel_cmd)) < PIN(max_vel) * PIN(at_speed_th) && PIN(vel_cmd) > 0.01) {
