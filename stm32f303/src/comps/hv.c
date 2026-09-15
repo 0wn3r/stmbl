@@ -102,14 +102,26 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     w -= min_off;
   }
 
+  // final per-phase safety net: guarantees every phase individually clears
+  // both min_on and min_off even when a single common-mode shift above
+  // can't satisfy both boundaries at once (e.g. one phase near 0 and
+  // another near full scale in the same cycle -- a double violation)
+  if(u > 0 && u < min_on) u = min_on;
+  if(v > 0 && v < min_on) v = min_on;
+  if(w > 0 && w < min_on) w = min_on;
+
+  u = CLAMP(u, 0, ctx->pwm_res - min_off);
+  v = CLAMP(v, 0, ctx->pwm_res - min_off);
+  w = CLAMP(w, 0, ctx->pwm_res - min_off);
+
 #ifdef PWM_INVERT
-  PWM_U = ctx->pwm_res - CLAMP(u, 0, ctx->pwm_res - min_off);
-  PWM_V = ctx->pwm_res - CLAMP(v, 0, ctx->pwm_res - min_off);
-  PWM_W = ctx->pwm_res - CLAMP(w, 0, ctx->pwm_res - min_off);
+  PWM_U = ctx->pwm_res - u;
+  PWM_V = ctx->pwm_res - v;
+  PWM_W = ctx->pwm_res - w;
 #else
-  PWM_U = CLAMP(u, 0, ctx->pwm_res - min_off);
-  PWM_V = CLAMP(v, 0, ctx->pwm_res - min_off);
-  PWM_W = CLAMP(w, 0, ctx->pwm_res - min_off);
+  PWM_U = u;
+  PWM_V = v;
+  PWM_W = w;
 #endif
 }
 
