@@ -45,8 +45,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(enu)     = 1.0;
   PIN(env)     = 1.0;
   PIN(enw)     = 1.0;
-  PIN(min_on)  = 0.000005;
-  PIN(min_off) = 0.000005;
+  PIN(min_on)  = 0.000003;
+  PIN(min_off) = 0.000003;
   PIN(arr)     = PWM_RES;
   PIN(drop)    = 0;
 }
@@ -72,13 +72,31 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int32_t min_on  = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_on) + 0.5);
   int32_t min_off = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_off) + 0.5);
 
-  if((u > 0 && u < min_on) || (v > 0 && v < min_on) || (w > 0 && w < min_on)) {
+  // if the commanded phase spread is wider than what min_on/min_off leave
+  // available, no common-mode shift can satisfy both boundaries at once
+  // (a double violation). Scale the spread down around its center so the
+  // shift below always has enough room, instead of relying on the
+  // per-phase clamp further down to silently distort the output.
+  int32_t max_range = ctx->pwm_res - min_on - min_off;
+  int32_t range      = MAX3(u, v, w) - MIN3(u, v, w);
+  if(max_range > 0 && range > max_range) {
+    int32_t center = (MAX3(u, v, w) + MIN3(u, v, w)) / 2;
+    u              = center + (int32_t)(((int64_t)(u - center) * max_range) / range);
+    v              = center + (int32_t)(((int64_t)(v - center) * max_range) / range);
+    w              = center + (int32_t)(((int64_t)(w - center) * max_range) / range);
+  }
+
+  // evaluate both checks against the pre-correction values so the min_off
+  // shift can't be triggered by (and undo) the min_on shift, or vice versa
+  int32_t u0 = u, v0 = v, w0 = w;
+
+  if((u0 > 0 && u0 < min_on) || (v0 > 0 && v0 < min_on) || (w0 > 0 && w0 < min_on)) {
     u += min_on;
     v += min_on;
     w += min_on;
   }
 
-  if((u > ctx->pwm_res - min_off) || (v > ctx->pwm_res - min_off) || (w > ctx->pwm_res - min_off)) {
+  if((u0 > ctx->pwm_res - min_off) || (v0 > ctx->pwm_res - min_off) || (w0 > ctx->pwm_res - min_off)) {
     u -= min_off;
     v -= min_off;
     w -= min_off;
