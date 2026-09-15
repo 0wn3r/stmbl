@@ -200,18 +200,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //1 bit = 80 ticks 82e6/1.024e6
   PIN(bit_ticks) = 82000000 / PIN(freq);
 
-  uint8_t bits_sum = 0;
+  const int max_bits = sizeof(data.enc_data) * 8;
+  uint8_t bits_sum   = 0;
   for(int i = 1; i < count; i++) {  //each capture form dma
     //calculate time between edges
     uint16_t diff = tim_data[i] - tim_data[i - 1];
     //number of bits to set
     int bits = (float)diff / PIN(bit_ticks) + 0.5;
     if(i % 2 == 0) {  //line starts high, set every even numbered captures to 1
-      for(int j = bits_sum; j < bits + bits_sum; j++) {
+      for(int j = bits_sum; j < bits + bits_sum && j < max_bits; j++) {
         data.enc_data[j / 8] |= (1 << j % 8);
       }
     }
-    bits_sum += bits;
+    bits_sum = MIN(bits_sum + bits, max_bits);
   }
   //set remaining bits to 1
   for(int j = bits_sum; j < 77; j++) {
