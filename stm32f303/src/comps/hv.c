@@ -68,9 +68,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t w = (int32_t)(CLAMP(uw, 0.0, udc) / udc * (float)(ctx->pwm_res));
-  //convert on and off times to PWM output compare values
-  int32_t min_on  = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_on) + 0.5);
-  int32_t min_off = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_off) + 0.5);
+  //convert on and off times to PWM output compare values.
+  //TIM8 is center aligned, so a PWM period spans 2*ARR timer ticks and one
+  //compare unit is worth 2 ticks of on time -- the on time resolution is a
+  //constant PWM_TIM_CLK/2, independent of ARR (which ls.c varies to phase
+  //lock the loop to the master).
+  int32_t min_on  = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_on) + 0.5);
+  int32_t min_off = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_off) + 0.5);
 
   // if the commanded phase spread is wider than what min_on/min_off leave
   // available, no common-mode shift can satisfy both boundaries at once
