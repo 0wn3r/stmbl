@@ -82,6 +82,7 @@ HAL_PIN(ki);            // Integral gain for scale adjustment
 HAL_PIN(duty);          // Current duty cycle
 HAL_PIN(duty_setpoint); // Desired duty cycle setpoint
 HAL_PIN(slip_comp);     // *parameter*, high speed slip compensation, 0 = off
+HAL_PIN(p_max);         // *parameter*, constant power limit (W), 0 = off
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct acim_ttc_pin_ctx_t *pins = (struct acim_ttc_pin_ctx_t *)pin_ptr;
@@ -100,6 +101,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(ki)                         = 50.0;
   PIN(duty_setpoint)              = 0.9;
   PIN(slip_comp)                  = 0.0;
+  PIN(p_max)                      = 0.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -199,13 +201,25 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     boost = MIN(t_boost, s_boost * PIN(scale) / comp);
   }
 
-  if(PIN(vel_m) > 0.0) {
-    t_max = t_n * boost * PIN(scale);
-    t_min = -t_max;
-  } else {
-    t_min = -t_n * boost * PIN(scale);
-    t_max = -t_min;
+  float t_lim = t_n * boost * PIN(scale);
+
+  // constant power limit. Below the flux down start speed scale is 1, so the
+  // term above is flat and the power it implies keeps climbing with speed.
+  // Clamping to p_max / vel puts a corner where that power is first reached
+  // and holds it constant above -- the middle region of the Fanuc slip law
+  // (EP0078698 eq. 17a), which sits between the power spec base speed and
+  // the flux down start speed. It needs no separate slip rule: slip is
+  // slip_n * torque / (t_n * scale^2), so a torque falling as 1/vel drops
+  // the slip as 1/vel by itself. Above the flux down start speed the clamp
+  // is redundant with t_boost * scale whenever the two agree on the plateau,
+  // and MIN keeps whichever binds. vel is electrical here, so divide it back
+  // down: power is torque times mechanical speed.
+  if(PIN(p_max) > 0.0) {
+    t_lim = MIN(t_lim, PIN(p_max) / MAX(ABS(vel) / poles, 0.1));
   }
+
+  t_max = t_lim;
+  t_min = -t_lim;
 
   slip = LIMIT(slip, slip_n * s_boost);
 
