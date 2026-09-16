@@ -24,6 +24,7 @@ HAL_PIN(timer);
 
 HAL_PIN(r);
 HAL_PIN(l);
+HAL_PIN(drop);
 
 HAL_PIN(pp);
 HAL_PIN(com_offset);
@@ -70,6 +71,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 0:
       PIN(r)          = 0.1;
       PIN(l)          = 0.001;
+      PIN(drop)       = 0.0;
       PIN(psi)        = 0.055;
       PIN(pp)         = 3.0;
       PIN(com_offset) = 0.0;
@@ -84,6 +86,10 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(q_cmd)    = 0.0;
       PIN(com_pos)  = 0.0;
       PIN(cmd_mode) = 0.0;
+      PIN(tmp0)     = 0.0;
+      PIN(tmp1)     = 0.0;
+      PIN(tmp2)     = 0.0;
+      PIN(tmp3)     = 0.0;
 
       if(PIN(auto_step) >= 1) {
         PIN(state) = 1.2;
@@ -97,6 +103,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 14:
       printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
       printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
+      printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
       PIN(state) = 2.0;
       break;
 
@@ -183,21 +190,54 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(q_cmd)    = 0.0;
       PIN(com_pos)  = 0.0;
 
-      PIN(d_cmd) = PIN(test_cur);
-
-      PIN(r) = PIN(r) * 0.99 + PIN(ud_fb) / MAX(PIN(id_fb), 0.01) * 0.01;
+      // ud_fb is the current loop's voltage command, so it carries the
+      // inverter's dead time error on top of the winding drop:
+      //
+      //   ud = r * id + 4/3 * drop
+      //
+      // The 4/3 is the injection pattern: at electrical angle 0 the phase
+      // currents are iu = +id, iv = iw = -id/2, so the per phase dead time
+      // corrections are +drop, -drop, -drop and (2*drop + drop + drop)/3
+      // lands on the d axis. That term does not shrink with current -- at
+      // 3 A with 2us of dead time it is an order of magnitude larger than
+      // the winding drop -- so a single ud/id reading is mostly dead time
+      // and raising test_cur barely helps. Dwelling at two currents splits
+      // them: the slope is r, the intercept is what hv0.drop wants.
+      if(PIN(timer) < 2.0) {
+        PIN(d_cmd) = PIN(test_cur) * 0.5;
+        PIN(tmp0)  = PIN(tmp0) * 0.99 + PIN(id_fb) * 0.01;
+        PIN(tmp1)  = PIN(tmp1) * 0.99 + PIN(ud_fb) * 0.01;
+      } else {
+        PIN(d_cmd) = PIN(test_cur);
+        PIN(tmp2)  = PIN(tmp2) * 0.99 + PIN(id_fb) * 0.01;
+        PIN(tmp3)  = PIN(tmp3) * 0.99 + PIN(ud_fb) * 0.01;
+      }
 
       PIN(timer) += period;
-      if(PIN(timer) >= 2.0) {
+      if(PIN(timer) >= 4.0) {
+        // the filters are linear and both dwells use the same one, so the
+        // fit holds on the filtered pair even though the loop is slow
+        // enough that neither dwell reaches its commanded current.
+        float di = PIN(tmp2) - PIN(tmp0);
+        if(di > 0.01) {
+          PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
+          PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
+        }
+
+        // the l test wants a voltage known to drive test_cur, which is what
+        // the second dwell just measured. Deriving it from r instead would
+        // now fall short by the dead time and push almost no current.
+        PIN(avg_test_volt) = PIN(tmp3) / MAX(PIN(tmp2), 0.01) * PIN(test_cur);
+        PIN(avg_test_volt) = LIMIT(PIN(avg_test_volt), PIN(pwm_volt) / 2.0);
+
         PIN(timer)  = 0.0;
         PIN(state)  = 1.3;
         PIN(d_cmd)  = 0.0;
         PIN(en_out) = 0.0;
         PIN(tmp0)   = 0.0;
         PIN(tmp1)   = 0.0;
-
-        PIN(avg_test_volt) = PIN(test_cur) * MAX(PIN(r), 0.01);
-        PIN(avg_test_volt) = LIMIT(PIN(avg_test_volt), PIN(pwm_volt) / 2.0);
+        PIN(tmp2)   = 0.0;
+        PIN(tmp3)   = 0.0;
       }
       break;
 
