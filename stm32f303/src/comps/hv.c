@@ -42,13 +42,13 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct hv_ctx_t * ctx = (struct hv_ctx_t *)ctx_ptr;
   struct hv_pin_ctx_t *pins = (struct hv_pin_ctx_t *)pin_ptr;
 
-  PIN(enu)     = 1.0;
-  PIN(env)     = 1.0;
-  PIN(enw)     = 1.0;
-  PIN(min_on)  = 0.000005;
-  PIN(min_off) = 0.000005;
-  PIN(arr)     = PWM_RES;
-  PIN(drop)    = 0;
+  PIN(enu)       = 1.0;
+  PIN(env)       = 1.0;
+  PIN(enw)       = 1.0;
+  PIN(min_on)    = 0.000003;
+  PIN(min_off)   = 0.000003;
+  PIN(arr)       = PWM_RES;
+  PIN(drop)      = 0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -68,30 +68,53 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t w = (int32_t)(CLAMP(uw, 0.0, udc) / udc * (float)(ctx->pwm_res));
-  //convert on and off times to PWM output compare values
-  int32_t min_on  = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_on) + 0.5);
-  int32_t min_off = (int32_t)((float)(ctx->pwm_res) * 15000.0 * PIN(min_off) + 0.5);
+  // center aligned: one compare unit is 2 timer ticks whatever ARR is
+  int32_t min_on  = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_on) + 0.5);
+  int32_t min_off = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_off) + 0.5);
 
-  if((u > 0 && u < min_on) || (v > 0 && v < min_on) || (w > 0 && w < min_on)) {
+  // a phase spread wider than min_on/min_off leave room for cannot be
+  // fixed by a common mode shift: scale it down around its center
+  int32_t max_range = ctx->pwm_res - min_on - min_off;
+  int32_t range      = MAX3(u, v, w) - MIN3(u, v, w);
+  if(max_range > 0 && range > max_range) {
+    int32_t center = (MAX3(u, v, w) + MIN3(u, v, w)) / 2;
+    u              = center + (int32_t)(((int64_t)(u - center) * max_range) / range);
+    v              = center + (int32_t)(((int64_t)(v - center) * max_range) / range);
+    w              = center + (int32_t)(((int64_t)(w - center) * max_range) / range);
+  }
+
+  // both checks on the uncorrected values, so one shift cannot undo the other
+  int32_t u0 = u, v0 = v, w0 = w;
+
+  if((u0 > 0 && u0 < min_on) || (v0 > 0 && v0 < min_on) || (w0 > 0 && w0 < min_on)) {
     u += min_on;
     v += min_on;
     w += min_on;
   }
 
-  if((u > ctx->pwm_res - min_off) || (v > ctx->pwm_res - min_off) || (w > ctx->pwm_res - min_off)) {
+  if((u0 > ctx->pwm_res - min_off) || (v0 > ctx->pwm_res - min_off) || (w0 > ctx->pwm_res - min_off)) {
     u -= min_off;
     v -= min_off;
     w -= min_off;
   }
 
+  // per phase floor for what the shifts could not fix
+  if(u > 0 && u < min_on) u = min_on;
+  if(v > 0 && v < min_on) v = min_on;
+  if(w > 0 && w < min_on) w = min_on;
+
+  u = CLAMP(u, 0, ctx->pwm_res - min_off);
+  v = CLAMP(v, 0, ctx->pwm_res - min_off);
+  w = CLAMP(w, 0, ctx->pwm_res - min_off);
+
 #ifdef PWM_INVERT
-  PWM_U = ctx->pwm_res - CLAMP(u, 0, ctx->pwm_res - min_off);
-  PWM_V = ctx->pwm_res - CLAMP(v, 0, ctx->pwm_res - min_off);
-  PWM_W = ctx->pwm_res - CLAMP(w, 0, ctx->pwm_res - min_off);
+  PWM_U = ctx->pwm_res - u;
+  PWM_V = ctx->pwm_res - v;
+  PWM_W = ctx->pwm_res - w;
 #else
-  PWM_U = CLAMP(u, 0, ctx->pwm_res - min_off);
-  PWM_V = CLAMP(v, 0, ctx->pwm_res - min_off);
-  PWM_W = CLAMP(w, 0, ctx->pwm_res - min_off);
+  PWM_U = u;
+  PWM_V = v;
+  PWM_W = w;
 #endif
 }
 
