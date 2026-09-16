@@ -106,6 +106,14 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
         printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
+        // the dead time voltage is still rising with current everywhere the
+        // trip limit lets us dwell, so the fit hands part of it to the slope:
+        // r reads high and drop low, both by a term going as 1/test_cur. One
+        // run at a high current does not escape it -- two runs and a
+        // straight extrapolation do, and the same formula serves both.
+        printf("<font color='green'># r reads high, drop low, by ~1/test_cur.\n");
+        printf("# rerun at another test_cur, then for r and drop alike:\n");
+        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)</font>\n");
       } else {
         // the two dwells read the same current, so there is no line to fit and
         // r, drop and everything downstream of them are still at their init
