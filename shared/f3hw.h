@@ -21,6 +21,7 @@
 #define PWM_V TIM8->CCR2
 #define PWM_W TIM8->CCR1
 
+#define PWM_TIM_CLK 144000000.0  // TIM8 clock, prescaler 0, CKD div 1
 #define PWM_DEADTIME 196  // 1/144e6 * 196 = 2us
 #define PWM_RES 4800
 
