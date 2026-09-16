@@ -113,6 +113,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float u_n     = PIN(u_n);
   float u_boost = PIN(u_boost);
   float t_boost = PIN(t_boost);
+  float s_boost = PIN(s_boost);
 
   float torque = PIN(torque);
   float vel    = 0.0;
@@ -178,15 +179,25 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float t_min = 0;
   float t_max = 0;
 
+  // in slip control the torque needed to hold t_boost demands slip
+  // proportional to 1/scale^2, while the cap below only allows s_boost, so
+  // past scale = t_boost/s_boost the slip cap -- not t_boost -- is the real
+  // ceiling. Without this the limit advertises torque the slip cap can't
+  // orient for, and the excess shows up as current that makes no torque.
+  float boost = t_boost;
+  if((int)PIN(mode) == 0) {
+    boost = MIN(t_boost, s_boost * PIN(scale));
+  }
+
   if(PIN(vel_m) > 0.0) {
-    t_max = t_n * t_boost * PIN(scale);
+    t_max = t_n * boost * PIN(scale);
     t_min = -t_max;
   } else {
-    t_min = -t_n * t_boost * PIN(scale);
+    t_min = -t_n * boost * PIN(scale);
     t_max = -t_min;
   }
 
-  slip = LIMIT(slip, slip_n * PIN(s_boost));
+  slip = LIMIT(slip, slip_n * s_boost);
 
   if(PIN(sensorless) > 0.0) {
     vel -= slip;
