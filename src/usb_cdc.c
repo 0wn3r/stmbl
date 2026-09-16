@@ -152,16 +152,22 @@ int cdc_tx(void *data, uint32_t len) {
   if(!cdc_is_connected()) {
     return 0;
   }
-  while(len--) {
-    // send a queued byte - copy to usb stack buffer
-    APP_Rx_Buffer[APP_Rx_ptr_in++] = *(uint8_t *)data;
-    data++;
-    // To avoid buffer overflow
-    if(APP_Rx_ptr_in >= APP_RX_DATA_SIZE) {
-      APP_Rx_ptr_in = 0;
+  const uint8_t *src = (const uint8_t *)data;
+  uint32_t sent       = 0;
+  while(sent < len) {
+    uint32_t next_in = APP_Rx_ptr_in + 1;
+    if(next_in >= APP_RX_DATA_SIZE) {
+      next_in = 0;
     }
+    // buffer full -- drop the rest rather than overwrite unsent data
+    if(next_in == APP_Rx_ptr_out) {
+      break;
+    }
+    APP_Rx_Buffer[APP_Rx_ptr_in] = src[sent];
+    APP_Rx_ptr_in                = next_in;
+    sent++;
   }
-  return len;
+  return sent;
 }
 
 int cdc_getline(char *ptr, int len) {

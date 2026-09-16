@@ -15,6 +15,10 @@ extern uint8_t APP_Rx_Buffer[]; /* Write CDC received data in this buffer.
 extern uint32_t APP_Rx_ptr_in;  /* Increment this pointer or roll it back to
                                      start address when writing received data
                                      in the buffer APP_Rx_Buffer. */
+extern uint32_t APP_Rx_ptr_out; /* Read-side pointer, advanced by the USB
+                                     stack as it drains APP_Rx_Buffer; check
+                                     against this before writing to avoid
+                                     overwriting not-yet-transmitted data. */
 
 extern struct ringbuf usb_rx_buf;
 extern struct ringbuf usb_tx_buf;
