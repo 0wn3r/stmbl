@@ -22,7 +22,10 @@
 #define PWM_W TIM8->CCR1
 
 #define PWM_TIM_CLK 144000000.0  // TIM8 clock, prescaler 0, CKD div 1
-#define PWM_DEADTIME 196  // 1/144e6 * 196 = 2us
+// TIM8 BDTR.DTG, not a plain tick count: 196 = 0b110_00100 selects the
+// (32 + DTG[4:0]) * 8 * tDTS branch, so the dead time is (32 + 4) * 8 = 288
+// ticks of PWM_TIM_CLK = 2.0us. Reading it as 196 / 144e6 gives 1.36us.
+#define PWM_DEADTIME 196
 #define PWM_RES 4800
 
 #define ABS_MAX_TEMP 110.0
