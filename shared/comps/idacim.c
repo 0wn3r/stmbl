@@ -189,6 +189,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
       }
 
+      // keep the single point ratio running through both dwells. hv0.r is
+      // wired to this pin, so it is the current loop's plant model, not just
+      // an output: at cur_bw 1.0 the integral gain is cur_bw * r, which from
+      // the 0.1 init is 0.1 V per A s and needs half a minute to reach the
+      // ~11 V that clears the dead time. Nothing would flow inside a dwell.
+      // The ratio bootstraps it -- with id near zero it reads high, which
+      // lifts the feedforward, which starts the current, which settles the
+      // ratio. The fit below then replaces it with the real resistance.
+      PIN(r) = PIN(r) * 0.99 + PIN(ud_fb) / MAX(PIN(id_fb), 0.01) * 0.01;
+
       PIN(timer) += period;
       if(PIN(timer) >= 4.0) {
         // the filters are linear and both dwells use the same one, so the
