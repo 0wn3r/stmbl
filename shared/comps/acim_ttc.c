@@ -81,6 +81,7 @@ HAL_PIN(scale);         // Scaling factor for current commands
 HAL_PIN(ki);            // Integral gain for scale adjustment
 HAL_PIN(duty);          // Current duty cycle
 HAL_PIN(duty_setpoint); // Desired duty cycle setpoint
+HAL_PIN(slip_comp);     // *parameter*, high speed slip compensation, 0 = off
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct acim_ttc_pin_ctx_t *pins = (struct acim_ttc_pin_ctx_t *)pin_ptr;
@@ -98,6 +99,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(scale)                      = 1.0;
   PIN(ki)                         = 50.0;
   PIN(duty_setpoint)              = 0.9;
+  PIN(slip_comp)                  = 0.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -133,13 +135,21 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(scale) += (PIN(duty_setpoint) - PIN(duty)) * PIN(ki) * period;
   PIN(scale) = CLAMP(PIN(scale), 0.01, 1);
 
+  // high speed slip compensation: the constant Rr/Lr slip law de-tunes in
+  // field weakening -- Lm rises as the flux drops, lowering the gain, while
+  // the deep bar effect raises Rr with rotor frequency, raising it. Which
+  // one dominates is machine specific, so this is a single tunable linear
+  // term in depth of weakening, inert at and below base speed (scale = 1).
+  float comp      = MAX(1.0 + PIN(slip_comp) * (1.0 / PIN(scale) - 1.0), 0.01);
+  float slip_gain = slip_n * comp;
+
   switch((int)PIN(mode)) {
     case 0:            // slip control
       cmd_mode = 1.0;  // cur cmd
       // d_cmd = MIN(id_n, id_n * freq_n * 2.0 * M_PI * v_boost / vel); // constant flux
       d_cmd = id_n * PIN(scale);
       q_cmd = id_n / t_n * torque / PIN(scale);
-      slip  = slip_n * q_cmd / d_cmd;
+      slip  = slip_gain * q_cmd / d_cmd;
 
       // id = id_n
       // slip = slip_n * iq / id
@@ -159,12 +169,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       cmd_mode = 1.0;  // cur cmd
       d_cmd    = 0.0;
       q_cmd    = cur_n / t_n * torque;
-      slip     = slip_n * SIGN(torque);  // constant slip
+      slip     = slip_gain * SIGN(torque);  // constant slip
       break;
 
     case 2:          // u/f slip
       cmd_mode = 0;  // volt cmd
-      slip     = slip_n / t_n * torque;
+      slip     = slip_gain / t_n * torque;
       d_cmd    = MAX(u_n / freq_n * ABS(vel / 2.0 * M_1_PI), u_boost);
       q_cmd    = 0.0;
       break;
@@ -186,7 +196,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // orient for, and the excess shows up as current that makes no torque.
   float boost = t_boost;
   if((int)PIN(mode) == 0) {
-    boost = MIN(t_boost, s_boost * PIN(scale));
+    boost = MIN(t_boost, s_boost * PIN(scale) / comp);
   }
 
   if(PIN(vel_m) > 0.0) {
