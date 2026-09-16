@@ -25,6 +25,7 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(drop);
+HAL_PIN(fit_di);   // dwell current separation, 0 = r/drop fit did not run
 
 HAL_PIN(pp);
 HAL_PIN(com_offset);
@@ -101,9 +102,18 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 14:
-      printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
-      printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
-      printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
+      if(PIN(fit_di) > 0.01) {
+        printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
+        printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
+        printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
+      } else {
+        // the two dwells read the same current, so there is no line to fit and
+        // r, drop and everything downstream of them are still at their init
+        // values. Say so -- printing those as a result is worse than failing.
+        printf("<font color='red'>r fit failed</font>: the two dwells differ by %f A\n", PIN(fit_di));
+        printf("nothing below is measured, do not append it\n");
+        printf("check that idpmsm0.test_cur (%f) is under conf0.max_ac_cur\n", PIN(test_cur));
+      }
       PIN(state) = 2.0;
       break;
 
@@ -233,7 +243,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // the filters are linear and both dwells use the same one, so the
         // fit holds on the filtered pair even though the loop is slow
         // enough that neither dwell reaches its commanded current.
-        float di = PIN(tmp2) - PIN(tmp0);
+        float di   = PIN(tmp2) - PIN(tmp0);
+        PIN(fit_di) = di;
         if(di > 0.01) {
           PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
           PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
