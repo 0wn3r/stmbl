@@ -108,12 +108,19 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
         // the dead time voltage is still rising with current everywhere the
         // trip limit lets us dwell, so the fit hands part of it to the slope:
-        // r reads high and drop low, both by a term going as 1/test_cur. One
-        // run at a high current does not escape it -- two runs and a
-        // straight extrapolation do, and the same formula serves both.
-        printf("<font color='green'># r reads high, drop low, by ~1/test_cur.\n");
-        printf("# rerun at another test_cur, then for r and drop alike:\n");
-        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)</font>\n");
+        // r reads high and drop low. Above a machine specific current the
+        // error goes as 1/test_cur and two runs extrapolate it away, the same
+        // formula for both. Below that current it barely moves with test_cur
+        // and the extrapolation is meaningless -- on a 1.37 ohm phase to
+        // phase PMSM, r read 1.381 at 2 A and 1.394 at 3 A, and extrapolating
+        // that pair returned 1.42, above both. The 6 and 8 A pair returned
+        // 0.679 against a four wire 0.685. So pick two high currents and
+        // check that r actually moved between them.
+        printf("<font color='green'># r reads high and drop low.\n");
+        printf("# rerun at a second, higher test_cur, then for both:\n");
+        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
+        printf("# if r barely moved between the runs, both were too low\n");
+        printf("# to extrapolate from -- go higher.</font>\n");
       } else {
         // the two dwells read the same current, so there is no line to fit and
         // r, drop and everything downstream of them are still at their init
