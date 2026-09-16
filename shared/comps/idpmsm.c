@@ -203,14 +203,21 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // the winding drop -- so a single ud/id reading is mostly dead time
       // and raising test_cur barely helps. Dwelling at two currents splits
       // them: the slope is r, the intercept is what hv0.drop wants.
+      //
+      // The filter is a tenth the speed of the one the l test below uses.
+      // That one tracks a per sample square wave, this one holds a steady
+      // dwell: 0.001 at the 5 kHz rt rate is 200 ms, still settling ten
+      // times over inside a 2 s dwell while averaging ten times as many
+      // samples. r is the small difference of two large voltages, so it is
+      // the one number here that wants every sample it can get.
       if(PIN(timer) < 2.0) {
         PIN(d_cmd) = PIN(test_cur) * 0.5;
-        PIN(tmp0)  = PIN(tmp0) * 0.99 + PIN(id_fb) * 0.01;
-        PIN(tmp1)  = PIN(tmp1) * 0.99 + PIN(ud_fb) * 0.01;
+        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
+        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
       } else {
         PIN(d_cmd) = PIN(test_cur);
-        PIN(tmp2)  = PIN(tmp2) * 0.99 + PIN(id_fb) * 0.01;
-        PIN(tmp3)  = PIN(tmp3) * 0.99 + PIN(ud_fb) * 0.01;
+        PIN(tmp2)  = PIN(tmp2) * 0.999 + PIN(id_fb) * 0.001;
+        PIN(tmp3)  = PIN(tmp3) * 0.999 + PIN(ud_fb) * 0.001;
       }
 
       PIN(timer) += period;
