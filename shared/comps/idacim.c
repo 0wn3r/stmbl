@@ -161,14 +161,22 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // times over inside a 2 s dwell while averaging ten times as many
       // samples. r is the small difference of two large voltages, so it is
       // the one number here that wants every sample it can get.
+      // full current first, reduced second. The other order parks the rotor
+      // at a current that may be too weak to pull a loaded axis into
+      // alignment, then doubles the torque and breaks it loose -- and at
+      // cur_bw 1.0 the loop cannot reject the back emf of that swing, so the
+      // current goes wherever the inductance takes it. Starting at test_cur
+      // reproduces the single dwell test's startup, which is known to be
+      // survivable, and stepping down afterwards leaves an aligned rotor
+      // where it is.
       if(PIN(timer) < 2.0) {
-        PIN(d_cmd) = PIN(test_cur) * 0.5;
-        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
-        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
-      } else {
         PIN(d_cmd) = PIN(test_cur);
         PIN(tmp2)  = PIN(tmp2) * 0.999 + PIN(id_fb) * 0.001;
         PIN(tmp3)  = PIN(tmp3) * 0.999 + PIN(ud_fb) * 0.001;
+      } else {
+        PIN(d_cmd) = PIN(test_cur) * 0.5;
+        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
+        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
       }
 
       PIN(timer) += period;
@@ -182,10 +190,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
         }
 
-        // the l test wants a voltage known to drive test_cur, which is what
-        // the second dwell just measured. Deriving it from r instead would
-        // now fall short by the dead time and push almost no current.
-        PIN(avg_test_volt) = PIN(tmp3) / MAX(PIN(tmp2), 0.01) * PIN(test_cur);
+        // the l test needs the voltage that holds test_cur, dead time
+        // included -- deriving it from r alone falls short by the dead time
+        // and pushes almost no current. Build it from the two terms just
+        // measured rather than from a ud/id ratio: that ratio is divided by
+        // a current, so a dwell that reads low inflates it without bound and
+        // the LIMIT below hands the l test half the dc link in voltage mode.
+        PIN(avg_test_volt) = PIN(r) * PIN(test_cur) + 4.0 / 3.0 * PIN(drop);
         PIN(avg_test_volt) = LIMIT(PIN(avg_test_volt), PIN(pwm_volt) / 2.0);
 
         PIN(timer)  = 0.0;
