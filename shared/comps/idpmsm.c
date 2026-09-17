@@ -25,11 +25,7 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(drop);
-HAL_PIN(fit_di);   // smaller chord current span, 0 = r/drop fit did not run
-HAL_PIN(fit_sa);   // upper chord slope
-HAL_PIN(fit_sb);   // lower chord slope
-HAL_PIN(fit_ia);   // upper chord mean current
-HAL_PIN(fit_ib);   // lower chord mean current
+HAL_PIN(fit_di);   // dwell current separation, 0 = r/drop fit did not run
 
 HAL_PIN(pp);
 HAL_PIN(com_offset);
@@ -54,8 +50,6 @@ HAL_PIN(tmp0);
 HAL_PIN(tmp1);
 HAL_PIN(tmp2);
 HAL_PIN(tmp3);
-HAL_PIN(tmp4);
-HAL_PIN(tmp5);
 HAL_PIN(avg_test_volt);
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -97,8 +91,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(tmp1)     = 0.0;
       PIN(tmp2)     = 0.0;
       PIN(tmp3)     = 0.0;
-      PIN(tmp4)     = 0.0;
-      PIN(tmp5)     = 0.0;
 
       if(PIN(auto_step) >= 1) {
         PIN(state) = 1.2;
@@ -124,15 +116,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // that pair returned 1.42, above both. The 6 and 8 A pair returned
         // 0.679 against a four wire 0.685. So pick two high currents and
         // check that r actually moved between them.
-        // the fit only works where the dead time voltage is still shrinking
-        // with current. Report where the chords actually sat so that is
-        // checkable: if the lower one is too low its slope stops falling, the
-        // step over-corrects, and r comes out well under either chord slope.
-        printf("<font color='green'># chords: %f ohm at %f A, %f ohm at %f A\n",
-               PIN(fit_sa), PIN(fit_ia), PIN(fit_sb), PIN(fit_ib));
-        printf("# r should land a little under the lower chord slope. Much\n");
-        printf("# under means the lower chord current was too low -- raise\n");
-        printf("# test_cur so it clears the knee.</font>\n");
+        printf("<font color='green'># r reads high and drop low.\n");
+        printf("# rerun at a second, higher test_cur, then for both:\n");
+        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
+        printf("# if r barely moved between the runs, both were too low\n");
+        printf("# to extrapolate from -- go higher.</font>\n");
       } else {
         // the two dwells read the same current, so there is no line to fit and
         // r, drop and everything downstream of them are still at their init
@@ -255,25 +243,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // reproduces the single dwell test's startup, which is known to be
       // survivable, and stepping down afterwards leaves an aligned rotor
       // where it is.
-      // three descending dwells 0.7 apart, 3 s each. Both numbers were found
-      // the hard way. Spacing them 0.5 apart drops the lower chord under the
-      // current where the dead time voltage stops shrinking, and the step
-      // below then subtracts noise rather than a bias -- on a 0.685 ohm
-      // winding that returned 0.16 and 0.38. And at cur_bw 1.0 a 2 s dwell
-      // only reaches 86% of its command, so with dwells this close together
-      // the upper chord's current span collapses and the step blows up.
-      if(PIN(timer) < 3.0) {
+      if(PIN(timer) < 2.0) {
         PIN(d_cmd) = PIN(test_cur);
-        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
-        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
-      } else if(PIN(timer) < 6.0) {
-        PIN(d_cmd) = PIN(test_cur) * 0.70;
         PIN(tmp2)  = PIN(tmp2) * 0.999 + PIN(id_fb) * 0.001;
         PIN(tmp3)  = PIN(tmp3) * 0.999 + PIN(ud_fb) * 0.001;
       } else {
-        PIN(d_cmd) = PIN(test_cur) * 0.49;
-        PIN(tmp4)  = PIN(tmp4) * 0.999 + PIN(id_fb) * 0.001;
-        PIN(tmp5)  = PIN(tmp5) * 0.999 + PIN(ud_fb) * 0.001;
+        PIN(d_cmd) = PIN(test_cur) * 0.5;
+        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
+        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
       }
 
       // keep the single point ratio running through both dwells. hv0.r is
@@ -287,30 +264,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(r) = PIN(r) * 0.99 + PIN(ud_fb) / MAX(PIN(id_fb), 0.01) * 0.01;
 
       PIN(timer) += period;
-      if(PIN(timer) >= 9.0) {
-        // the filters are linear and every dwell uses the same one, so the
-        // fits hold on the filtered pairs even though the loop never reaches
-        // its commanded current.
-        //
-        // One chord's slope is r plus 4/3 of the local slope of the dead time
-        // voltage, which is large at every current the trip allows -- one
-        // chord alone reads high by tens of percent. That term shrinks as the
-        // chord climbs, so a second chord lower down measures the shrinkage
-        // and a Richardson step on the chord mean currents removes it. Only
-        // where it is still shrinking, hence the spacing above.
-        float dia   = PIN(tmp0) - PIN(tmp2);
-        float dib   = PIN(tmp2) - PIN(tmp4);
-        PIN(fit_di) = MIN(dia, dib);
-        if(dia > 0.01 && dib > 0.01) {
-          PIN(fit_sa) = (PIN(tmp1) - PIN(tmp3)) / dia;
-          PIN(fit_sb) = (PIN(tmp3) - PIN(tmp5)) / dib;
-          PIN(fit_ia) = 0.5 * (PIN(tmp0) + PIN(tmp2));
-          PIN(fit_ib) = 0.5 * (PIN(tmp2) + PIN(tmp4));
-          PIN(r)      = MAX((PIN(fit_ia) * PIN(fit_sa) - PIN(fit_ib) * PIN(fit_sb))
-                            / MAX(PIN(fit_ia) - PIN(fit_ib), 0.01), 0.001);
-          // read the dead time at the top dwell, nearest its asymptote and so
-          // nearest what hv0.drop has to hold
-          PIN(drop)   = MAX(0.75 * (PIN(tmp1) - PIN(r) * PIN(tmp0)), 0.0);
+      if(PIN(timer) >= 4.0) {
+        // the filters are linear and both dwells use the same one, so the
+        // fit holds on the filtered pair even though the loop is slow
+        // enough that neither dwell reaches its commanded current.
+        float di   = PIN(tmp2) - PIN(tmp0);
+        PIN(fit_di) = di;
+        if(di > 0.01) {
+          PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
+          PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
         }
 
         // the l test needs the voltage that holds test_cur, dead time
@@ -330,8 +292,6 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(tmp1)   = 0.0;
         PIN(tmp2)   = 0.0;
         PIN(tmp3)   = 0.0;
-        PIN(tmp4)   = 0.0;
-        PIN(tmp5)   = 0.0;
       }
       break;
 
