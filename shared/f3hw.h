@@ -26,6 +26,19 @@
 // (32 + DTG[4:0]) * 8 * tDTS branch, so the dead time is (32 + 4) * 8 = 288
 // ticks of PWM_TIM_CLK = 2.0us. Reading it as 196 / 144e6 gives 1.36us.
 #define PWM_DEADTIME 196
+
+// The four DTG ranges, each with its own step size. Decoded so the dead time
+// can be arithmetic rather than a magic number -- hv.c sizes its dead time
+// compensation from it. Note the ranges are not continuous in the encoded
+// value: 196 decodes to 288 ticks and 224 to 512, so neighbouring settings
+// can differ by most of a microsecond.
+//
+// The result counts the same timer ticks as ARR, so hv.c can take the ratio of
+// the two without knowing the clock. That holds only while tim8 runs at
+// CKD = DIV1, which is what tim.c sets; a divider there would scale tDTS and
+// this with it.
+#define DTG_TICKS(v) ((v) < 0x80 ? (v) : (v) < 0xC0 ? ((64 + ((v)&0x3F)) * 2) : (v) < 0xE0 ? ((32 + ((v)&0x1F)) * 8) : ((32 + ((v)&0x1F)) * 16))
+#define PWM_DEADTIME_TICKS DTG_TICKS(PWM_DEADTIME)
 #define PWM_RES 4800
 
 #define ABS_MAX_TEMP 110.0
