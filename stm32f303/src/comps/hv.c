@@ -35,22 +35,62 @@ HAL_PIN(min_off);  // min off time [s]
 
 HAL_PIN(arr);
 
+HAL_PIN(drop_band);  // current at which the compensation's sign latches [A]
+
 struct hv_ctx_t {
   int32_t pwm_res;
+  int8_t drop_su;
+  int8_t drop_sv;
+  int8_t drop_sw;
 };
 
+// Latching sign for the dead time compensation.
+//
+// The obvious thing here is SIGN2(i, band), and it is wrong: SIGN2 is
+// CLAMP(i / band, -1, 1), a linear ramp through zero rather than a sign. Used
+// on the compensation it puts dt_drop / band volts per amp *in phase* with the
+// current -- 83 V/A at a 300 V link and a 0.1 A band -- which on the d axis is
+// 4/3 of that against a winding of well under an ohm. That is positive
+// feedback with a loop gain in the hundreds and a time constant of L over it,
+// about one pwm period: the current runs away from zero command to the trip.
+// Measured on a 0.685 ohm axis it reached 21.8 A and 128 V before the bridge
+// stopped talking.
+//
+// So the sign must have no incremental gain anywhere. It holds its last value
+// inside the band and flips only outside it, which is a schmitt trigger: no
+// gain in the band, none out of it, and nothing to amplify. It starts at 0, so
+// no compensation is applied until a phase has carried real current once.
+//
+// The cost is the usual one: through a zero crossing the sign is briefly stale
+// and the compensation is applied backwards for as long as the current takes
+// to cross the band. That is a bounded distortion of 2 * dt_drop, and a small
+// band keeps it short -- unlike the ramp, which was unbounded.
+static float drop_sign(int8_t *s, float i, float band) {
+  if(i > band) {
+    *s = 1;
+  } else if(i < -band) {
+    *s = -1;
+  }
+  return (float)(*s);
+}
+
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  // struct hv_ctx_t * ctx = (struct hv_ctx_t *)ctx_ptr;
+  struct hv_ctx_t *ctx      = (struct hv_ctx_t *)ctx_ptr;
   struct hv_pin_ctx_t *pins = (struct hv_pin_ctx_t *)pin_ptr;
 
-  PIN(enu)     = 1.0;
-  PIN(env)     = 1.0;
-  PIN(enw)     = 1.0;
-  PIN(min_on)  = 0.000003;
-  PIN(min_off) = 0.000003;
-  PIN(arr)     = PWM_RES;
-  PIN(drop)    = 0;
-  PIN(drop_k)  = 0;
+  ctx->drop_su = 0;
+  ctx->drop_sv = 0;
+  ctx->drop_sw = 0;
+
+  PIN(enu)       = 1.0;
+  PIN(env)       = 1.0;
+  PIN(enw)       = 1.0;
+  PIN(min_on)    = 0.000003;
+  PIN(min_off)   = 0.000003;
+  PIN(arr)       = PWM_RES;
+  PIN(drop)      = 0;
+  PIN(drop_k)    = 0;
+  PIN(drop_band) = 0.5;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -75,13 +115,22 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // the pre-existing behaviour. drop is a plain volt offset on top, for a
   // board where a fixed number is preferred or to trim what the model misses.
   //
-  // Over-compensating is worse than under-compensating: it puts positive
-  // feedback around SIGN2 at the current zero crossing.
+  // Over-compensating is worse than under-compensating: past the real drop the
+  // residual changes sign and sits in phase with the current instead of
+  // opposing it.
   float dt_drop = PIN(drop) + PIN(drop_k) * (float)PWM_DEADTIME_TICKS / (2.0 * (float)ctx->pwm_res) * udc;
 
-  float uu = PIN(u) + dt_drop * SIGN2(PIN(iu), 0.1);
-  float uv = PIN(v) + dt_drop * SIGN2(PIN(iv), 0.1);
-  float uw = PIN(w) + dt_drop * SIGN2(PIN(iw), 0.1);
+  // A backstop on both pins. The compensation only ever adds volts, so a
+  // negative one would invert it, and the honest figure is a few percent of
+  // the link -- 3% here. Cap it at 10% so a mistyped drop or drop_k costs a
+  // distorted waveform rather than a bridge.
+  dt_drop = CLAMP(dt_drop, 0.0, udc * 0.1);
+
+  float band = MAX(PIN(drop_band), 0.05);
+
+  float uu = PIN(u) + dt_drop * drop_sign(&(ctx->drop_su), PIN(iu), band);
+  float uv = PIN(v) + dt_drop * drop_sign(&(ctx->drop_sv), PIN(iv), band);
+  float uw = PIN(w) + dt_drop * drop_sign(&(ctx->drop_sw), PIN(iw), band);
   //convert voltages to PWM output compare values
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));
