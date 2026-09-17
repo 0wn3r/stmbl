@@ -25,9 +25,7 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(drop);
-HAL_PIN(fit_di);   // smaller chord current span, 0 = r/drop fit did not run
-HAL_PIN(fit_sa);   // high chord slope
-HAL_PIN(fit_sb);   // low chord slope
+HAL_PIN(fit_di);   // dwell current separation, 0 = r/drop fit did not run
 
 HAL_PIN(pp);
 HAL_PIN(com_offset);
@@ -52,8 +50,6 @@ HAL_PIN(tmp0);
 HAL_PIN(tmp1);
 HAL_PIN(tmp2);
 HAL_PIN(tmp3);
-HAL_PIN(tmp4);
-HAL_PIN(tmp5);
 HAL_PIN(avg_test_volt);
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -95,8 +91,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(tmp1)     = 0.0;
       PIN(tmp2)     = 0.0;
       PIN(tmp3)     = 0.0;
-      PIN(tmp4)     = 0.0;
-      PIN(tmp5)     = 0.0;
 
       if(PIN(auto_step) >= 1) {
         PIN(state) = 1.2;
@@ -112,15 +106,21 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
         printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
-        // r and drop now come from two chords in one run, so no rerun is
-        // needed. What still matters is that the lowest dwell draws real
-        // current: below a machine specific level the dead time voltage
-        // stops shrinking with current and the Richardson step has nothing
-        // to remove, which is where a single chord read 1.38 on a 0.685 ohm
-        // winding. Report the chord slopes so that is visible.
-        printf("<font color='green'># chord slopes %f and %f ohm.\n", PIN(fit_sa), PIN(fit_sb));
-        printf("# if they are nearly equal, test_cur is too low for the\n");
-        printf("# fit to separate r from the dead time -- raise it.</font>\n");
+        // the dead time voltage is still rising with current everywhere the
+        // trip limit lets us dwell, so the fit hands part of it to the slope:
+        // r reads high and drop low. Above a machine specific current the
+        // error goes as 1/test_cur and two runs extrapolate it away, the same
+        // formula for both. Below that current it barely moves with test_cur
+        // and the extrapolation is meaningless -- on a 1.37 ohm phase to
+        // phase PMSM, r read 1.381 at 2 A and 1.394 at 3 A, and extrapolating
+        // that pair returned 1.42, above both. The 6 and 8 A pair returned
+        // 0.679 against a four wire 0.685. So pick two high currents and
+        // check that r actually moved between them.
+        printf("<font color='green'># r reads high and drop low.\n");
+        printf("# rerun at a second, higher test_cur, then for both:\n");
+        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
+        printf("# if r barely moved between the runs, both were too low\n");
+        printf("# to extrapolate from -- go higher.</font>\n");
       } else {
         // the two dwells read the same current, so there is no line to fit and
         // r, drop and everything downstream of them are still at their init
@@ -245,16 +245,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // where it is.
       if(PIN(timer) < 2.0) {
         PIN(d_cmd) = PIN(test_cur);
-        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
-        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
-      } else if(PIN(timer) < 4.0) {
-        PIN(d_cmd) = PIN(test_cur) * 0.5;
         PIN(tmp2)  = PIN(tmp2) * 0.999 + PIN(id_fb) * 0.001;
         PIN(tmp3)  = PIN(tmp3) * 0.999 + PIN(ud_fb) * 0.001;
       } else {
-        PIN(d_cmd) = PIN(test_cur) * 0.25;
-        PIN(tmp4)  = PIN(tmp4) * 0.999 + PIN(id_fb) * 0.001;
-        PIN(tmp5)  = PIN(tmp5) * 0.999 + PIN(ud_fb) * 0.001;
+        PIN(d_cmd) = PIN(test_cur) * 0.5;
+        PIN(tmp0)  = PIN(tmp0) * 0.999 + PIN(id_fb) * 0.001;
+        PIN(tmp1)  = PIN(tmp1) * 0.999 + PIN(ud_fb) * 0.001;
       }
 
       // keep the single point ratio running through both dwells. hv0.r is
@@ -268,34 +264,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(r) = PIN(r) * 0.99 + PIN(ud_fb) / MAX(PIN(id_fb), 0.01) * 0.01;
 
       PIN(timer) += period;
-      if(PIN(timer) >= 6.0) {
-        // the filters are linear and every dwell uses the same one, so the
-        // fits hold on the filtered pairs even though the loop is slow
-        // enough that no dwell reaches its commanded current.
-        //
-        // One chord is not enough. Its slope is r plus 4/3 of the local
-        // slope of the dead time voltage, and that term is still large at
-        // any current the trip limit allows, so a single chord reads high
-        // by tens of percent. It shrinks as the chord moves up in current,
-        // so a second chord lower down measures the shrinkage and a
-        // Richardson step removes it. Chords at 0.75 and 0.375 of test_cur
-        // sharing the middle dwell give the widest lever the current range
-        // allows; simulated against a dV(i) fitted to bench data the bias
-        // is about 3% where one chord alone is 20 to 100%.
-        float dia  = PIN(tmp0) - PIN(tmp2);
-        float dib  = PIN(tmp2) - PIN(tmp4);
-        PIN(fit_di) = MIN(dia, dib);
-        if(dia > 0.01 && dib > 0.01) {
-          float sa = (PIN(tmp1) - PIN(tmp3)) / dia;
-          float sb = (PIN(tmp3) - PIN(tmp5)) / dib;
-          PIN(fit_sa) = sa;
-          PIN(fit_sb) = sb;
-          float ia = 0.5 * (PIN(tmp0) + PIN(tmp2));
-          float ib = 0.5 * (PIN(tmp2) + PIN(tmp4));
-          PIN(r)    = MAX((ia * sa - ib * sb) / MAX(ia - ib, 0.01), 0.001);
-          // evaluate the dead time at the top dwell, where it is closest to
-          // its asymptote and so closest to what hv0.drop should hold
-          PIN(drop) = MAX(0.75 * (PIN(tmp1) - PIN(r) * PIN(tmp0)), 0.0);
+      if(PIN(timer) >= 4.0) {
+        // the filters are linear and both dwells use the same one, so the
+        // fit holds on the filtered pair even though the loop is slow
+        // enough that neither dwell reaches its commanded current.
+        float di   = PIN(tmp2) - PIN(tmp0);
+        PIN(fit_di) = di;
+        if(di > 0.01) {
+          PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
+          PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
         }
 
         // the l test needs the voltage that holds test_cur, dead time
@@ -315,8 +292,6 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(tmp1)   = 0.0;
         PIN(tmp2)   = 0.0;
         PIN(tmp3)   = 0.0;
-        PIN(tmp4)   = 0.0;
-        PIN(tmp5)   = 0.0;
       }
       break;
 
