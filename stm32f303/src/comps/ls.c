@@ -32,6 +32,8 @@ HAL_PIN(cur_ind);
 HAL_PIN(max_y);
 HAL_PIN(max_cur);
 HAL_PIN(dac);
+HAL_PIN(drop);
+HAL_PIN(drop_k);
 
 // process data to LS
 HAL_PIN(dc_volt);
@@ -143,6 +145,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   config.pins.max_y   = 0.0;
   config.pins.max_cur = 0.0;
   config.pins.dac     = 0.0;
+  config.pins.drop    = 0.0;
+  config.pins.drop_k  = 0.0;
 
   USART3->RTOR = 16;               // 16 bits timeout
   USART3->CR2 |= USART_CR2_RTOEN;  // timeout en
@@ -194,8 +198,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       //
       // An out of range address means the f4 was flashed with a newer config
       // layout than this image knows, which is the window between updating the
-      // f4 and letting it push the matching f3 image over. Neither direction
-      // should answer for a field this image does not have.
+      // f4 and letting it push the matching f3 image over. Drop those words
+      // instead of folding them onto the last entry, where a foreign value
+      // would land in whatever field happens to sit at the end.
       uint8_t a     = ctx->packet_to_hv.header.conf_addr;
       uint8_t valid = a < sizeof(config) / 4;
       a             = CLAMP(a, 0, sizeof(config) / 4 - 1);
@@ -204,16 +209,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         case NO_CMD:
           break;
         case WRITE_CONF:
-          // dropping the word beats folding it onto the last entry, where a
-          // foreign value would land in whatever field happens to sit at the
-          // end.
           if(valid) {
             config.data[a] = ctx->packet_to_hv.header.config.f32;  // TODO: first enable after complete update
           }
           break;
         case READ_CONF:
-          // and answering would return the last word labelled as the one asked
-          // for.
+          // same reason as the write: answering an address this image does not
+          // have would return the last word labelled as the one asked for.
           if(valid) {
             ctx->tx_addr = a;
           }
@@ -250,6 +252,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(max_y)   = config.pins.max_y;
       PIN(max_cur) = config.pins.max_cur;
       PIN(dac)     = config.pins.dac;
+      PIN(drop)    = config.pins.drop;
+      PIN(drop_k)  = config.pins.drop_k;
       ctx->timeout = 0;
       PIN(crc_ok)
       ++;
