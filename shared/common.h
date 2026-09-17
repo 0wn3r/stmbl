@@ -90,7 +90,13 @@ typedef struct {
 } packet_to_hv_t;
 _Static_assert(sizeof(packet_to_hv_t) == 32, "packet_to_hv_t size error");
 
-//config data for f3
+// config data for f3
+//
+// Append only, and keep something harmless last: an f3 still running an older
+// image clamps addresses it does not have onto its own last field, so between
+// flashing the f4 and pushing the matching f3 image the new words land there.
+// That is why dac, which sets the overcurrent comparator reference, must not
+// sit at the end.
 typedef union {
   struct f3_config_data_temp {
     float r;
@@ -102,6 +108,8 @@ typedef union {
     float max_y;
     float max_cur;
     float dac;
+    float drop;
+    float drop_k;
   } pins;
   float data[sizeof(struct f3_config_data_temp) / 4];
 } f3_config_data_t;
