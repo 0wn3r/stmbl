@@ -20,6 +20,7 @@ idpmsm0.uq_fb = hv0.uq_fb
 idpmsm0.id_fb = hv0.id_fb
 idpmsm0.iq_fb = hv0.iq_fb
 idpmsm0.pwm_volt = hv0.pwm_volt
+idpmsm0.dc_volt = hv0.dc_volt
 
 idpmsm0.pos_fb = fb_switch0.mot_abs_fb_no_offset
 idpmsm0.vel_fb = vel1.vel

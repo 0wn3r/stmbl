@@ -17,4 +17,5 @@ hv0.l = idacim0.l
 idacim0.ud_fb = hv0.ud_fb
 idacim0.id_fb = hv0.id_fb
 idacim0.pwm_volt = hv0.pwm_volt
+idacim0.dc_volt = hv0.dc_volt
 idacim0.vel_fb = vel1.vel
