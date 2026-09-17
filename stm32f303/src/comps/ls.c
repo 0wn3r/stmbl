@@ -192,17 +192,31 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     uint32_t crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&(ctx->packet_to_hv.header.slave_addr), sizeof(packet_to_hv_t) / 4 - 1);
     if(ctx->packet_to_hv.header.slave_addr == 0 && ctx->packet_to_hv.header.len == (sizeof(packet_to_hv_t) - sizeof(stmbl_talk_header_t)) / 4 && crc == ctx->packet_to_hv.header.crc) {
       //
-      uint8_t a = ctx->packet_to_hv.header.conf_addr;
-      a         = CLAMP(a, 0, sizeof(config) / 4 - 1);
+      // An out of range address means the f4 was flashed with a newer config
+      // layout than this image knows, which is the window between updating the
+      // f4 and letting it push the matching f3 image over. Neither direction
+      // should answer for a field this image does not have.
+      uint8_t a     = ctx->packet_to_hv.header.conf_addr;
+      uint8_t valid = a < sizeof(config) / 4;
+      a             = CLAMP(a, 0, sizeof(config) / 4 - 1);
 
       switch(ctx->packet_to_hv.header.flags.cmd) {
         case NO_CMD:
           break;
         case WRITE_CONF:
-          config.data[a] = ctx->packet_to_hv.header.config.f32;  // TODO: first enable after complete update
+          // dropping the word beats folding it onto the last entry, where a
+          // foreign value would land in whatever field happens to sit at the
+          // end.
+          if(valid) {
+            config.data[a] = ctx->packet_to_hv.header.config.f32;  // TODO: first enable after complete update
+          }
           break;
         case READ_CONF:
-          ctx->tx_addr = a;
+          // and answering would return the last word labelled as the one asked
+          // for.
+          if(valid) {
+            ctx->tx_addr = a;
+          }
           break;
         case DO_RESET:
           NVIC_SystemReset();
