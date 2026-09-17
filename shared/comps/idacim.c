@@ -21,8 +21,11 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(drop);
-HAL_PIN(r_known);  // *parameter*, measured winding resistance, 0 = try to fit it
-HAL_PIN(fit_di);   // dwell current separation, 0 = r/drop fit did not run
+HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = try to fit it
+HAL_PIN(single_dwell);  // *parameter*, take r from the top dwell alone
+HAL_PIN(fit_di);        // dwell current separation, 0 = r/drop fit did not run
+HAL_PIN(r_1p);          // top dwell ratio, 0 = that dwell never reached its command
+HAL_PIN(r_2p);          // two dwell chord slope, 0 = the fit did not run
 
 HAL_PIN(pp);
 HAL_PIN(out_rev);
@@ -46,6 +49,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
   PIN(r_known)                  = 0.0;
+  PIN(single_dwell)             = 0.0;
   PIN(test_cur)                 = 3.0;
   PIN(test_vel)                 = 50.0;
   PIN(cur_bw)                   = 1.0;
@@ -82,7 +86,10 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 14:
-      if(PIN(fit_di) > 0.01) {
+      // reportable only if the estimate this run was asked for exists: the
+      // ratio needs a dwell that reached its command, the chord needs two
+      // dwells that did not read the same current.
+      if(PIN(single_dwell) > 0.0 ? PIN(r_1p) > 0.0 : PIN(fit_di) > 0.01) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
         printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
@@ -99,6 +106,16 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         if(PIN(r_known) > 0.0) {
           printf("<font color='green'># drop read at the %f A dwell against the r you gave.\n", PIN(test_cur));
           printf("# it scales with the dc link, remeasure if that changes.</font>\n");
+        } else if(PIN(single_dwell) > 0.0) {
+          printf("<font color='green'># r is the %f A dwell's ratio, so it is a resistance\n", PIN(test_cur));
+          printf("# only as far as hv0.drop_k cancels the dead time. what\n");
+          printf("# drop_k misses shows up here as 4/3 * residual / %f\n", PIN(test_cur));
+          printf("# ohms -- raise idacim0.test_cur to shrink it.\n");
+          printf("# hv0.drop is not measured in this mode and reads 0.\n");
+          printf("# the chord fit on this same run gave %f. it should read\n", PIN(r_2p));
+          printf("# high by roughly 1.2 / %f ohms, which is the dead time's\n", PIN(test_cur));
+          printf("# rise with current leaking into the slope. a much wider\n");
+          printf("# gap than that means drop_k is over compensating.</font>\n");
         } else {
           printf("<font color='green'># r reads high and drop low.\n");
           printf("# rerun at a second, higher test_cur, then for both:\n");
@@ -110,10 +127,16 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("# separate r from the dead time at any test_cur.</font>\n");
         }
       } else {
-        // the two dwells read the same current, so there is no line to fit and
-        // r, drop and everything downstream of them are still at their init
-        // values. Say so -- printing those as a result is worse than failing.
-        printf("<font color='red'>r fit failed</font>: the two dwells differ by %f A\n", PIN(fit_di));
+        // no usable estimate: either the two dwells read the same current so
+        // there is no line to fit, or the top dwell never got near its
+        // command so its ratio is not a resistance. Either way r, drop and
+        // everything downstream of them are still at their init values. Say
+        // so -- printing those as a result is worse than failing.
+        if(PIN(single_dwell) > 0.0) {
+          printf("<font color='red'>r read failed</font>: the top dwell did not reach half of %f A\n", PIN(test_cur));
+        } else {
+          printf("<font color='red'>r fit failed</font>: the two dwells differ by %f A\n", PIN(fit_di));
+        }
         printf("nothing below is measured, do not append it\n");
         printf("check that idacim0.test_cur (%f) is under conf0.max_ac_cur\n", PIN(test_cur));
       }
@@ -231,6 +254,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // enough that neither dwell reaches its commanded current.
         float di   = PIN(tmp2) - PIN(tmp0);
         PIN(fit_di) = di;
+
+        // Both estimates, every run, so the report can show the spread even
+        // though only one of them is used. The ratio needs a dwell that got
+        // near its command: at a fraction of test_cur it divides a voltage
+        // that is mostly dead time by a current that is mostly nothing.
+        PIN(r_1p) = PIN(tmp2) > PIN(test_cur) * 0.5 ? MAX(PIN(tmp3) / PIN(tmp2), 0.001) : 0.0;
+        PIN(r_2p) = di > 0.01 ? MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001) : 0.0;
+
         if(PIN(r_known) > 0.0) {
           // Resistance supplied from a four wire measurement. Skip the fit:
           // separating r from the dead time needs curvature in u(i), and over
@@ -242,8 +273,23 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           // 0.2% across two firmware builds and four runs.
           PIN(r)    = PIN(r_known);
           PIN(drop) = MAX(0.75 * (PIN(tmp3) - PIN(r) * PIN(tmp2)), 0.0);
+        } else if(PIN(single_dwell) > 0.0) {
+          // Top dwell alone. This is a resistance only once hv0.drop_k
+          // cancels the dead time in hardware -- whatever drop_k misses
+          // lands here as 4/3 * residual / test_cur ohms, so it wants the
+          // highest test_cur the trip allows and means nothing below the
+          // current drop_k was trimmed at. What it buys is the absence of
+          // the one error the chord can never shed: the chord's slope picks
+          // up 4/3 * K * ln(i2/i1) / (i2 - i1) from the dead time's rise
+          // with current, and that term is a difference, so the compensation
+          // subtracts out of it exactly and leaves the bias untouched. No
+          // choice of drop_k improves the fit. This sidesteps it instead.
+          if(PIN(r_1p) > 0.0) {
+            PIN(r)    = PIN(r_1p);
+            PIN(drop) = 0.0;  // it lives in hv0.drop_k now, not here
+          }
         } else if(di > 0.01) {
-          PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
+          PIN(r)    = PIN(r_2p);
           PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
         }
 
@@ -253,6 +299,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // measured rather than from a ud/id ratio: that ratio is divided by
         // a current, so a dwell that reads low inflates it without bound and
         // the LIMIT below hands the l test half the dc link in voltage mode.
+        //
+        // In single dwell mode drop is 0 and this reduces to r * test_cur,
+        // which is right for the same reason that mode is: hv0.drop_k adds
+        // the dead time volts downstream of the command, so the command does
+        // not have to carry them. Run that mode with drop_k unset and r
+        // absorbs the dead time instead, which lands this in much the same
+        // place by a worse route.
         PIN(avg_test_volt) = PIN(r) * PIN(test_cur) + 4.0 / 3.0 * PIN(drop);
         PIN(avg_test_volt) = LIMIT(PIN(avg_test_volt), PIN(pwm_volt) / 2.0);
 
