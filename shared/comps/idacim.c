@@ -92,7 +92,15 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(PIN(single_dwell) > 0.0 ? PIN(r_1p) > 0.0 : PIN(fit_di) > 0.01) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
-        printf("hv0.drop = %f <font color='green'># dead time, scales with dc link</font>\n", PIN(drop));
+        // Measurement, not a config line. hv0.drop and hv0.drop_k both feed the
+        // same dt_drop in the f3's hv.c, and that compensation is not yet safe
+        // to switch on: it is keyed on measured current, so once it exceeds the
+        // real drop it drives the current it is reading. Setting either one in
+        // a config has taken a drive to its overcurrent trip. Read the number,
+        // do not append it.
+        printf("<font color='red'>measured</font> drop = %f V at the %f A dwell\n", PIN(drop), PIN(test_cur));
+        printf("<font color='green'># scales with the dc link. do NOT put hv0.drop or hv0.drop_k\n");
+        printf("# in a config -- the compensation is not stable yet.</font>\n");
         // the dead time voltage is still rising with current everywhere the
         // trip limit lets us dwell, so the fit hands part of it to the slope:
         // r reads high and drop low. Above a machine specific current the
