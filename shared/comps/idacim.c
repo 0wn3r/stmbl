@@ -21,6 +21,7 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(drop);
+HAL_PIN(r_known);  // *parameter*, measured winding resistance, 0 = try to fit it
 HAL_PIN(fit_di);   // dwell current separation, 0 = r/drop fit did not run
 
 HAL_PIN(pp);
@@ -44,6 +45,7 @@ HAL_PIN(avg_test_volt);
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
+  PIN(r_known)                  = 0.0;
   PIN(test_cur)                 = 3.0;
   PIN(test_vel)                 = 50.0;
   PIN(cur_bw)                   = 1.0;
@@ -94,11 +96,19 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // that pair returned 1.42, above both. The 6 and 8 A pair returned
         // 0.679 against a four wire 0.685. So pick two high currents and
         // check that r actually moved between them.
-        printf("<font color='green'># r reads high and drop low.\n");
-        printf("# rerun at a second, higher test_cur, then for both:\n");
-        printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
-        printf("# if r barely moved between the runs, both were too low\n");
-        printf("# to extrapolate from -- go higher.</font>\n");
+        if(PIN(r_known) > 0.0) {
+          printf("<font color='green'># drop read at the %f A dwell against the r you gave.\n", PIN(test_cur));
+          printf("# it scales with the dc link, remeasure if that changes.</font>\n");
+        } else {
+          printf("<font color='green'># r reads high and drop low.\n");
+          printf("# rerun at a second, higher test_cur, then for both:\n");
+          printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
+          printf("# if r barely moved between the runs, both were too low\n");
+          printf("# to extrapolate from -- go higher.\n");
+          printf("# better: measure r four wire, halve the phase to phase\n");
+          printf("# reading, and set idacim0.r_known -- the fit cannot\n");
+          printf("# separate r from the dead time at any test_cur.</font>\n");
+        }
       } else {
         // the two dwells read the same current, so there is no line to fit and
         // r, drop and everything downstream of them are still at their init
@@ -221,7 +231,18 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // enough that neither dwell reaches its commanded current.
         float di   = PIN(tmp2) - PIN(tmp0);
         PIN(fit_di) = di;
-        if(di > 0.01) {
+        if(PIN(r_known) > 0.0) {
+          // Resistance supplied from a four wire measurement. Skip the fit:
+          // separating r from the dead time needs curvature in u(i), and over
+          // the current range the trip limit allows there is not enough of it
+          // -- on one motor the fitted r came out 1.20, 0.81, 0.73 and 0.57
+          // at four test currents against a meter's 0.685, sweeping through
+          // the answer rather than settling on it. The dead time itself is
+          // solid: read at the top dwell against a known r it reproduced to
+          // 0.2% across two firmware builds and four runs.
+          PIN(r)    = PIN(r_known);
+          PIN(drop) = MAX(0.75 * (PIN(tmp3) - PIN(r) * PIN(tmp2)), 0.0);
+        } else if(di > 0.01) {
           PIN(r)    = MAX((PIN(tmp3) - PIN(tmp1)) / di, 0.001);
           PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
         }
