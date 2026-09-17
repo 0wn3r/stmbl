@@ -102,6 +102,8 @@ typedef union {
     float max_y;
     float max_cur;
     float dac;
+    float drop;
+    float drop_k;
   } pins;
   float data[sizeof(struct f3_config_data_temp) / 4];
 } f3_config_data_t;

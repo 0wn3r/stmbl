@@ -9,7 +9,8 @@
 
 HAL_COMP(hv);
 
-HAL_PIN(drop);
+HAL_PIN(drop);    // dead time compensation, fixed volts
+HAL_PIN(drop_k);  // dead time compensation, scaled by dc link and pwm period
 
 //IU IV IW input in amp
 HAL_PIN(iu);
@@ -49,6 +50,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(min_off) = 0.000003;
   PIN(arr)     = PWM_RES;
   PIN(drop)    = 0;
+  PIN(drop_k)  = 0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -60,10 +62,26 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   float udc = MAX(PIN(udc), 0.1);
 
-  // drop compensation
-  float uu = PIN(u) + PIN(drop) * SIGN2(PIN(iu), 0.1);
-  float uv = PIN(v) + PIN(drop) * SIGN2(PIN(iv), 0.1);
-  float uw = PIN(w) + PIN(drop) * SIGN2(PIN(iw), 0.1);
+  // Dead time compensation. While a phase current keeps its sign the bridge
+  // loses a fixed slice of volt seconds every cycle, worth the dead time as a
+  // fraction of the pwm period times the link voltage. Both times are counted
+  // in the same timer ticks, so the clock cancels and only the tick ratio is
+  // needed -- and it has to be against the live pwm_res, because ls.c walks
+  // ARR to phase lock the loop and a constant would drift with the lock.
+  //
+  // drop_k scales that ideal figure. The switches' own turn off minus turn on
+  // delay eats into the programmed dead time, by 28 ticks of 288 on the IPM
+  // this was characterised on, so 0.9 is a reasonable starting point; 0 keeps
+  // the pre-existing behaviour. drop is a plain volt offset on top, for a
+  // board where a fixed number is preferred or to trim what the model misses.
+  //
+  // Over-compensating is worse than under-compensating: it puts positive
+  // feedback around SIGN2 at the current zero crossing.
+  float dt_drop = PIN(drop) + PIN(drop_k) * (float)PWM_DEADTIME_TICKS / (2.0 * (float)ctx->pwm_res) * udc;
+
+  float uu = PIN(u) + dt_drop * SIGN2(PIN(iu), 0.1);
+  float uv = PIN(v) + dt_drop * SIGN2(PIN(iv), 0.1);
+  float uw = PIN(w) + dt_drop * SIGN2(PIN(iw), 0.1);
   //convert voltages to PWM output compare values
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));

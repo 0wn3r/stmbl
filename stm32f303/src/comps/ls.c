@@ -32,6 +32,8 @@ HAL_PIN(cur_ind);
 HAL_PIN(max_y);
 HAL_PIN(max_cur);
 HAL_PIN(dac);
+HAL_PIN(drop);
+HAL_PIN(drop_k);
 
 // process data to LS
 HAL_PIN(dc_volt);
@@ -143,6 +145,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   config.pins.max_y   = 0.0;
   config.pins.max_cur = 0.0;
   config.pins.dac     = 0.0;
+  config.pins.drop    = 0.0;
+  config.pins.drop_k  = 0.0;
 
   USART3->RTOR = 16;               // 16 bits timeout
   USART3->CR2 |= USART_CR2_RTOEN;  // timeout en
@@ -192,14 +196,22 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     uint32_t crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&(ctx->packet_to_hv.header.slave_addr), sizeof(packet_to_hv_t) / 4 - 1);
     if(ctx->packet_to_hv.header.slave_addr == 0 && ctx->packet_to_hv.header.len == (sizeof(packet_to_hv_t) - sizeof(stmbl_talk_header_t)) / 4 && crc == ctx->packet_to_hv.header.crc) {
       //
-      uint8_t a = ctx->packet_to_hv.header.conf_addr;
-      a         = CLAMP(a, 0, sizeof(config) / 4 - 1);
+      // An out of range address means the f4 was flashed with a newer config
+      // layout than this image knows, which is the window between updating the
+      // f4 and letting it push the matching f3 image over. Drop those words
+      // instead of folding them onto the last entry, where a foreign value
+      // would land in whatever field happens to sit at the end.
+      uint8_t a     = ctx->packet_to_hv.header.conf_addr;
+      uint8_t valid = a < sizeof(config) / 4;
+      a             = CLAMP(a, 0, sizeof(config) / 4 - 1);
 
       switch(ctx->packet_to_hv.header.flags.cmd) {
         case NO_CMD:
           break;
         case WRITE_CONF:
-          config.data[a] = ctx->packet_to_hv.header.config.f32;  // TODO: first enable after complete update
+          if(valid) {
+            config.data[a] = ctx->packet_to_hv.header.config.f32;  // TODO: first enable after complete update
+          }
           break;
         case READ_CONF:
           ctx->tx_addr = a;
@@ -236,6 +248,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(max_y)   = config.pins.max_y;
       PIN(max_cur) = config.pins.max_cur;
       PIN(dac)     = config.pins.dac;
+      PIN(drop)    = config.pins.drop;
+      PIN(drop_k)  = config.pins.drop_k;
       ctx->timeout = 0;
       PIN(crc_ok)
       ++;
