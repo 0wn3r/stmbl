@@ -30,6 +30,8 @@ HAL_PIN(single_dwell);  // *parameter*, take r from the top dwell alone
 HAL_PIN(fit_di);        // dwell current separation, 0 = r/drop fit did not run
 HAL_PIN(r_1p);          // top dwell ratio, 0 = that dwell never reached its command
 HAL_PIN(r_2p);          // two dwell chord slope, 0 = the fit did not run
+HAL_PIN(drop_slope);    // *parameter*, the chord's dead time bias, ohm A per volt
+HAL_PIN(r_bias);        // what was subtracted from the chord to get r
 
 HAL_PIN(pp);
 HAL_PIN(com_offset);
@@ -61,6 +63,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct idpmsm_pin_ctx_t *pins = (struct idpmsm_pin_ctx_t *)pin_ptr;
   PIN(r_known)                  = 0.0;
   PIN(single_dwell)             = 0.0;
+  PIN(drop_slope)               = 0.0039;
   PIN(test_cur)                 = 3.0;
   PIN(test_vel)                 = 50.0;
   PIN(ki)                       = 1.0;
@@ -123,16 +126,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("<font color='red'>measured</font> drop = %f V at the %f A dwell\n", PIN(drop), PIN(test_cur));
         printf("<font color='green'># scales with the dc link. do NOT put hv0.drop or hv0.drop_k\n");
         printf("# in a config -- the compensation is not stable yet.</font>\n");
-        // the dead time voltage is still rising with current everywhere the
-        // trip limit lets us dwell, so the fit hands part of it to the slope:
-        // r reads high and drop low. Above a machine specific current the
-        // error goes as 1/test_cur and two runs extrapolate it away, the same
-        // formula for both. Below that current it barely moves with test_cur
-        // and the extrapolation is meaningless -- on a 1.37 ohm phase to
-        // phase PMSM, r read 1.381 at 2 A and 1.394 at 3 A, and extrapolating
-        // that pair returned 1.42, above both. The 6 and 8 A pair returned
-        // 0.679 against a four wire 0.685. So pick two high currents and
-        // check that r actually moved between them.
         if(PIN(r_known) > 0.0) {
           printf("<font color='green'># drop read at the %f A dwell against the r you gave.\n", PIN(test_cur));
           printf("# it scales with the dc link, remeasure if that changes.</font>\n");
@@ -147,14 +140,17 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("# rise with current leaking into the slope. a much wider\n");
           printf("# gap than that means drop_k is over compensating.</font>\n");
         } else {
-          printf("<font color='green'># r reads high and drop low.\n");
-          printf("# rerun at a second, higher test_cur, then for both:\n");
-          printf("#   value = (tc2 * v2 - tc1 * v1) / (tc2 - tc1)\n");
-          printf("# if r barely moved between the runs, both were too low\n");
-          printf("# to extrapolate from -- go higher.\n");
-          printf("# better: measure r four wire, halve the phase to phase\n");
-          printf("# reading, and set idpmsm0.r_known -- the fit cannot\n");
-          printf("# separate r from the dead time at any test_cur.</font>\n");
+          printf("<font color='green'># chord %f, less its dead time bias %f.\n", PIN(r_2p), PIN(r_bias));
+          printf("# the bias is 8/3 * ln2 * K / test_cur and needs only K, the\n");
+          printf("# drop's slope with current -- not its magnitude, which the\n");
+          printf("# chord cancels. idpmsm0.drop_slope carries it.\n");
+          if(PIN(test_cur) < 5.0) {
+            printf("</font><font color='red'># test_cur %f is too low for this correction:\n", PIN(test_cur));
+            printf("# below about 5 A the drop stops following ln(i) and the\n");
+            printf("# bias is understated. rerun higher.</font><font color='green'>\n");
+          }
+          printf("# cross check: measure r four wire, halve the phase to\n");
+          printf("# phase reading, and set idpmsm0.r_known.</font>\n");
         }
       } else {
         // no usable estimate: either the two dwells read the same current so
@@ -346,8 +342,40 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             PIN(drop) = 0.0;  // it lives in hv0.drop_k now, not here
           }
         } else if(di > 0.01) {
-          PIN(r)    = PIN(r_2p);
-          PIN(drop) = MAX(0.75 * (PIN(tmp1) * PIN(tmp2) - PIN(tmp3) * PIN(tmp0)) / di, 0.0);
+          // Two dwells, with the chord's bias subtracted rather than ignored.
+          //
+          // The bias is not noise, it has a closed form. ud carries 4/3 of the
+          // dead time voltage, that voltage rises as K*ln(i), and the test's
+          // own geometry is i2 = test_cur, i1 = test_cur/2, so
+          //
+          //   chord = r + 8/3 * K * ln2 / test_cur
+          //
+          // and computing it per phase at each phase's own current gives the
+          // same number to four figures -- the log turns the ratio into a
+          // difference and both dwells scale alike.
+          //
+          // What matters is which constant this needs. Not the dead time's
+          // magnitude, which is the part that varies between power stages with
+          // the switches' turn off delay, and which the chord cancels by being
+          // a difference. Only K, its slope with current, which is a much more
+          // transferable device property. Express it against the dc link, as
+          // the whole drop scales that way: drop_slope = 8/3 * ln2 * K / Vdc,
+          // 0.0039 ohm A per volt on the bridge this was characterised on.
+          //
+          // Against a four wire 0.685 ohm, correcting the chords measured on
+          // that axis gives 0.682 at 6 A and 0.673 at 8 A. The same correction
+          // at 3 A gives 0.986, because the log stops describing the drop once
+          // the current is too small to commutate the devices cleanly -- hence
+          // the warning below rather than a silent answer.
+          float vdc   = PIN(pwm_volt) / (M_SQRT1_3 * 0.95);
+          PIN(r_bias) = PIN(drop_slope) * vdc / MAX(PIN(test_cur), 0.1);
+
+          PIN(r) = MAX(PIN(r_2p) - PIN(r_bias), 0.001);
+
+          // and read the drop at the top dwell against that r, the same form
+          // the r_known path uses. The chord's own intercept would do, but it
+          // is the worse conditioned half of the same fit.
+          PIN(drop) = MAX(0.75 * (PIN(tmp3) - PIN(r) * PIN(tmp2)), 0.0);
         }
 
         // the l test needs the voltage that holds test_cur, dead time
