@@ -34,6 +34,13 @@ HAL_PIN(pp);
 HAL_PIN(out_rev);
 
 HAL_PIN(test_cur);
+
+// conf0.polecount was printed as a config line whether or not the rotor ever
+// followed the field -- and unlike idpmsm, pp is not preset here either, so it
+// starts at the hal default of 0 and a test that did not turn printed
+// "conf0.polecount = 0" in green. com_pos * 0 is identically zero: no
+// commutation at all.
+HAL_PIN(pp_ok);
 HAL_PIN(test_vel);
 
 HAL_PIN(vel_fb);
@@ -70,6 +77,8 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(l)       = 0.001;
       PIN(drop)    = 0.0;
       PIN(out_rev) = 0.0;
+      PIN(pp)      = 3.0;
+      PIN(pp_ok)   = 0.0;
       PIN(cur_bw)  = 1.0;
       break;
 
@@ -171,9 +180,14 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 24:
-      printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
-      if(PIN(out_rev) > 0.0) {
-        printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+      if(PIN(pp_ok) > 0.0) {
+        printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
+        if(PIN(out_rev) > 0.0) {
+          printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+        }
+      } else {
+        printf("<font color='red'>polecount not measured</font>: the rotor did not follow the field\n");
+        printf("raise idacim0.test_cur, or lower idacim0.test_vel so it can keep up\n");
       }
       printf("done\n");
       PIN(state) = 3.0;
@@ -449,6 +463,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(pp) *= -1.0;
         }
         PIN(pp) = (int)(PIN(pp) + 0.5);
+
+        // an unbounded (int) cast can land on 0, and com_pos * 0 is identically
+        // zero -- commutation gone
+        PIN(pp_ok) = (PIN(pp) >= 1.0 && PIN(pp) <= 24.0) ? 1.0 : 0.0;
 
         PIN(en_out)   = 0.0;
         PIN(d_cmd)    = 0.0;

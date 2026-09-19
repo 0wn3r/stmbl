@@ -39,6 +39,29 @@ HAL_PIN(com_offset);
 HAL_PIN(out_rev);
 
 HAL_PIN(test_cur);
+
+// The commutation offset is a circular mean, not an average. pos_fb is a rotor
+// angle: averaging it linearly is only right while it never crosses the wrap,
+// and when it does the mean runs toward zero instead of pi. On the bench that
+// showed up as a different com_offset every run depending on where the rotor
+// happened to start. Accumulate the unit vector instead and take its argument.
+//
+// The resultant's length falls out for free as a quality measure: it is 1 when
+// the rotor sat still for the whole dwell and collapses toward 0 if it wandered,
+// which is exactly the failure this test has to catch.
+HAL_PIN(off_sin);
+HAL_PIN(off_cos);
+HAL_PIN(off_mag);  // resultant length, 1 = the rotor held station
+HAL_PIN(off_n);
+
+// Every one of these used to be printed as a config line whether or not the
+// measurement ran. The presets in nrt case 0 are pp = 3 and psi = 0.055, so a
+// test that never turned the rotor printed those in green with "append to
+// config" beside them -- which is how a psi of exactly 0.055 reaches a machine.
+// Same shape as r_ok in the r test.
+HAL_PIN(pp_ok);
+HAL_PIN(com_ok);
+HAL_PIN(psi_ok);
 HAL_PIN(test_vel);
 HAL_PIN(ki);
 HAL_PIN(vel_bw);
@@ -87,6 +110,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(psi)        = 0.055;
       PIN(pp)         = 3.0;
       PIN(com_offset) = 0.0;
+      PIN(pp_ok)      = 0.0;
+      PIN(com_ok)     = 0.0;
+      PIN(psi_ok)     = 0.0;
       PIN(out_rev)    = 0.0;
       PIN(cur_bw)     = 1.0;
       break;
@@ -197,10 +223,22 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 25:  // pp, out_rev, com_offset
-      printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
-      printf("conf0.mot_fb_offset = %f <font color='green'># append to config</font>\n", PIN(com_offset));
-      if(PIN(out_rev) > 0.0) {
-        printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+      if(PIN(pp_ok) > 0.0) {
+        printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
+        if(PIN(out_rev) > 0.0) {
+          printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+        }
+      } else {
+        printf("<font color='red'>polecount not measured</font>: the rotor did not follow the field\n");
+        printf("raise idpmsm0.test_cur, or lower idpmsm0.test_vel so it can keep up\n");
+      }
+      if(PIN(com_ok) > 0.0) {
+        printf("conf0.mot_fb_offset = %f <font color='green'># append to config</font>\n", PIN(com_offset));
+      } else if(PIN(off_mag) <= 0.95) {
+        printf("<font color='red'>mot_fb_offset not measured</font>: the rotor moved during the dwell\n");
+        printf("(resultant %f, 1.0 means it held still). raise idpmsm0.test_cur.\n", PIN(off_mag));
+      } else {
+        printf("<font color='red'>mot_fb_offset not measured</font>: the dwell drew %f A of %f\n", PIN(id_fb), PIN(test_cur));
       }
       PIN(state) = 3.0;
       break;
@@ -224,7 +262,15 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 33:
-      printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
+      if(PIN(psi_ok) > 0.0) {
+        printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
+        printf("<font color='green'># psi is (uq - iq * r) / (vel * pp), so it inherits the r above.\n");
+        printf("# cross check it against the nameplate: psi = sqrt(2) * Ke / pp with\n");
+        printf("# Ke in V(rms).s/rad, or Kt / (1.5 * pp * sqrt(2)) with Kt in Nm/A(rms).</font>\n");
+      } else {
+        printf("<font color='red'>psi not measured</font>: the shaft reached %f of %f rad/s\n", PIN(vel_fb), PIN(test_vel));
+        printf("conf0.psi is still the %f preset -- do NOT append it\n", PIN(psi));
+      }
       printf("done\n");
       printf("continue with id_mot\n");
 
@@ -496,7 +542,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
         PIN(pp) = (int)(PIN(pp) + 0.5);
 
-        PIN(state) = 2.3;
+        // A rotor that never followed the field leaves pp at its preset, and an
+        // unbounded (int) cast can land on 0, which makes com_pos identically
+        // zero and kills commutation outright. Take neither on trust.
+        PIN(pp_ok) = (PIN(pp) >= 1.0 && PIN(pp) <= 24.0) ? 1.0 : 0.0;
+
+        PIN(off_sin) = 0.0;
+        PIN(off_cos) = 0.0;
+        PIN(off_n)   = 0.0;
+        PIN(state)   = 2.3;
       }
       break;
 
@@ -510,11 +564,38 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(com_pos) = 0.0;
 
-      PIN(com_offset) = PIN(com_offset) * 0.99 - PIN(pos_fb) * 0.01;
-
+      // Sum over the back half of the dwell only: the rotor is still ringing into
+      // alignment through the front half, and a plain sum over a settled window
+      // is what makes the resultant's length mean something. An ema would just
+      // track the motion and report a full length whatever the rotor did.
       PIN(timer) += period;
+      if(PIN(timer) > 1.0) {
+        PIN(off_sin) += sinf(PIN(pos_fb));
+        PIN(off_cos) += cosf(PIN(pos_fb));
+        PIN(off_n) += 1.0;
+      }
+
       if(PIN(timer) >= 2.0) {
-        PIN(en)    = 0.0;
+        float n       = MAX(PIN(off_n), 1.0);
+        PIN(off_mag)  = sqrtf(PIN(off_sin) * PIN(off_sin) + PIN(off_cos) * PIN(off_cos)) / n;
+        float com_off = -atan2f(PIN(off_sin), PIN(off_cos));
+
+        // Fold it into one period. com_pos is mod((pos_fb + com_offset) * pp), so
+        // adding 2 pi / pp to the offset adds 2 pi to the product and changes
+        // nothing -- the rotor parks on whichever of the pp alignment positions is
+        // nearest where the pole pair test left it, and every one of them is a
+        // correct answer. Printing whichever came up makes consecutive runs look
+        // like they disagree when they do not. Normalising to [0, 2 pi / pp) makes
+        // the same axis print the same number every time, so a run that genuinely
+        // differs is visible.
+        if(PIN(pp) >= 1.0) {
+          float fold = 2.0 * M_PI / PIN(pp);
+          com_off    = com_off - fold * floorf(com_off / fold);
+        }
+        PIN(com_offset) = com_off;
+
+        PIN(com_ok) = (PIN(off_mag) > 0.98 && PIN(id_fb) > PIN(test_cur) * 0.5) ? 1.0 : 0.0;
+
         PIN(d_cmd) = 0.0;
         PIN(state) = 2.5;
         PIN(timer) = 0.0;
@@ -543,6 +624,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(timer) += period;
       if(PIN(timer) >= 5.0) {
+        // psi only updates while the shaft is turning, so a motor that never got
+        // up to speed leaves the 0.055 preset in place looking like a reading
+        PIN(psi_ok) = (ABS(PIN(vel_fb)) > PIN(test_vel) * 0.5) ? 1.0 : 0.0;
+
         PIN(timer)    = 0.0;
         PIN(en_out)   = 0.0;
         PIN(d_cmd)    = 0.0;

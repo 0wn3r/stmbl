@@ -26,6 +26,9 @@ HAL_PIN(com_offset);
 HAL_PIN(out_rev);
 
 HAL_PIN(test_cur);
+
+// conf0.psi was printed whether or not the shaft turned; the preset is 0.055.
+HAL_PIN(psi_ok);
 HAL_PIN(test_vel);
 HAL_PIN(ki);
 HAL_PIN(vel_bw);
@@ -65,6 +68,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(r)          = 0.1;
       PIN(l)          = 0.001;
       PIN(psi)        = 0.055;
+      PIN(psi_ok)     = 0.0;
       PIN(com_offset) = 0.0;
       PIN(out_rev)    = 0.0;
       PIN(cur_bw)     = 1.0;
@@ -103,9 +107,14 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 23:
-      printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
-      if(PIN(out_rev) > 0.0) {
-        printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+      if(PIN(psi_ok) > 0.0) {
+        printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
+        if(PIN(out_rev) > 0.0) {
+          printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+        }
+      } else {
+        printf("<font color='red'>psi not measured</font>: the shaft reached %f of %f rad/s\n", PIN(vel_fb), PIN(test_vel));
+        printf("conf0.psi is still the %f preset -- do NOT append it\n", PIN(psi));
       }
       printf("done\n");
       printf("continue with id_mot\n");
@@ -177,7 +186,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(timer) += period;
       if(PIN(timer) >= 1.0) {
-        PIN(l)      = ABS(PIN(tmp1) - PIN(tmp3)) / ABS(PIN(tmp0) - PIN(tmp2)) * period;
+        // idpmsm and idacim both guard this divisor; this one did not
+        PIN(l)      = ABS(PIN(tmp1) - PIN(tmp3)) / MAX(ABS(PIN(tmp0) - PIN(tmp2)), 0.001) * period;
         PIN(timer)  = 0.0;
         PIN(state)  = 1.4;
         PIN(q_cmd)  = PIN(avg_test_volt);
@@ -208,6 +218,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(timer) += period;
       if(PIN(timer) >= 5.0) {
+        // psi only updates while the shaft is turning
+        PIN(psi_ok) = (ABS(PIN(vel_fb)) > PIN(test_vel) * 0.5) ? 1.0 : 0.0;
+
         if(PIN(psi) < 0.0) {
           PIN(psi) *= -1.0;
           PIN(out_rev) = 1.0;
