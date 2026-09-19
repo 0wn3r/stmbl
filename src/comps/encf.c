@@ -17,12 +17,12 @@ HAL_PIN(pos);
 HAL_PIN(abs_pos);
 HAL_PIN(state);
 HAL_PIN(turns);
+HAL_PIN(abs_rev);
 HAL_PIN(com_pos);
 HAL_PIN(index);
 HAL_PIN(batt);
 HAL_PIN(req_len);
 
-HAL_PIN(pos_offset);
 
 HAL_PIN(send_step);
 HAL_PIN(crc_ok);
@@ -99,8 +99,6 @@ static union {
 } data;
 static uint8_t print_buf[10];
 
-static int32_t pos_offset;
-static uint32_t state_counter;
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
@@ -179,11 +177,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   GPIO_SetBits(GPIOD, GPIO_Pin_15);  //tx enable
 
-  pos_offset    = 0;
-  PIN(pos_offset) = 0;
-  PIN(req_len)  = 2046;
-  state_counter = 0;
-  PIN(freq)     = 1024000;
+  PIN(req_len) = 2046;
+  PIN(freq)    = 1024000;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -248,28 +243,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(index)  = data.fanuc.no_index;
       PIN(batt)   = data.fanuc.bat;
 
+      //the single turn track is absolute whatever the index bit says, so pos and
+      //abs_pos are the same angle. only the turn count below needs the index.
       PIN(abs_pos) = mod((float)pos * 2.0 * M_PI / (1 << 22));
+      PIN(pos)     = PIN(abs_pos);
+      PIN(state)   = PIN(index) > 0.0 ? 1 : 3;
 
-      if(PIN(index) > 0.0) {
-        pos_offset    = pos;
-        PIN(pos)      = PIN(abs_pos);
-        PIN(state)    = 1;
-        state_counter = 1;
-      } else if(state_counter == 1) {
-        state_counter = 2;
-        pos_offset    = pos;
-        PIN(pos)      = PIN(abs_pos);
-      } else {
-        state_counter = 3;
-        PIN(pos)      = mod((float)(pos + pos_offset + ((uint32_t)PIN(pos_offset) << 6)) * 2.0 * M_PI / (1 << 22));
-        PIN(state)    = 3;
+      int32_t turns = data.fanuc.turns;
+      if(turns > 32767) {
+        turns = turns % 32768 - 32768;
       }
+      PIN(turns) = turns;
 
-      if (data.fanuc.turns > 32767) {
-        PIN(turns) = (int32_t)data.fanuc.turns % 32768 - 32768;
-      } else {
-        PIN(turns) = data.fanuc.turns;
-      }
+      //the counter increments at raw 2^21, which is where abs_pos wraps +-pi, so
+      //abs_rev is abs_pos's turn count directly. it carries the encoder's own turn
+      //origin, a whole number of revolutions that machine zero absorbs. the two
+      //change within a count of each other, so a consumer must read this away from
+      //the wrap - see linrev.
+      PIN(abs_rev) = turns;
 
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = mod(pos * 2.0 * M_PI / 1024);
@@ -281,9 +272,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(error) = 1;
     }
   } else {
-    PIN(error)    = 1;
-    PIN(state)    = 1;
-    state_counter = 0;
+    PIN(error) = 1;
+    PIN(state) = 1;
   }
   //reset timer
   FB0_ENC_TIM->CNT  = 0;

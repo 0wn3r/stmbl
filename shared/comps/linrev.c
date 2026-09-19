@@ -42,18 +42,16 @@ HAL_PIN(abs_rev);
 
 HAL_PIN(pos_offset);
 
-static uint32_t abs_state_counter;
-
 struct linrev_ctx_t {
   int lastq;    //last quadrant
   int32_t rev;  //current multiturn
+  int synced;   //rev has been taken from abs_rev at least once
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct linrev_ctx_t *ctx      = (struct linrev_ctx_t *)ctx_ptr;
   struct linrev_pin_ctx_t *pins = (struct linrev_pin_ctx_t *)pin_ptr;
 
-  abs_state_counter = 0;
   PIN(pos_offset) = 0;
 }
 
@@ -69,32 +67,30 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   int q = quadrant(PIN(fb_in));
 
-  if (PIN(abs_en) > 0) {
-    if (q != 0 && q == ctx->lastq && abs_state_counter != 1) {
-      ctx->rev = PIN(abs_rev);
-      abs_state_counter = 1;
-    }
+  //rev cancels fb_in's wrap, so it has to change exactly at that wrap - which is
+  //also where the encoder's own turn counter changes, to within a count. an
+  //absolute count read there is ambiguous by a whole revolution and nothing
+  //downstream can tell the two apart. so keep counting the wrap, which is
+  //self consistent, and use abs_rev only to correct that count in quadrants 1 and
+  //4, half a turn away from the ambiguity. a slip is taken out within a quarter
+  //turn of motion and cannot accumulate.
+  if(q == 3 && ctx->lastq == 2) {
+    ctx->rev++;
+  }
+  if(q == 2 && ctx->lastq == 3) {
+    ctx->rev--;
   }
 
-  if(q != 0 && q == 3 && ctx->lastq == 2) {
-    if(PIN(abs_en) > 0){
-      ctx->rev = PIN(abs_rev);
-    } else {
-      ctx->rev++;
-    }
-  }
-
-  if(q != 0 && q == 2 && ctx->lastq == 3) {
-    if(PIN(abs_en) > 0){
-      ctx->rev = PIN(abs_rev);
-    } else {
-      ctx->rev--;
-    }
+  if(PIN(abs_en) > 0 && (!ctx->synced || q == 1 || q == 4)) {
+    ctx->rev    = PIN(abs_rev);
+    ctx->synced = 1;
   }
 
   ctx->lastq = q;
 
-  if(PIN(rev_clear) > 0) {
+  //with an absolute turn count the homed zero cannot live in rev, it would be
+  //overwritten on the next cycle. it belongs in pos_offset.
+  if(PIN(rev_clear) > 0 && !(PIN(abs_en) > 0)) {
     ctx->rev = 0;
   }
   PIN(rev)      = ctx->rev;

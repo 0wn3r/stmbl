@@ -21,12 +21,14 @@ HAL_PIN(cmd_pos);
 
 HAL_PIN(mot_pos);
 HAL_PIN(mot_abs_pos);
+HAL_PIN(mot_abs_turns);
 HAL_PIN(mot_polecount);
 HAL_PIN(mot_offset);
 HAL_PIN(mot_state);  // 0 = disabled, 1 = inc, 2 = start abs, 3 = abs
 HAL_PIN(mot_rev);
 HAL_PIN(mot_fb_no_offset);
 HAL_PIN(mot_abs_fb_no_offset);
+HAL_PIN(abs_turns);
 
 HAL_PIN(plot_fb_pos);
 
@@ -98,10 +100,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float joint_offset = PIN(joint_offset);
 
 
+  float mot_abs_turns = PIN(mot_abs_turns);
+
   if(PIN(mot_rev) > 0.0) {
     mot_pos *= -1.0;
     mot_abs_pos *= -1.0;
     mot_offset *= -1.0;
+    //the turn count rides with the angle it belongs to: -(a + n * 2pi) is
+    //(-a) + (-n) * 2pi, so reversing the angle reverses the count.
+    mot_abs_turns *= -1.0;
   }
 
   if(PIN(com_rev) > 0.0) {
@@ -119,6 +126,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(com_fb_no_offset)     = com_pos;
   PIN(mot_fb_no_offset)     = mot_pos;
   PIN(mot_abs_fb_no_offset) = mot_abs_pos;
+  PIN(abs_turns)            = mot_abs_turns;
   PIN(joint_fb_no_offset)   = joint_pos;
 
   PIN(id) = 0.0;
