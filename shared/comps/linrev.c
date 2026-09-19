@@ -39,6 +39,7 @@ HAL_PIN(rev);
 
 HAL_PIN(abs_en);
 HAL_PIN(abs_rev);
+HAL_PIN(abs_valid);
 
 HAL_PIN(pos_offset);
 
@@ -53,6 +54,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct linrev_pin_ctx_t *pins = (struct linrev_pin_ctx_t *)pin_ptr;
 
   PIN(pos_offset) = 0;
+  PIN(abs_valid)  = 1.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -81,7 +83,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->rev--;
   }
 
-  if(PIN(abs_en) > 0 && (!ctx->synced || q == 1 || q == 4)) {
+  //an encoder that has not seen its index yet has no turn count to give, so hold
+  //the incremental one and re-seed when it says the count is good.
+  if(!(PIN(abs_valid) > 0)) {
+    ctx->synced = 0;
+  } else if(PIN(abs_en) > 0 && (!ctx->synced || q == 1 || q == 4)) {
     ctx->rev    = PIN(abs_rev);
     ctx->synced = 1;
   }

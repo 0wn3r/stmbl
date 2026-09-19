@@ -18,6 +18,7 @@ HAL_PIN(abs_pos);
 HAL_PIN(state);
 HAL_PIN(turns);
 HAL_PIN(abs_rev);
+HAL_PIN(abs_ok);
 HAL_PIN(com_pos);
 HAL_PIN(index);
 HAL_PIN(batt);
@@ -262,18 +263,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       //the wrap - see linrev.
       PIN(abs_rev) = turns;
 
+      //the count means nothing until the encoder has seen its index, so say so
+      //rather than leaving a consumer to read state as a number.
+      PIN(abs_ok) = PIN(index) > 0.0 ? 0.0 : 1.0;
+
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = mod(pos * 2.0 * M_PI / 1024);
       PIN(error)   = 0;
     } else {
       PIN(crc_er)
       ++;
-      PIN(state) = 1;
-      PIN(error) = 1;
+      PIN(state)  = 1;
+      PIN(abs_ok) = 0.0;
+      PIN(error)  = 1;
     }
   } else {
-    PIN(error) = 1;
-    PIN(state) = 1;
+    PIN(error)  = 1;
+    PIN(state)  = 1;
+    PIN(abs_ok) = 0.0;
   }
   //reset timer
   FB0_ENC_TIM->CNT  = 0;
