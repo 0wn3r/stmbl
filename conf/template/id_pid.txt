@@ -16,6 +16,12 @@ ids0.vel_error = pid0.vel_error
 
 ids0.cur_bw = conf0.cur_bw
 
+# the ring down estimator (ids0.state = 2.0) needs the inertia split that
+# id_mot and id_sys produce; without it it can still report the resonance but
+# not turn it into a j_lpf corner
+ids0.j_mot = conf0.j
+ids0.j_sys = conf0.j_sys
+
 conf0.max_pos_error = 0
 conf0.max_sat = 10
 conf0.vel_g = 1
@@ -33,5 +39,10 @@ term0.wave6 = ids0.vel_bw
 term0.gain6 = 0.1
 term0.wave7 = ids0.vel_d
 term0.gain7 = 10.0
+
+# put the ring detector's own signal on a wave so a failed measurement can be
+# looked at rather than guessed at
+term0.wave1 = ids0.ring_sig
+term0.gain1 = 20
 
 term0.send_step = 21
