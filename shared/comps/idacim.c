@@ -1,5 +1,6 @@
 #include "idacim_comp.h"
 #include "hal.h"
+#include "string.h"
 #include "defines.h"
 #include "angle.h"
 
@@ -20,6 +21,9 @@ HAL_PIN(timer);
 
 HAL_PIN(r);
 HAL_PIN(l);
+HAL_PIN(l_half);  // *parameter*, l test half period [s]
+HAL_PIN(tau);     // measured current time constant l/r [s]
+HAL_PIN(l_ok);    // 1 = l is a measurement, 0 = it is not
 HAL_PIN(drop);
 HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = try to fit it
 HAL_PIN(single_dwell);  // *parameter*, take r from the top dwell alone
@@ -49,6 +53,26 @@ HAL_PIN(tmp2);
 HAL_PIN(tmp3);
 HAL_PIN(avg_test_volt);
 
+
+// The l test's state. tau is integrated over thousands of ticks and the window
+// is timed off what comes back in ud_fb, so none of this can be pins without
+// making the state machine's scratch pins mean two different things at once.
+struct idacim_ctx_t {
+  uint8_t was_high;  // last observed level of ud_fb
+  uint8_t have_a;    // a settled low value has been captured
+  uint16_t end_n;    // samples in the settled tail of this half
+  uint16_t cyc;      // observed cycles, the first is discarded
+  uint16_t tau_n;    // cycles that yielded a time constant
+  float t_cmd;       // phase of the commanded square wave
+  float t_in;        // time since the last observed edge
+  float t_hi;        // measured length of the high half
+  float area;        // integral of id_fb across the high half
+  float prev;        // previous id_fb, for the trapezoid
+  float end_sum;     // settled tail accumulator
+  float i_a;         // settled low current
+  float tau_sum;
+};
+
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
@@ -60,6 +84,14 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(cur_bw)                   = 1.0;
 }
 
+
+// ctx survives a stop, so come back to a cleared detector rather than half a
+// measurement taken against whatever the bridge was doing when the loop stopped.
+static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
+  struct idacim_ctx_t *ctx = (struct idacim_ctx_t *)ctx_ptr;
+  memset(ctx, 0, sizeof(struct idacim_ctx_t));
+}
+
 static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
@@ -68,6 +100,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 0:
       PIN(r)       = 0.1;
       PIN(l)       = 0.001;
+      PIN(l_half)  = 0.1;
       PIN(drop)    = 0.0;
       PIN(out_rev) = 0.0;
       PIN(cur_bw)  = 1.0;
@@ -96,7 +129,20 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // disagree about whether this run measured anything.
       if(PIN(r_ok) > 0.0) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
-        printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
+        if(PIN(l_ok) > 0.0) {
+          printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
+          printf("<font color='green'># from tau = %f ms against the r above, not from a voltage slope.\n", PIN(tau) * 1000.0);
+          printf("# an LCR still beats it: measure line to line at 1 kHz and halve.</font>\n");
+        } else if(PIN(tau) <= 0.0) {
+          printf("<font color='red'>l not measured</font>: no usable transient\n");
+          printf("check that the bridge is enabled and idpmsm0.ud_fb is wired\n");
+        } else if(PIN(tau) > PIN(l_half) / 8.0) {
+          printf("<font color='red'>l not measured</font>: tau = %f ms needs a longer half period\n", PIN(tau) * 1000.0);
+          printf("raise idacim0.l_half above %f s and rerun\n", PIN(tau) * 8.0);
+        } else {
+          printf("<font color='red'>l not measured</font>: tau = %f ms is too fast to time here\n", PIN(tau) * 1000.0);
+          printf("use an LCR meter: line to line at 1 kHz, halved\n");
+        }
         // Measurement, not a config line. hv0.drop and hv0.drop_k both feed the
         // same dt_drop in the f3's hv.c, and that compensation is not yet safe
         // to switch on: it is keyed on measured current, so once it exceeds the
@@ -182,7 +228,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
+  struct idacim_ctx_t *ctx        = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
 
   if(PIN(en) <= 0.0) {
@@ -393,33 +439,127 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
       break;
 
-    case 13:  // l -- rotor still blocked, voltage control: toggle the commanded
-              // voltage between 1.5x and 0.5x of avg_test_volt and track the
-              // resulting current transient, extracting l from dV/dI * period.
+    case 13: {  // l, from the current's relaxation time constant
       PIN(en_out)   = 1.0;
       PIN(cmd_mode) = 0.0;  // volt cmd
       PIN(q_cmd)    = 0.0;
       PIN(cur_bw)   = 1.0;
 
-      if(PIN(d_cmd) < PIN(avg_test_volt)) {
-        PIN(tmp0)  = PIN(tmp0) * 0.99 + PIN(id_fb) * 0.01;
-        PIN(tmp1)  = PIN(tmp1) * 0.99 + PIN(ud_fb) * 0.01;
-        PIN(d_cmd) = PIN(avg_test_volt) * 1.5;
-      } else {
-        PIN(tmp2)  = PIN(tmp2) * 0.99 + PIN(id_fb) * 0.01;
-        PIN(tmp3)  = PIN(tmp3) * 0.99 + PIN(ud_fb) * 0.01;
-        PIN(d_cmd) = PIN(avg_test_volt) * 0.5;
+      // The old test swung the commanded voltage 1.5x / 0.5x about
+      // avg_test_volt every rt tick and read l off dV/dI * period. That is
+      // wrong twice over. The voltage DEVIATION driving the ramp is half the
+      // swing, not the swing, so the formula returns 2l. And at 5 kHz against
+      // a 15 kHz current loop the sample that comes back covers some unknown
+      // fraction of a ramp: simulating the f3 sub tick the packet happens to
+      // carry moves the answer between 2x and 6x. On this bench it read
+      // 15.9 mH against an LCR's 3.30 mH.
+      //
+      // So measure a time instead of a slope. Step between two currents of the
+      // same sign and take the relaxation time constant by the area method:
+      //
+      //   i(t) = i_f + (i_a - i_f) exp(-t/tau),  tau = l/r
+      //   integral of (i_f - i) dt = (i_f - i_a) * tau     for T >> tau
+      //   => tau = (i_b * T - integral i dt) / (i_b - i_a)
+      //
+      // A time constant does not care about the amplitude, so the dead time
+      // drop -- a constant volt offset for as long as the current keeps its
+      // sign -- cancels out of it exactly. That is also why both levels have to
+      // sit on the same side of zero: the old test's 0.5x level is under the
+      // drop at these dead times, which collapses the current and the
+      // assumption with it.
+      float half = MAX(PIN(l_half), 0.01);
+      float v_hi = PIN(avg_test_volt);
+      float v_lo = PIN(avg_test_volt) - PIN(r) * PIN(test_cur) * 0.5;
+      float mid  = (v_hi + v_lo) * 0.5;
+
+      // Time the window off the step as it comes BACK in ud_fb rather than off
+      // the tick we commanded it. ls.c packs ud_fb and id_fb into the same
+      // packet, so they carry identical delay and it cancels instead of having
+      // to be guessed at. Simulated, that takes the spread across zero, one and
+      // two ticks of pipeline delay from 3x to nothing.
+      uint8_t hi = PIN(ud_fb) > mid;
+
+      if(hi && !ctx->was_high) {  // observed rising edge
+        if(ctx->end_n > 0) {
+          ctx->i_a    = ctx->end_sum / (float)ctx->end_n;
+          ctx->have_a = 1;
+        }
+        ctx->end_sum = 0.0;
+        ctx->end_n   = 0;
+        ctx->area    = 0.0;
+        ctx->t_hi    = 0.0;
+        ctx->t_in    = 0.0;
+        ctx->prev    = PIN(id_fb);
+      } else if(!hi && ctx->was_high) {  // observed falling edge
+        if(ctx->end_n > 0 && ctx->have_a) {
+          float i_b = ctx->end_sum / (float)ctx->end_n;
+          float di  = i_b - ctx->i_a;
+          // the step has to have moved the current, and one whole cycle has to
+          // have gone by, before any of it means anything
+          if(di > PIN(test_cur) * 0.05 && ctx->t_hi > 0.0 && ctx->cyc > 0) {
+            float tau = (i_b * ctx->t_hi - ctx->area) / di;
+            if(tau > 0.0) {
+              ctx->tau_sum += tau;
+              ctx->tau_n++;
+            }
+          }
+        }
+        ctx->end_sum = 0.0;
+        ctx->end_n   = 0;
+        ctx->t_in    = 0.0;
+        ctx->cyc++;
       }
 
+      if(hi) {
+        // trapezoid: the half tick a left hand sum leaves behind is worth about
+        // a percent of tau on these motors
+        ctx->area += (PIN(id_fb) + ctx->prev) * 0.5 * period;
+        ctx->t_hi += period;
+      }
+
+      ctx->t_in += period;
+      if(ctx->t_in > half * 0.75) {  // settled tail of whichever half we are in
+        ctx->end_sum += PIN(id_fb);
+        ctx->end_n++;
+      }
+
+      ctx->prev     = PIN(id_fb);
+      ctx->was_high = hi;
+
+      // the commanded square wave runs on its own clock; what we measure
+      // against is the echo, not this
+      ctx->t_cmd += period;
+      if(ctx->t_cmd >= half * 2.0) {
+        ctx->t_cmd = 0.0;
+      }
+      PIN(d_cmd) = ctx->t_cmd < half ? v_lo : v_hi;
+
       PIN(timer) += period;
-      if(PIN(timer) >= 1.0) {
-        PIN(l)      = ABS(PIN(tmp1) - PIN(tmp3)) / MAX(ABS(PIN(tmp0) - PIN(tmp2)), 0.001) * period;
+      if(PIN(timer) >= 2.0) {
+        float tau = ctx->tau_n > 0 ? ctx->tau_sum / (float)ctx->tau_n : 0.0;
+        float l_ok = 0.0;
+
+        PIN(tau) = tau;
+
+        // Two ways this reads nothing. Too slow for the half period and the
+        // truncated tail drags the area down -- 5% low already at T = 5 tau.
+        // Too fast and the transient is a handful of samples, where noise runs
+        // the answer and a meter beats this outright.
+        if(ctx->tau_n >= 3 && tau >= 10.0 * period && tau <= half / 8.0) {
+          PIN(l) = tau * PIN(r);
+          l_ok   = 1.0;
+        } else {
+          PIN(l) = 0.0;
+        }
+
+        PIN(l_ok)   = l_ok;
         PIN(timer)  = 0.0;
         PIN(state)  = 1.4;
         PIN(d_cmd)  = PIN(avg_test_volt);
         PIN(en_out) = 0.0;
       }
       break;
+    }
 
     case 22:  // pp -- rotor free to turn: hold q_cmd at 0 and ramp com_pos open-loop
               // at test_vel while injecting d_cmd, forcing the rotor to follow the
@@ -466,10 +606,10 @@ hal_comp_t idacim_comp_struct = {
     .rt        = rt_func,
     .frt       = 0,
     .nrt_init  = nrt_init,
-    .rt_start  = 0,
+    .rt_start  = rt_start,
     .frt_start = 0,
     .rt_stop   = 0,
     .frt_stop  = 0,
-    .ctx_size  = 0,
+    .ctx_size  = sizeof(struct idacim_ctx_t),
     .pin_count = sizeof(struct idacim_pin_ctx_t) / sizeof(struct hal_pin_inst_t),
 };
