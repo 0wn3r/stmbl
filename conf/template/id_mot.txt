@@ -10,7 +10,24 @@ pid0.acc_ext_cmd = idm0.acc_cmd
 pid0.j_mot = idm0.inertia
 pid0.d = idm0.damping
 pid0.f = idm0.friction
-pid0.l = idm0.load
+pid0.o = idm0.offset
+
+# idm's four estimators are gradient loops driven by pid0.fb_torque_cmd: each one
+# adapts until the feedback torque stops correlating with its own regressor. That
+# only converges if the estimate is fed back into the feedforward, which is what
+# the four lines above do. The offset line used to read "pid0.l = idm0.load" --
+# both names dead, from a rename that never reached this file (idm still calls the
+# gain li, after the output it no longer has). With it dead, fb_torque kept its dc
+# component for the whole run and idm0.offset integrated open loop, so conf0.o came
+# out as a function of how long the test ran rather than of the load. Simulated
+# against a vertical axis it overstated gravity by about 2.4x, and on a real Z that
+# put 11.4 Nm in a config whose axis holds on 4.4.
+#
+# li sets that loop's time constant, 1 / (period/li * period * rate) = 50 s at the
+# 0.01 default -- a ~110 s run only reaches 89% of the true value. 0.005 halves it
+# to 25 s and lands inside 1%. It cannot go much faster without racing the velocity
+# loop's own integrator for the same dc error, which is why it is slow to begin with.
+idm0.li = 0.005
 
 pid0.pos_bw = idm0.pos_bw
 pid0.vel_bw = idm0.vel_bw
