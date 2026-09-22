@@ -3453,7 +3453,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 165.1 100.33 90)
 			(effects
 				(font
@@ -3573,7 +3573,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 165.1 95.25 90)
 			(effects
 				(font
@@ -3693,7 +3693,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 165.1 90.17 90)
 			(effects
 				(font
