@@ -81288,7 +81288,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 0 2.6 0)
 			(layer "F.Fab")
 			(uuid "c87b0bbc-d803-4e3f-8378-1d7e552fbe92")
@@ -81559,7 +81559,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 0 2.6 0)
 			(layer "F.Fab")
 			(uuid "eb35ecec-b0a4-409d-9dc5-48061f42491b")
@@ -81830,7 +81830,7 @@
 				)
 			)
 		)
-		(property "Value" "0.002"
+		(property "Value" "0.003"
 			(at 0 2.6 0)
 			(layer "F.Fab")
 			(uuid "c8515fd4-493d-4796-af81-a4d994cfb8f0")
