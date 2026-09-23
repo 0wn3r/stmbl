@@ -171,7 +171,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // real drop it drives the current it is reading. Setting either one in
         // a config has taken a drive to its overcurrent trip. Read the number,
         // do not append it.
-        printf("<font color='red'>measured</font> drop = %f V at the %f A dwell\n", PIN(drop), PIN(test_cur));
+        printf("<font color='red'>measured</font> drop = %f V at the %f A dwell, %f V link\n", PIN(drop), PIN(test_cur), PIN(dc_volt));
         printf("<font color='green'># scales with the dc link. do NOT put hv0.drop or hv0.drop_k\n");
         printf("# in a config -- the compensation is not stable yet.</font>\n");
         if(PIN(r_known) > 0.0) {
