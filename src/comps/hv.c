@@ -43,6 +43,7 @@ HAL_PIN(uq_fb);
 HAL_PIN(abs_cur);
 HAL_PIN(abs_volt);
 HAL_PIN(duty);
+HAL_PIN(dc_cur);  // dc link current [A], estimated from power balance, negative when braking
 
 // state data to LS
 HAL_PIN(hv_temp);
@@ -278,6 +279,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               PIN(mot_temp)  = ctx->state.pins.mot_temp;
               PIN(core_temp) = ctx->state.pins.core_temp;
               PIN(y)         = ctx->state.pins.y;
+
+              // no dc current is measured on the power board: estimate it from
+              // P = 3/2 (ud id + uq iq), amplitude invariant dq. commanded
+              // voltages, so it leaves out inverter losses and reads low.
+              if(PIN(dc_volt) > 1.0) {
+                PIN(dc_cur) = 1.5 * (PIN(ud_fb) * PIN(id_fb) + PIN(uq_fb) * PIN(iq_fb)) / PIN(dc_volt) * 0.5 + PIN(dc_cur) * 0.5;
+              }
 
               PIN(value) = 1.0;
 
