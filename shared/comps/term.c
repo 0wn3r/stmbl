@@ -12,7 +12,15 @@
 // main loop slower than 8 * send_step * period lapped it: at send_step 1 the
 // host got 1000 of 5000 packets/s, in runs of exactly 8 lost, with nothing to
 // say so. 64 covers 12.8 ms of main loop at send_step 1.
+//
+// This file is built into the f3 image too, and there the whole HAL gets
+// HAL_MAX_CTX = 1024 bytes (stm32f303/Makefile). At 64 entries term's ctx is
+// 2060 bytes on its own; the f3's comps then need 2200, the load fails, and
+// the hv board never answers the f4 again -- which is what the first
+// hv_update of this change did. The f3 Makefile keeps it at the old 8.
+#ifndef TERM_BUF_SIZE
 #define TERM_BUF_SIZE 64
+#endif
 
 HAL_COMP(term);
 
