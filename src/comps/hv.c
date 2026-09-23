@@ -41,6 +41,8 @@ HAL_PIN(uq_fb);
 HAL_PIN(abs_cur);
 HAL_PIN(abs_volt);
 HAL_PIN(duty);
+HAL_PIN(power);   // electrical power into the motor [W], negative when braking
+HAL_PIN(dc_cur);  // dc link current [A], estimated from power balance, negative when braking
 
 // state data to LS
 HAL_PIN(hv_temp);
@@ -272,6 +274,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               PIN(mot_temp)  = ctx->state.pins.mot_temp;
               PIN(core_temp) = ctx->state.pins.core_temp;
               PIN(y)         = ctx->state.pins.y;
+
+              // not measured: P = 3/2 (ud id + uq iq) from the commanded
+              // voltages, so inverter losses are left out
+              PIN(power) = 1.5 * (PIN(ud_fb) * PIN(id_fb) + PIN(uq_fb) * PIN(iq_fb)) * 0.5 + PIN(power) * 0.5;
+              if(PIN(dc_volt) > 1.0) {
+                PIN(dc_cur) = PIN(power) / PIN(dc_volt);
+              }
 
               PIN(value) = 1.0;
 
