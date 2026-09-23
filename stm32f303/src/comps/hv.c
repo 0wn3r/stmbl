@@ -6,13 +6,15 @@
 #include "angle.h"
 #include "tim.h"
 #include "f3hw.h"
+#include "common.h"
 
 HAL_COMP(hv);
 
 HAL_PIN(drop);    // dead time compensation, fixed volts
 HAL_PIN(drop_k);  // dead time compensation, scaled by dc link and pwm period
 
-//IU IV IW input in amp
+// sign source for the dead time compensation, one per phase. Wired to the
+// commanded phase current (idq1 in main.c), NOT the measured one -- see there.
 HAL_PIN(iu);
 HAL_PIN(iv);
 HAL_PIN(iw);
@@ -35,6 +37,7 @@ HAL_PIN(min_off);  // min off time [s]
 
 HAL_PIN(arr);
 
+HAL_PIN(cmd_mode);   // the compensation runs in current mode only
 HAL_PIN(drop_band);  // current at which the compensation's sign latches [A]
 
 struct hv_ctx_t {
@@ -129,8 +132,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //
   // Over-compensating is worse than under-compensating: past the real drop the
   // residual changes sign and sits in phase with the current instead of
-  // opposing it.
+  // opposing it. That only becomes self excitation if the sign is read from
+  // the current it pushes, which is why iu/iv/iw carry the command.
   float dt_drop = PIN(drop) + PIN(drop_k) * (float)PWM_DEADTIME_TICKS / (2.0 * (float)ctx->pwm_res) * udc;
+
+  // Current mode only. The sign is the commanded current, and in volt mode
+  // there is none: the command is a voltage, whose sign leads the current by
+  // the load's power factor angle -- up to most of a quarter cycle on a lightly
+  // loaded induction motor under uf, which would put the compensation
+  // backwards for much of every cycle. Falling back to measured current there
+  // would restore the self excitation, with no current loop to null it. The
+  // volt mode users are the id comps' l and pp tests, which do not need the
+  // compensation (the l test measures a time constant, which a constant drop
+  // does not touch), and open loop running (uf, acim_ttc mode 2), which loses
+  // the dead time volts at low speed as it always has -- acim_ttc's u_boost
+  // is the knob for that.
+  if(PIN(cmd_mode) == VOLT_MODE) {
+    dt_drop = 0.0;
+  }
 
   // A backstop on both pins. The compensation only ever adds volts, so a
   // negative one would invert it, and the honest figure is a few percent of
