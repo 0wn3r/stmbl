@@ -24,6 +24,7 @@
 * 3. **Scale Update**:
 * - The `scale` parameter is updated based on the error between the duty cycle setpoint and the actual duty cycle. This helps in adjusting the control parameters dynamically.
 * - The `scale` parameter is clamped to ensure it stays within a valid range.
+* - Field weakening is off unless the machine config links `duty` to `hv0.duty`; unlinked, `duty` stays 0 and `scale` stays at 1.
 *
 * 4. **Operating Modes**:
 * - The component supports different operating modes based on the `mode` input:
@@ -79,7 +80,10 @@ HAL_PIN(t_max);         // Maximum torque limit
 // Control parameters
 HAL_PIN(scale);         // Scaling factor for current commands
 HAL_PIN(ki);            // Integral gain for scale adjustment
-HAL_PIN(duty);          // Current duty cycle
+// field weakening: link acim_ttc0.duty = hv0.duty in the machine config to
+// enable it. left unlinked (the default, acim template does not link it),
+// duty stays 0, scale integrates up to 1 and the motor is never field weakened.
+HAL_PIN(duty);          // Current duty cycle, expects hv0.duty
 HAL_PIN(duty_setpoint); // Desired duty cycle setpoint
 HAL_PIN(slip_comp);     // *parameter*, high speed slip compensation, 0 = off
 HAL_PIN(p_max);         // *parameter*, constant power limit (W), 0 = off
