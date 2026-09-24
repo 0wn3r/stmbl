@@ -23,7 +23,8 @@ HAL_PIN(en);
 HAL_PIN(phase_mode);
 HAL_PIN(cmd_mode);
 HAL_PIN(r);
-HAL_PIN(l);
+HAL_PIN(l);   // d axis inductance, and q too while lq is 0
+HAL_PIN(lq);  // q axis inductance, 0 = same as l
 HAL_PIN(psi);
 HAL_PIN(cur_bw);
 HAL_PIN(cur_ff);
@@ -211,6 +212,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(dac)              = 2500;
   PIN(drop)             = 0;
   PIN(drop_k)           = 0;
+  PIN(lq)               = 0;
   send_to_bootloader    = 0;
   flash_state           = SLAVE_IN_APP;
   ctx->send_state       = 0;
@@ -235,6 +237,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->config.pins.dac     = PIN(dac);
   ctx->config.pins.drop    = PIN(drop);
   ctx->config.pins.drop_k  = PIN(drop_k);
+  ctx->config.pins.lq      = PIN(lq);
 
   uint32_t dma_count = MAX(sizeof(packet_from_hv_t), sizeof(packet_bootloader_t)) - DMA_GetCurrDataCounter(UART_DRV_RX_DMA);
 

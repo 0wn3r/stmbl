@@ -13,6 +13,7 @@ hv0.pos = iddc0.com_pos
 hv0.rev = iddc0.out_rev
 hv0.r = iddc0.r
 hv0.l = iddc0.l
+hv0.lq = 0
 hv0.phase_mode = 3
 # iddc drives a brushed motor on the q axis alone: it has iq_fb / uq_fb and no d
 # axis pins at all, and r / l are its own outputs, not idq's. The four lines that

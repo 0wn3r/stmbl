@@ -110,6 +110,11 @@ typedef union {
     float dac;
     float drop;
     float drop_k;
+    // q axis inductance. 0 means "same as l", which is also what an f3 image
+    // older than this field does (it drops the word) and what an f3 fed by an
+    // older f4 sees (the word is never written and stays at its 0 reset), so
+    // every mismatch lands on the old one-l-for-both-axes behaviour.
+    float lq;
   } pins;
   float data[sizeof(struct f3_config_data_temp) / 4];
 } f3_config_data_t;

@@ -26,9 +26,15 @@ HAL_PIN(timer);
 
 HAL_PIN(r);
 HAL_PIN(l);
-HAL_PIN(l_half);  // *parameter*, l test half period [s]
-HAL_PIN(tau);     // measured current time constant l/r [s]
-HAL_PIN(l_ok);    // 1 = l is a measurement, 0 = it is not
+HAL_PIN(l_ok);      // 1 = l is a measurement, 0 = it is not
+HAL_PIN(l_freq);    // *parameter*, l test injection frequency [Hz]
+HAL_PIN(l_ripple);  // *parameter*, l test injected current, fraction of test_cur
+HAL_PIN(ld);        // d axis inductance at test_cur on d [H]
+HAL_PIN(lq);        // q axis inductance, same bias [H]
+HAL_PIN(l_vd);      // injected voltage amplitude on d [V]
+HAL_PIN(l_id);      // resulting current amplitude on d [A]
+HAL_PIN(l_vq);      // [V]
+HAL_PIN(l_iq);      // [A]
 HAL_PIN(drop);
 HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = try to fit it
 HAL_PIN(single_dwell);  // *parameter*, take r from the top dwell alone
@@ -92,23 +98,17 @@ HAL_PIN(tmp3);
 HAL_PIN(avg_test_volt);
 
 
-// The l test's state. tau is integrated over thousands of ticks and the window
-// is timed off what comes back in ud_fb, so none of this can be pins without
-// making the state machine's scratch pins mean two different things at once.
 struct idpmsm_ctx_t {
-  uint8_t was_high;  // last observed level of ud_fb
-  uint8_t have_a;    // a settled low value has been captured
-  uint16_t end_n;    // samples in the settled tail of this half
-  uint16_t cyc;      // observed cycles, the first is discarded
-  uint16_t tau_n;    // cycles that yielded a time constant
-  float t_cmd;       // phase of the commanded square wave
-  float t_in;        // time since the last observed edge
-  float t_hi;        // measured length of the high half
-  float area;        // integral of id_fb across the high half
-  float prev;        // previous id_fb, for the trapezoid
-  float end_sum;     // settled tail accumulator
-  float i_a;         // settled low current
-  float tau_sum;
+  // l test: a sine injected on d, then on q, over a dc bias on d
+  uint8_t l_axis;    // 0 d, 1 q
+  uint8_t l_stage;   // 0 settle, 1 size the amplitude, 2 measure
+  uint16_t l_block;  // sizing blocks done
+  uint32_t l_n;      // samples in this block
+  float l_t;         // time in this stage or block
+  float l_th;        // injection phase
+  float l_amp;       // injection voltage amplitude
+  float v_re, v_im;  // voltage demodulated at the injection frequency
+  float i_re, i_im;  // current, the same
 
   // pp test
   uint32_t pp_n;     // ticks in the measure window where the rotor was turning
@@ -143,6 +143,10 @@ struct idpmsm_ctx_t {
 #define HV_IO_ALPHA 0.05
 #define HV_IO_PERIOD (1.0 / 15000.0)
 
+#define L_SETTLE 0.1  // l test: after each axis starts [s]
+#define L_BLOCK 0.05  // l test: one amplitude sizing block [s]
+#define L_BLOCKS 4    // l test: sizing blocks per axis
+#define L_MEASURE 0.4 // l test: demodulation window per axis [s]
 #define PP_RAMP 1.0      // pp test: time to ramp the field up to test_vel [s]
 #define PP_SETTLE 0.5    // pp test: wait after the ramp before measuring [s]
 #define PP_TIME 4.0      // pp test: total [s]
@@ -168,6 +172,14 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // bias correction understates, and 6 A lands within 1% (three more runs at
   // 6 A: 0.680, 0.683, 0.687). psi, pp and the offset did not care.
   PIN(test_cur) = 6.0;
+  // 250 Hz puts w l near 4.7 ohm on X against under 1 ohm of r plus dead
+  // time. Higher takes less resistance into the answer but more of the f3's
+  // sampling: simulated against an RL winding with the 5 kHz hold and 0-2
+  // ticks of delay, 250 Hz came back within 0.9%, 500 Hz 3-4% low with the
+  // current sampled at an instant (the held voltage's images at 5 kHz +- f
+  // alias back onto f) and 1-2% high with it averaged.
+  PIN(l_freq)   = 250.0;
+  PIN(l_ripple) = 0.15;
   // test_vel 50, 75, 100 and 150 gave psi 0.0346, 0.0354, 0.0348 and 0.0346
   // from the coast, with its two halves within a few percent. At 40 the halves
   // split (0.0343 / 0.0377), at 35 psi and the emf angle drift (0.0337, 50
@@ -197,7 +209,8 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 0:
       PIN(r)          = 0.1;
       PIN(l)          = 0.001;
-      PIN(l_half)     = 0.1;
+      PIN(ld)         = 0.0;
+      PIN(lq)         = 0.0;
       PIN(drop)       = 0.0;
       PIN(psi)        = 0.055;
       PIN(pp)         = 3.0;
@@ -237,18 +250,15 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(PIN(r_ok) > 0.0) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         if(PIN(l_ok) > 0.0) {
-          printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
-          printf("<font color='green'># from tau = %f ms against the r above, not from a voltage slope.\n", PIN(tau) * 1000.0);
-          printf("# an LCR still beats it: measure line to line at 1 kHz and halve.</font>\n");
-        } else if(PIN(tau) <= 0.0) {
-          printf("<font color='red'>l not measured</font>: no usable transient\n");
-          printf("check that the bridge is enabled and idpmsm0.ud_fb is wired\n");
-        } else if(PIN(tau) > PIN(l_half) / 8.0) {
-          printf("<font color='red'>l not measured</font>: tau = %f ms needs a longer half period\n", PIN(tau) * 1000.0);
-          printf("raise idpmsm0.l_half above %f s and rerun\n", PIN(tau) * 8.0);
+          printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(ld));
+          printf("conf0.lq = %f <font color='green'># append to config</font>\n", PIN(lq));
+          printf("<font color='green'># Ld and Lq at %f A on d, from a %f Hz injection\n", PIN(test_cur), PIN(l_freq));
+          printf("# (%f V -> %f A on d, %f V -> %f A on q). conf0.l is d, and q\n", PIN(l_vd), PIN(l_id), PIN(l_vq), PIN(l_iq));
+          printf("# too while conf0.lq is 0 or absent. a single figure from an LCR\n");
+          printf("# still goes in conf0.l alone, as before.</font>\n");
         } else {
-          printf("<font color='red'>l not measured</font>: tau = %f ms is too fast to time here\n", PIN(tau) * 1000.0);
-          printf("use an LCR meter: line to line at 1 kHz, halved\n");
+          printf("<font color='red'>l not measured</font>: the injection drew %f A on d and %f A on q\n", PIN(l_id), PIN(l_iq));
+          printf("of the %f A it aimed for. check idpmsm0.iq_fb/uq_fb are wired\n", PIN(l_ripple) * PIN(test_cur));
         }
         // Measurement, not a config line. hv0.drop and hv0.drop_k both feed the
         // same dt_drop in the f3's hv.c, and that compensation is not yet safe
@@ -645,6 +655,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
         PIN(timer)  = 0.0;
         PIN(state)  = r_ok > 0.0 ? 1.3 : 1.4;
+        ctx->l_axis  = 0;
+        ctx->l_stage = 0;
+        ctx->l_block = 0;
+        ctx->l_n     = 0;
+        ctx->l_t     = 0.0;
+        ctx->l_th    = 0.0;
+        ctx->l_amp   = 1.0;
+        ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
         PIN(d_cmd)  = 0.0;
         PIN(en_out) = 0.0;
         PIN(tmp0)   = 0.0;
@@ -654,124 +672,115 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
       break;
 
-    case 13: {  // l, from the current's relaxation time constant
+    case 13: {  // ld and lq, by injection
+      // The time constant test that was here read l = tau * r, and tau is not
+      // l / r: the step decays through r plus the dead time's incremental
+      // resistance, which is large at low current. On X tau went 3.22, 3.52,
+      // 3.90, 4.0-4.3 and 4.10 ms at test_cur 3, 4, 5, 6 and 8 A, and no single
+      // resistance turns that into one inductance. It also only ever saw d.
+      //
+      // So inject instead. A sine on top of the dc bias that holds test_cur on
+      // d, demodulated at its own frequency: the winding's impedance there is
+      // r_eff + j w l, and at the default 250 Hz w l is ~4.7 ohm on X against
+      // under 1 ohm of r plus dead time, so the resistance enters as a few
+      // percent, taken out with the chord. The bias keeps every phase current on one side
+      // of zero, so the dead time is a constant offset, not a nonlinearity.
+      // Then the same on q, with the d bias still holding the rotor: the
+      // torque ripple at 250 Hz moves a 0.002 kg m^2 rotor by about 4e-5 rad.
+      //
+      // ud_fb/id_fb (uq_fb/iq_fb) come back in the same ls packet, so their
+      // common delay drops out of the ratio. The f3 holds each 5 kHz command
+      // for a whole tick, which scales the applied fundamental by
+      // sin(pi f T) / (pi f T), 0.996 at 250 Hz; that is taken back out.
       PIN(en_out)   = 1.0;
       PIN(cmd_mode) = 0.0;  // volt cmd
-      PIN(q_cmd)    = 0.0;
       PIN(cur_bw)   = 1.0;
+      PIN(com_pos)  = 0.0;
 
-      // The old test swung the commanded voltage 1.5x / 0.5x about
-      // avg_test_volt every rt tick and read l off dV/dI * period. That is
-      // wrong twice over. The voltage DEVIATION driving the ramp is half the
-      // swing, not the swing, so the formula returns 2l. And at 5 kHz against
-      // a 15 kHz current loop the sample that comes back covers some unknown
-      // fraction of a ramp: simulating the f3 sub tick the packet happens to
-      // carry moves the answer between 2x and 6x. On this bench it read
-      // 15.9 mH against an LCR's 3.30 mH.
-      //
-      // So measure a time instead of a slope. Step between two currents of the
-      // same sign and take the relaxation time constant by the area method:
-      //
-      //   i(t) = i_f + (i_a - i_f) exp(-t/tau),  tau = l/r
-      //   integral of (i_f - i) dt = (i_f - i_a) * tau     for T >> tau
-      //   => tau = (i_b * T - integral i dt) / (i_b - i_a)
-      //
-      // A time constant does not care about the amplitude, so the dead time
-      // drop -- a constant volt offset for as long as the current keeps its
-      // sign -- cancels out of it exactly. That is also why both levels have to
-      // sit on the same side of zero: the old test's 0.5x level is under the
-      // drop at these dead times, which collapses the current and the
-      // assumption with it.
-      float half = MAX(PIN(l_half), 0.01);
-      float v_hi = PIN(avg_test_volt);
-      float v_lo = PIN(avg_test_volt) - PIN(r) * PIN(test_cur) * 0.5;
-      float mid  = (v_hi + v_lo) * 0.5;
+      float f = CLAMP(PIN(l_freq), 20.0, 0.2 / period);
+      float w = 2.0 * M_PI * f;
+      ctx->l_th += w * period;
+      if(ctx->l_th > 2.0 * M_PI) {
+        ctx->l_th -= 2.0 * M_PI;
+      }
+      float sn, cs;
+      sincos_fast(ctx->l_th, &sn, &cs);
+      float inj  = ctx->l_amp * sn;
+      PIN(d_cmd) = PIN(avg_test_volt) + (ctx->l_axis == 0 ? inj : 0.0);
+      PIN(q_cmd) = ctx->l_axis == 1 ? inj : 0.0;
 
-      // Time the window off the step as it comes BACK in ud_fb rather than off
-      // the tick we commanded it. ls.c packs ud_fb and id_fb into the same
-      // packet, so they carry identical delay and it cancels instead of having
-      // to be guessed at. Simulated, that takes the spread across zero, one and
-      // two ticks of pipeline delay from 3x to nothing.
-      uint8_t hi = PIN(ud_fb) > mid;
+      float v = ctx->l_axis == 0 ? PIN(ud_fb) : PIN(uq_fb);
+      float i = ctx->l_axis == 0 ? PIN(id_fb) : PIN(iq_fb);
+      ctx->l_t += period;
 
-      if(hi && !ctx->was_high) {  // observed rising edge
-        if(ctx->end_n > 0) {
-          ctx->i_a    = ctx->end_sum / (float)ctx->end_n;
-          ctx->have_a = 1;
+      if(ctx->l_stage == 0) {  // let the bias and the new axis settle
+        if(ctx->l_t >= L_SETTLE) {
+          ctx->l_stage = 1;
+          ctx->l_t     = 0.0;
+          ctx->l_n     = 0;
+          ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
         }
-        ctx->end_sum = 0.0;
-        ctx->end_n   = 0;
-        ctx->area    = 0.0;
-        ctx->t_hi    = 0.0;
-        ctx->t_in    = 0.0;
-        ctx->prev    = PIN(id_fb);
-      } else if(!hi && ctx->was_high) {  // observed falling edge
-        if(ctx->end_n > 0 && ctx->have_a) {
-          float i_b = ctx->end_sum / (float)ctx->end_n;
-          float di  = i_b - ctx->i_a;
-          // the step has to have moved the current, and one whole cycle has to
-          // have gone by, before any of it means anything
-          if(di > PIN(test_cur) * 0.05 && ctx->t_hi > 0.0 && ctx->cyc > 0) {
-            float tau = (i_b * ctx->t_hi - ctx->area) / di;
-            if(tau > 0.0) {
-              ctx->tau_sum += tau;
-              ctx->tau_n++;
-            }
+      } else {
+        ctx->v_re += v * sn;
+        ctx->v_im += v * cs;
+        ctx->i_re += i * sn;
+        ctx->i_im += i * cs;
+        ctx->l_n++;
+        float n = MAX((float)ctx->l_n, 1.0);
+        if(ctx->l_stage == 1 && ctx->l_t >= L_BLOCK) {
+          // size the amplitude to the ripple asked for: enough signal, and
+          // never so much that a phase current crosses zero
+          float i1     = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float target = PIN(l_ripple) * PIN(test_cur);
+          float k      = i1 > 0.001 ? target / i1 : 4.0;
+          ctx->l_amp *= CLAMP(k, 0.25, 4.0);
+          ctx->l_amp = CLAMP(ctx->l_amp, 0.2, PIN(pwm_volt) / 4.0);
+          ctx->l_block++;
+          ctx->l_t = 0.0;
+          ctx->l_n = 0;
+          ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
+          if(ctx->l_block >= L_BLOCKS) {
+            ctx->l_stage = 2;
+          }
+        } else if(ctx->l_stage == 2 && ctx->l_t >= L_MEASURE) {
+          float v1   = 2.0 / n * sqrtf(ctx->v_re * ctx->v_re + ctx->v_im * ctx->v_im);
+          float i1   = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float x    = M_PI * f * period;
+          float zoh  = sinf(x) / x;
+          float z    = i1 > 0.001 ? v1 * zoh / i1 : 0.0;
+          float res  = PIN(r_2p) > 0.0 ? PIN(r_2p) : PIN(r);
+          float lval = z > res ? sqrtf(z * z - res * res) / w : 0.0;
+          if(ctx->l_axis == 0) {
+            PIN(ld)   = lval;
+            PIN(l_vd) = v1;
+            PIN(l_id) = i1;
+          } else {
+            PIN(lq)   = lval;
+            PIN(l_vq) = v1;
+            PIN(l_iq) = i1;
+          }
+          if(ctx->l_axis == 0) {  // on to q, starting from d's amplitude
+            ctx->l_axis  = 1;
+            ctx->l_stage = 0;
+            ctx->l_block = 0;
+            ctx->l_t     = 0.0;
+            ctx->l_n     = 0;
+          } else {
+            float target = PIN(l_ripple) * PIN(test_cur);
+            int ok_d     = PIN(ld) > 0.0 && PIN(l_id) > target * 0.5 && PIN(l_id) < target * 2.0;
+            int ok_q     = PIN(lq) > 0.0 && PIN(l_iq) > target * 0.5 && PIN(l_iq) < target * 2.0;
+            PIN(l_ok)    = ok_d && ok_q;
+            // l is the d axis, as conf0.l is: hv0.l = idpmsm0.l and
+            // hv0.lq = idpmsm0.lq in the template, so the psi step that follows
+            // already runs each axis on its own inductance
+            PIN(l)       = PIN(l_ok) > 0.0 ? PIN(ld) : 0.0;
+            PIN(timer)   = 0.0;
+            PIN(state)   = 1.4;
+            PIN(d_cmd)   = 0.0;
+            PIN(q_cmd)   = 0.0;
+            PIN(en_out)  = 0.0;
           }
         }
-        ctx->end_sum = 0.0;
-        ctx->end_n   = 0;
-        ctx->t_in    = 0.0;
-        ctx->cyc++;
-      }
-
-      if(hi) {
-        // trapezoid: the half tick a left hand sum leaves behind is worth about
-        // a percent of tau on these motors
-        ctx->area += (PIN(id_fb) + ctx->prev) * 0.5 * period;
-        ctx->t_hi += period;
-      }
-
-      ctx->t_in += period;
-      if(ctx->t_in > half * 0.75) {  // settled tail of whichever half we are in
-        ctx->end_sum += PIN(id_fb);
-        ctx->end_n++;
-      }
-
-      ctx->prev     = PIN(id_fb);
-      ctx->was_high = hi;
-
-      // the commanded square wave runs on its own clock; what we measure
-      // against is the echo, not this
-      ctx->t_cmd += period;
-      if(ctx->t_cmd >= half * 2.0) {
-        ctx->t_cmd = 0.0;
-      }
-      PIN(d_cmd) = ctx->t_cmd < half ? v_lo : v_hi;
-
-      PIN(timer) += period;
-      if(PIN(timer) >= 2.0) {
-        float tau = ctx->tau_n > 0 ? ctx->tau_sum / (float)ctx->tau_n : 0.0;
-        float l_ok = 0.0;
-
-        PIN(tau) = tau;
-
-        // Two ways this reads nothing. Too slow for the half period and the
-        // truncated tail drags the area down -- 5% low already at T = 5 tau.
-        // Too fast and the transient is a handful of samples, where noise runs
-        // the answer and a meter beats this outright.
-        if(ctx->tau_n >= 3 && tau >= 10.0 * period && tau <= half / 8.0) {
-          PIN(l) = tau * PIN(r);
-          l_ok   = 1.0;
-        } else {
-          PIN(l) = 0.0;
-        }
-
-        PIN(l_ok)   = l_ok;
-        PIN(timer)  = 0.0;
-        PIN(state)  = 1.4;
-        PIN(d_cmd)  = PIN(avg_test_volt);
-        PIN(en_out) = 0.0;
       }
       break;
     }
