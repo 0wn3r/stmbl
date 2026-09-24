@@ -229,6 +229,17 @@ clean:
 #
 include base.mak
 
+# Rebuild every object when the compiler flags change. make only tracks
+# sources and headers, so a new -D (HAL_WATCHDOG) left the old objects in
+# place: on 2026-09-24 that produced an f3 image which started the IWDG
+# without the kicks compiled into hal.o, and it reset every 5 ms.
+FLAGS_STAMP = $(OBJDIR)/flags.stamp
+$(FLAGS_STAMP): FORCE
+	@mkdir -p $(OBJDIR)
+	@echo '$(CC) $(CPPFLAGS) $(CFLAGS) $(ASFLAGS)' | cmp -s - $@ || echo '$(CC) $(CPPFLAGS) $(CFLAGS) $(ASFLAGS)' > $@
+$(OBJECTS): $(FLAGS_STAMP)
+FORCE:
+
 # Include the dependency files
 #
 -include $(OBJECTS:.o=.d)
