@@ -3,6 +3,7 @@
 #include "string.h"
 #include "defines.h"
 #include "angle.h"
+#include <math.h>
 
 HAL_COMP(idpmsm);
 
@@ -39,20 +40,46 @@ HAL_PIN(r_bias);        // what was subtracted from the chord to get r
 HAL_PIN(r_ok);          // this run produced a resistance
 
 HAL_PIN(pp);
+HAL_PIN(pp_raw);  // pole pair ratio before rounding, sign carries out_rev
+HAL_PIN(pp_ok);   // the pp test tracked the field and landed near an integer
 HAL_PIN(com_offset);
 HAL_PIN(out_rev);
+
+// The commutation offset is a circular mean, not an average. pos_fb is a rotor
+// angle: averaging it linearly is only right while it never crosses the wrap,
+// and when the alignment position lands inside the ring down swing of the wrap
+// it fails hard (a park at 180 degrees, 6 Hz ring at zeta 0.05, came out 0.77
+// rad wrong -- 3.1 rad electrical at four pole pairs). Accumulate the unit
+// vector and take its argument. The resultant's length is 1 when the rotor sat
+// still for the window and falls toward 0 if it wandered.
+HAL_PIN(off_sin);
+HAL_PIN(off_cos);
+HAL_PIN(off_mag);  // resultant length, 1 = the rotor held station
+HAL_PIN(off_n);
+HAL_PIN(com_ok);   // the offset dwell drew its current and the rotor held still
 
 HAL_PIN(test_cur);
 HAL_PIN(test_vel);
 HAL_PIN(ki);
 HAL_PIN(vel_bw);
 
-HAL_PIN(pi);
-
 HAL_PIN(pwm_volt);
 HAL_PIN(dc_volt);
 
 HAL_PIN(psi);
+HAL_PIN(psi_ok);     // this run produced a psi
+HAL_PIN(u_fb);       // phase u voltage to ground from hv0, read while coasting
+HAL_PIN(v_fb);       // phase v voltage to ground from hv0
+HAL_PIN(psi_hi);     // back emf psi from the fast half of the coast
+HAL_PIN(psi_lo);     // back emf psi from the slow half of the coast
+HAL_PIN(emf_angle);  // back emf phase against the commutation angle, extrapolated to standstill [deg el]
+HAL_PIN(emf_delay);  // how much later the phase voltage reads than the rotor angle [s]
+HAL_PIN(vel_lo);     // mean speed of the low dwell [rad/s]
+HAL_PIN(vel_hi);     // mean speed of the high dwell [rad/s]
+HAL_PIN(udt_lo);     // uq - r iq - pp vel psi in the low dwell: dead time volts on q [V]
+HAL_PIN(idt_lo);     // mean iq in the low dwell [A]
+HAL_PIN(udt_hi);     // the same for the high dwell [V]
+HAL_PIN(idt_hi);     // [A]
 
 HAL_PIN(cur_bw);
 HAL_PIN(cur_sum);
@@ -82,7 +109,52 @@ struct idpmsm_ctx_t {
   float end_sum;     // settled tail accumulator
   float i_a;         // settled low current
   float tau_sum;
+
+  // pp test
+  uint32_t pp_n;     // ticks in the measure window where the rotor was turning
+  uint32_t pp_w;     // ticks in the measure window
+  float pp_field;    // field angle turned across the window [rad el]
+  float pp_rotor;    // rotor angle turned across the window [rad]
+
+  // psi test: dwells at test_vel / 2 and test_vel, then a coast from the top
+  uint8_t psi_stage;  // 0 spin up low, 1 dwell low, 2 spin up high, 3 dwell high, 4 coast
+  uint8_t psi_fail;   // 0 none, 1 stalled, 2 never settled, 3 coast too short
+  uint32_t psi_n;     // samples in this dwell
+  float st_t;         // time in this stage
+  float settle_t;     // time the filtered speed has been inside the band
+  float vel_lp;       // filtered vel_fb, for settling and stall detection
+  float sx;           // sum of pp * vel_fb across the dwell
+  float sy;           // sum of uq_fb - r * iq_fb across the dwell
+  float si;           // sum of iq_fb across the dwell
+  float x_lo, y_lo, i_lo;
+  float x_hi, y_hi, i_hi;
+  // coast, per band (0 fast, 1 slow): the line to line voltage demodulated
+  // against the commutation angle, see the psi case in rt_func
+  uint32_t cn[2];
+  float cz_re[2], cz_im[2];  // sum of (u - v) * g
+  float cg_re[2], cg_im[2];  // sum of g, to take out the dc level of u - v
+  float cu[2];               // sum of u - v
+  float cw[2];               // sum of the electrical speed
 };
+
+// hv0.u_fb/v_fb come from io.c on the f3, which filters each phase with
+// u = 0.05 * adc + 0.95 * u at its 15 kHz rt rate. At 400 rad/s electrical
+// that is 11% of amplitude and 27 degrees of phase, so the coast undoes it.
+#define HV_IO_ALPHA 0.05
+#define HV_IO_PERIOD (1.0 / 15000.0)
+
+#define PP_RAMP 1.0      // pp test: time to ramp the field up to test_vel [s]
+#define PP_SETTLE 0.5    // pp test: wait after the ramp before measuring [s]
+#define PP_TIME 4.0      // pp test: total [s]
+#define PSI_SETTLE 0.5   // psi test: speed inside the band this long [s]
+#define PSI_BAND 0.15    // psi test: settled band, fraction of the dwell speed
+#define PSI_DWELL 2.0    // psi test: averaging time per dwell [s]
+#define PSI_SPINUP 8.0   // psi test: give up reaching a dwell speed after [s]
+#define PSI_STALL 0.5    // psi test: q current, as a fraction of test_cur, that has to turn the rotor
+#define PSI_COAST_MIN 0.2   // psi coast: ignore speeds under this fraction of test_vel
+#define PSI_COAST_SPLIT 0.6 // psi coast: the fast band is above this fraction of test_vel
+#define PSI_COAST_TIME 4.0  // psi coast: longest it may run [s]
+#define PSI_COAST_N 200     // psi coast: fewest samples a band needs
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idpmsm_ctx_t * ctx = (struct idpmsm_ctx_t *)ctx_ptr;
@@ -90,10 +162,20 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(r_known)                  = 0.0;
   PIN(single_dwell)             = 0.0;
   PIN(drop_slope)               = 0.0039;
-  PIN(test_cur)                 = 3.0;
-  PIN(test_vel)                 = 50.0;
+  // Swept on X (alpha3/3000) with the load off, 2026-09-23. test_cur 3, 4, 5,
+  // 6 and 8 A gave r 0.984, 0.871, 0.707, 0.679 and 0.657 against a meter's
+  // 0.685: below 5 A the dead time drop stops following ln(i) and the chord's
+  // bias correction understates, and 6 A lands within 1% (three more runs at
+  // 6 A: 0.680, 0.683, 0.687). psi, pp and the offset did not care.
+  PIN(test_cur) = 6.0;
+  // test_vel 50, 75, 100 and 150 gave psi 0.0346, 0.0354, 0.0348 and 0.0346
+  // from the coast, with its two halves within a few percent. At 40 the halves
+  // split (0.0343 / 0.0377), at 35 psi and the emf angle drift (0.0337, 50
+  // deg against 58-62), and at 25 the halves split again. 50 is the lowest
+  // that holds, and faster buys nothing. The pp test's field runs at this
+  // many electrical rad/s, 12.5 mechanical at four pole pairs.
+  PIN(test_vel) = 50.0;
   PIN(ki)                       = 1.0;
-  PIN(pi)                       = 1.0;
   PIN(vel_bw)                   = 20.0;
   PIN(cur_bw)                   = 1.0;
   PIN(auto_step)                = 4.2;
@@ -108,7 +190,7 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 }
 
 static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  //struct idpmsm_ctx_t * ctx = (struct idpmsm_ctx_t *)ctx_ptr;
+  struct idpmsm_ctx_t *ctx = (struct idpmsm_ctx_t *)ctx_ptr;
   struct idpmsm_pin_ctx_t *pins = (struct idpmsm_pin_ctx_t *)pin_ptr;
 
   switch((int)(PIN(state) * 10.0 + 0.5)) {
@@ -122,6 +204,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_offset) = 0.0;
       PIN(out_rev)    = 0.0;
       PIN(cur_bw)     = 1.0;
+      PIN(pp_ok)      = 0.0;
+      PIN(com_ok)     = 0.0;
+      PIN(psi_ok)     = 0.0;
       break;
 
     case 10:  // r
@@ -221,8 +306,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
       // only walk on to the next test if this one worked. hv0.r is wired to
       // PIN(r), so carrying a rejected value forward would hand the next test
-      // its plant model at cur_bw 100.
-      PIN(state) = PIN(r_ok) > 0.0 ? 2.0 : 0.0;
+      // its plant model at cur_bw 100. Not back to 0 on a failure either: with
+      // the drive still enabled, rt's state 0 walks straight into 1.0 and
+      // auto_step reruns the r test forever. 9.0 has no rt case, so en_out
+      // stays where the test left it, off, until the drive is disabled.
+      PIN(state) = PIN(r_ok) > 0.0 ? 2.0 : 9.0;
       break;
 
     case 20:  // pp, out_rev, com_offset
@@ -232,6 +320,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(q_cmd)    = 0.0;
       PIN(com_pos)  = 0.0;
       PIN(cmd_mode) = 0.0;
+      PIN(pp_ok)    = 0.0;
+      ctx->pp_n     = 0;
+      ctx->pp_w     = 0;
+      ctx->pp_field = 0.0;
+      ctx->pp_rotor = 0.0;
 
       if(PIN(auto_step) >= 2) {
         PIN(state) = 2.2;
@@ -240,6 +333,26 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("the motor will move\n");
         printf("idpmsm0.state = 2.2 <font color='green'>to start</font>\n");
       }
+      break;
+
+    case 24:  // pp failed, nothing downstream of it can run
+      printf("<font color='red'>pp read failed</font>: ratio %f", PIN(pp_raw));
+      printf(", the rotor turned for %lu of %lu ticks\n", (unsigned long)ctx->pp_n, (unsigned long)ctx->pp_w);
+      printf("the rotor did not follow the field. lower idpmsm0.test_vel\n");
+      printf("(%f el. rad/s) or raise idpmsm0.test_cur and rerun\n", PIN(test_vel));
+      printf("nothing below is measured, do not append it\n");
+      PIN(state) = 9.0;
+      break;
+
+    case 26:  // com_offset failed
+      if(PIN(off_mag) <= 0.98) {
+        printf("<font color='red'>mot_fb_offset not measured</font>: the rotor moved during the dwell\n");
+        printf("(resultant %f, 1.0 means it held still). raise idpmsm0.test_cur.\n", PIN(off_mag));
+      } else {
+        printf("<font color='red'>mot_fb_offset not measured</font>: the dwell drew %f A of %f\n", PIN(id_fb), PIN(test_cur));
+      }
+      printf("nothing below is measured, do not append it\n");
+      PIN(state) = 9.0;
       break;
 
     case 25:  // pp, out_rev, com_offset
@@ -259,6 +372,35 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(cur_sum)  = 0.0;
       PIN(cmd_mode) = 0.0;
       PIN(cur_bw)   = 250.0;
+      PIN(psi_ok)    = 0.0;
+      PIN(psi_hi)    = 0.0;
+      PIN(psi_lo)    = 0.0;
+      PIN(emf_angle) = 0.0;
+      PIN(emf_delay) = 0.0;
+      PIN(vel_lo)    = 0.0;
+      PIN(vel_hi)    = 0.0;
+      PIN(udt_lo)    = 0.0;
+      PIN(idt_lo)    = 0.0;
+      PIN(udt_hi)    = 0.0;
+      PIN(idt_hi)    = 0.0;
+      ctx->psi_stage = 0;
+      ctx->psi_fail  = 0;
+      ctx->psi_n     = 0;
+      ctx->st_t      = 0.0;
+      ctx->settle_t  = 0.0;
+      ctx->vel_lp    = 0.0;
+      ctx->sx        = 0.0;
+      ctx->sy        = 0.0;
+      ctx->si        = 0.0;
+      for(int b = 0; b < 2; b++) {
+        ctx->cn[b]    = 0;
+        ctx->cz_re[b] = 0.0;
+        ctx->cz_im[b] = 0.0;
+        ctx->cg_re[b] = 0.0;
+        ctx->cg_im[b] = 0.0;
+        ctx->cu[b]    = 0.0;
+        ctx->cw[b]    = 0.0;
+      }
 
       if(PIN(auto_step) >= 3) {
         PIN(state) = 3.2;
@@ -270,9 +412,33 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 33:
-      printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
-      printf("done\n");
-      printf("continue with id_mot\n");
+      if(PIN(psi_ok) > 0.0) {
+        printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
+        printf("<font color='green'># back emf with the bridge off, coasting down from %f rad/s:\n", PIN(vel_hi));
+        printf("# %f in the fast half, %f in the slow half. no dead time or\n", PIN(psi_hi), PIN(psi_lo));
+        printf("# current loop in it -- it is what a scope on the phases reads.</font>\n");
+        printf("<font color='green'># back emf leads the commutation angle by %f deg el at standstill,\n", PIN(emf_angle));
+        printf("# and reads %f ms later than the rotor angle. with conf0.mot_fb_offset\n", PIN(emf_delay) * 1000.0);
+        printf("# right the angle repeats from run to run; a shift of it is an offset\n");
+        printf("# error of that many electrical degrees.</font>\n");
+        printf("<font color='green'># dead time on q while turning, uq - r iq - pp vel psi:\n");
+        printf("# %f V at %f A (%f rad/s), %f V at %f A (%f rad/s).\n", PIN(udt_lo), PIN(idt_lo), PIN(vel_lo), PIN(udt_hi), PIN(idt_hi), PIN(vel_hi));
+        printf("# the r test's drop above is the same thing at standstill on d.</font>\n");
+        printf("done\n");
+        printf("continue with id_mot\n");
+      } else {
+        if(ctx->psi_fail == 1) {
+          printf("<font color='red'>psi read failed</font>: the rotor stalled\n");
+          printf("check conf0.polecount, conf0.mot_fb_offset and out_rev above\n");
+        } else if(ctx->psi_fail == 2) {
+          printf("<font color='red'>psi read failed</font>: the speed never settled inside %i%%\n", (int)(PSI_BAND * 100.0));
+          printf("of the dwell. check the load is off, or lower idpmsm0.test_vel\n");
+        } else {
+          printf("<font color='red'>psi read failed</font>: the coast gave %lu and %lu usable samples\n", (unsigned long)ctx->cn[0], (unsigned long)ctx->cn[1]);
+          printf("check idpmsm0.u_fb/v_fb are wired to hv0.u_fb/v_fb, or raise idpmsm0.test_vel\n");
+        }
+        printf("nothing here is measured, do not append it\n");
+      }
 
       PIN(state) = 3.4;
       break;
@@ -618,24 +784,61 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(d_cmd) = PIN(test_cur);
 
-      PIN(com_pos) += PIN(test_vel) * period;
-      PIN(com_pos) = mod(PIN(com_pos));
+      // Ramp the field instead of stepping it to test_vel. A step asks the
+      // rotor to jump to full speed from rest, and at test_vel 100 it slipped:
+      // the field ran on alone, vel_fb stayed near 0 and the ratio below never
+      // updated off its init value, or updated on the slip and read 10.
+      {
+        float field_vel = PIN(test_vel) * MIN(PIN(timer) / PP_RAMP, 1.0);
+        PIN(com_pos) += field_vel * period;
+        PIN(com_pos) = mod(PIN(com_pos));
 
-      if(ABS(PIN(vel_fb)) > 0.1) {
-        PIN(pp) = PIN(pp) * 0.995 + PIN(test_vel) / PIN(vel_fb) * 0.005;
+        // only once the rotor has had time to lock on at full speed. The
+        // ratio is of the angles turned over the whole window, not a filtered
+        // ratio of speeds: that was a 40 ms snapshot of field_vel / vel_fb,
+        // and at test_vel 25 the rotor's cogging moved it 5% (3.80 and 3.84
+        // for a rotor that tracked every tick).
+        if(PIN(timer) >= PP_RAMP + PP_SETTLE) {
+          ctx->pp_w++;
+          ctx->pp_field += field_vel * period;
+          ctx->pp_rotor += PIN(vel_fb) * period;
+          if(ABS(PIN(vel_fb)) > 0.1) {
+            ctx->pp_n++;
+          }
+        }
       }
 
       PIN(timer) += period;
-      if(PIN(timer) >= 3.0) {
-        PIN(timer) = 0.0;
+      if(PIN(timer) >= PP_TIME) {
+        PIN(timer)  = 0.0;
+        PIN(pp)     = ABS(ctx->pp_rotor) > 0.01 ? ctx->pp_field / ctx->pp_rotor : 0.0;
+        PIN(pp_raw) = PIN(pp);
 
         if(PIN(pp) < 0.0) {
           PIN(out_rev) = 1.0;
           PIN(pp) *= -1.0;
         }
-        PIN(pp) = (int)(PIN(pp) + 0.5);
+        float pp_int = (int)(PIN(pp) + 0.5);
 
-        PIN(state) = 2.3;
+        // A rotor that followed the field turns at test_vel / pp for the whole
+        // window and gives a ratio within a few percent of an integer. One that
+        // slipped turns for part of it, or not at all, at whatever speed the
+        // slip gives -- the ratio that leaves is not a pole pair count, and
+        // rounding it hands the offset and psi tests a wrong commutation.
+        PIN(pp_ok) = ctx->pp_n > ctx->pp_w * 9 / 10 && pp_int >= 1.0 && pp_int <= 24.0 && ABS(PIN(pp) - pp_int) < 0.15;
+        PIN(pp)    = pp_int;
+
+        PIN(off_sin) = 0.0;
+        PIN(off_cos) = 0.0;
+        PIN(off_n)   = 0.0;
+
+        if(PIN(pp_ok) > 0.0) {
+          PIN(state) = 2.3;
+        } else {
+          PIN(en_out) = 0.0;
+          PIN(d_cmd)  = 0.0;
+          PIN(state)  = 2.4;
+        }
       }
       break;
 
@@ -649,39 +852,216 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(com_pos) = 0.0;
 
-      PIN(com_offset) = PIN(com_offset) * 0.99 - PIN(pos_fb) * 0.01;
-
+      // Sum over the back half of the dwell only: the rotor is still ringing
+      // into alignment through the front half, and a plain sum over a settled
+      // window is what makes the resultant's length mean something. An ema
+      // would track the motion and report a full length whatever it did.
       PIN(timer) += period;
+      if(PIN(timer) > 1.0) {
+        PIN(off_sin) += sinf(PIN(pos_fb));
+        PIN(off_cos) += cosf(PIN(pos_fb));
+        PIN(off_n) += 1.0;
+      }
+
       if(PIN(timer) >= 2.0) {
-        PIN(en)    = 0.0;
+        float n       = MAX(PIN(off_n), 1.0);
+        PIN(off_mag)  = sqrtf(PIN(off_sin) * PIN(off_sin) + PIN(off_cos) * PIN(off_cos)) / n;
+        float com_off = -atan2f(PIN(off_sin), PIN(off_cos));
+
+        // Fold it into one period. com_pos is mod((pos_fb + com_offset) * pp),
+        // so adding 2 pi / pp to the offset changes nothing, and the rotor parks
+        // on whichever of the pp alignment positions is nearest where the pole
+        // pair test left it. On the bench three runs printed -0.5945, -0.5931
+        // and 0.9805: the same axis, pi / 2 apart. Folding to [0, 2 pi / pp)
+        // prints the same number every run, so one that really differs shows.
+        if(PIN(pp) >= 1.0) {
+          float fold = 2.0 * M_PI / PIN(pp);
+          com_off    = com_off - fold * floorf(com_off / fold);
+        }
+        PIN(com_offset) = com_off;
+        PIN(com_ok)     = (PIN(off_mag) > 0.98 && PIN(id_fb) > PIN(test_cur) * 0.5) ? 1.0 : 0.0;
+
         PIN(d_cmd) = 0.0;
-        PIN(state) = 2.5;
         PIN(timer) = 0.0;
+        // the psi test commutates from this offset, so a bad one stops here
+        // rather than driving current at the wrong angle
+        if(PIN(com_ok) > 0.0) {
+          PIN(state) = 2.5;
+        } else {
+          PIN(en_out) = 0.0;
+          PIN(state)  = 2.6;
+        }
       }
       break;
 
     case 32:  // psi
-      PIN(en_out)   = 1.0;
-      PIN(cmd_mode) = 1.0;
-      PIN(cur_bw)   = 250.0;
-      PIN(d_cmd)    = 0.0;
-      PIN(com_pos)  = mod((PIN(pos_fb) + PIN(com_offset)) * PIN(pp));
+      {
+        float v_t = ctx->psi_stage < 2 ? PIN(test_vel) * 0.5 : PIN(test_vel);
+        ctx->vel_lp += (PIN(vel_fb) - ctx->vel_lp) * period / 0.05;
+        ctx->st_t += period;
 
-      float vel_error = PIN(test_vel) - PIN(vel_fb);
-      vel_error       = LIMIT(vel_error, PIN(test_vel) / 100.0);
-      PIN(cur_sum) += PIN(ki) * vel_error * period;
+        if(ctx->psi_stage < 4) {
+          PIN(en_out)   = 1.0;
+          PIN(cmd_mode) = 1.0;
+          PIN(cur_bw)   = 250.0;
+          PIN(d_cmd)    = 0.0;
+          PIN(com_pos)  = mod((PIN(pos_fb) + PIN(com_offset)) * PIN(pp));
 
-      PIN(q_cmd) = PIN(vel_bw) * period * vel_error + PIN(cur_sum);
+          float vel_error = v_t - PIN(vel_fb);
+          vel_error       = LIMIT(vel_error, PIN(test_vel) / 100.0);
+          PIN(cur_sum) += PIN(ki) * vel_error * period;
+          PIN(q_cmd) = PIN(vel_bw) * period * vel_error + PIN(cur_sum);
+        }
 
-      if(ABS(PIN(vel_fb)) > 0.1) {
-        float psi = (PIN(uq_fb) - PIN(iq_fb) * PIN(r)) / (PIN(vel_fb) * PIN(pp));
-        PIN(psi)  = PIN(psi) * (1.0 - period / PIN(pi)) + psi * period / PIN(pi);
+        // wrong commutation from a bad pp or offset puts current in without
+        // torque; on the bench that was 4.5 A into a locked rotor for the full
+        // 5 s. Key it on the current rather than a time: the speed loop's
+        // integrator climbs at ki * test_vel / 100 A/s, so at test_vel 25 a
+        // healthy rotor needed 2 s just to break away at 0.4 A, while at
+        // test_vel 100 a locked one reaches 3 A in 3 s.
+        if(ctx->psi_stage < 4 && ABS(ctx->vel_lp) < v_t * 0.1 && ABS(PIN(q_cmd)) > PIN(test_cur) * PSI_STALL) {
+          ctx->psi_fail = 1;
+        } else if(ctx->psi_stage == 0 || ctx->psi_stage == 2) {  // spin up
+          if(ABS(ctx->vel_lp - v_t) < v_t * PSI_BAND) {
+            ctx->settle_t += period;
+          } else {
+            ctx->settle_t = 0.0;
+          }
+          if(ctx->settle_t >= PSI_SETTLE) {
+            ctx->psi_stage++;
+            ctx->st_t  = 0.0;
+            ctx->psi_n = 0;
+            ctx->sx    = 0.0;
+            ctx->sy    = 0.0;
+            ctx->si    = 0.0;
+          } else if(ctx->st_t > PSI_SPINUP) {
+            ctx->psi_fail = 2;
+          }
+        } else if(ctx->psi_stage == 1 || ctx->psi_stage == 3) {  // dwell
+          // uq is the current loop's voltage command, so it carries the
+          // inverter's dead time on top of the back emf and r iq:
+          //
+          //   uq - r iq = pp vel psi + u_dt(iq)
+          //
+          // Dividing it by the speed, as this test used to, reported u_dt as
+          // flux: 0.089 at 25 rad/s, 0.070 at 50, 0.052 at 100 on an axis a
+          // scope on the phases puts at 0.036. A chord between two speeds
+          // does not cancel it either, because friction draws more current at
+          // the higher speed and u_dt is still rising there (0.049 and 0.036
+          // for the 25-50 and 50-100 chords). So psi comes from the coast
+          // below, and these dwells keep what is left over: u_dt at two
+          // currents, which is what the dead time compensation needs.
+          ctx->sx += PIN(vel_fb) * PIN(pp);
+          ctx->sy += PIN(uq_fb) - PIN(iq_fb) * PIN(r);
+          ctx->si += PIN(iq_fb);
+          ctx->psi_n++;
+          if(ctx->st_t >= PSI_DWELL) {
+            float n = (float)ctx->psi_n;
+            if(ctx->psi_stage == 1) {
+              ctx->x_lo = ctx->sx / n;
+              ctx->y_lo = ctx->sy / n;
+              ctx->i_lo = ctx->si / n;
+            } else {
+              ctx->x_hi = ctx->sx / n;
+              ctx->y_hi = ctx->sy / n;
+              ctx->i_hi = ctx->si / n;
+            }
+            ctx->settle_t = 0.0;
+            ctx->psi_stage++;
+            ctx->st_t = 0.0;
+          }
+        } else {  // 4: coast
+          // Bridge off and let it run down. The terminals then carry the back
+          // emf alone -- no dead time, no current, no loop -- and io.c on the
+          // f3 reads each phase to ground. Their difference is
+          //
+          //   u - v = sqrt3 w psi cos(th + phi)       w = pp vel, th = commutation angle
+          //
+          // seen through the f3's filter H(w). Multiplying by
+          // g = exp(-j th) / (sqrt3 w H(w)) and averaging leaves psi exp(j phi) / 2,
+          // plus the dc level of u - v times the mean of g, which the sums of g
+          // and of u - v take back out. psi is the magnitude, phi the angle
+          // between the back emf and the angle the drive commutates with.
+          // Done offline on a coast from 90 rad/s this gave 0.0351 to 0.0368
+          // across 22 to 90 rad/s, against 0.0367 from a scope with the motor
+          // turned by a drill.
+          PIN(en_out)   = 0.0;
+          PIN(d_cmd)    = 0.0;
+          PIN(q_cmd)    = 0.0;
+          PIN(cur_sum)  = 0.0;
+          PIN(cmd_mode) = 0.0;
+
+          float vel  = PIN(vel_fb);
+          float avel = ABS(vel);
+          if(avel > PIN(test_vel) * PSI_COAST_MIN) {
+            int b   = avel > PIN(test_vel) * PSI_COAST_SPLIT ? 0 : 1;
+            float w = vel * PIN(pp);
+            float s_th, c_th, s_wt, c_wt;
+            sincos_fast((PIN(pos_fb) + PIN(com_offset)) * PIN(pp), &s_th, &c_th);
+            sincos_fast(w * HV_IO_PERIOD, &s_wt, &c_wt);
+            // 1 / H = (1 - (1 - a) exp(-j w T)) / a
+            float hi_re = (1.0 - (1.0 - HV_IO_ALPHA) * c_wt) / HV_IO_ALPHA;
+            float hi_im = ((1.0 - HV_IO_ALPHA) * s_wt) / HV_IO_ALPHA;
+            // exp(-j th) / H, over sqrt3 w (signed, so turning backwards does
+            // not add half a turn to phi)
+            float k    = 1.0 / (1.7320508 * w);
+            float g_re = (c_th * hi_re + s_th * hi_im) * k;
+            float g_im = (c_th * hi_im - s_th * hi_re) * k;
+            float uv   = PIN(u_fb) - PIN(v_fb);
+            ctx->cz_re[b] += uv * g_re;
+            ctx->cz_im[b] += uv * g_im;
+            ctx->cg_re[b] += g_re;
+            ctx->cg_im[b] += g_im;
+            ctx->cu[b] += uv;
+            ctx->cw[b] += w;
+            ctx->cn[b]++;
+          }
+
+          if(avel < PIN(test_vel) * PSI_COAST_MIN || ctx->st_t > PSI_COAST_TIME) {
+            float z_re[3], z_im[3], w_mean[2];
+            uint32_t n_all = ctx->cn[0] + ctx->cn[1];
+            for(int b = 0; b < 3; b++) {  // 0 fast, 1 slow, 2 both
+              float n  = b < 2 ? (float)ctx->cn[b] : (float)n_all;
+              float zr = b < 2 ? ctx->cz_re[b] : ctx->cz_re[0] + ctx->cz_re[1];
+              float zi = b < 2 ? ctx->cz_im[b] : ctx->cz_im[0] + ctx->cz_im[1];
+              float gr = b < 2 ? ctx->cg_re[b] : ctx->cg_re[0] + ctx->cg_re[1];
+              float gi = b < 2 ? ctx->cg_im[b] : ctx->cg_im[0] + ctx->cg_im[1];
+              float u  = b < 2 ? ctx->cu[b] : ctx->cu[0] + ctx->cu[1];
+              n        = MAX(n, 1.0);
+              z_re[b]  = zr / n - (u / n) * (gr / n);
+              z_im[b]  = zi / n - (u / n) * (gi / n);
+              if(b < 2) {
+                w_mean[b] = ctx->cw[b] / n;
+              }
+            }
+            if(ctx->cn[0] >= PSI_COAST_N && ctx->cn[1] >= PSI_COAST_N) {
+              PIN(psi)    = CLAMP(2.0 * sqrtf(z_re[2] * z_re[2] + z_im[2] * z_im[2]), 0.001, 1.0);
+              PIN(psi_hi) = 2.0 * sqrtf(z_re[0] * z_re[0] + z_im[0] * z_im[0]);
+              PIN(psi_lo) = 2.0 * sqrtf(z_re[1] * z_re[1] + z_im[1] * z_im[1]);
+              // the angle drifts with speed by the reading delay between the
+              // two paths; two bands give the slope and the standstill value
+              float ph_hi = atan2f(z_im[0], z_re[0]);
+              float ph_lo = atan2f(z_im[1], z_re[1]);
+              float slope = ABS(w_mean[0] - w_mean[1]) > 1.0 ? mod(ph_hi - ph_lo) / (w_mean[0] - w_mean[1]) : 0.0;
+              PIN(emf_angle) = mod(ph_lo - slope * w_mean[1]) * 180.0 / M_PI;
+              PIN(emf_delay) = -slope;
+              // what the dwells saw beyond back emf and r iq
+              PIN(vel_lo) = ctx->x_lo / PIN(pp);
+              PIN(vel_hi) = ctx->x_hi / PIN(pp);
+              PIN(udt_lo) = ctx->y_lo - ctx->x_lo * PIN(psi);
+              PIN(idt_lo) = ctx->i_lo;
+              PIN(udt_hi) = ctx->y_hi - ctx->x_hi * PIN(psi);
+              PIN(idt_hi) = ctx->i_hi;
+              PIN(psi_ok) = 1.0;
+            } else {
+              ctx->psi_fail = 3;
+            }
+            ctx->psi_stage = 5;
+          }
+        }
       }
 
-      PIN(psi) = CLAMP(PIN(psi), 0.001, 1.0);
-
-      PIN(timer) += period;
-      if(PIN(timer) >= 5.0) {
+      if(ctx->psi_fail || ctx->psi_stage >= 5) {
         PIN(timer)    = 0.0;
         PIN(en_out)   = 0.0;
         PIN(d_cmd)    = 0.0;

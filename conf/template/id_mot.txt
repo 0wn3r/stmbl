@@ -39,6 +39,13 @@ idm0.fb_torque = pid0.fb_torque_cmd
 vel1.torque = 0
 vel2.torque = 0
 
+# The test is for the bare motor, but pid0 adds j_sys to j_mot in its feedback
+# torque, and conf0.j_sys still holds the coupled axis's value. On X that was
+# 0.0076 against a rotor of about 0.0019: the speed loop limit-cycled at ~20 Hz
+# with +-2.5 Nm and idm0.inertia collapsed to its 5e-6 floor, twice. With this
+# line the same run tracked cleanly and settled j at 0.001876.
+pid0.j_sys = 0
+
 conf0.max_pos_error = 0
 conf0.max_sat = 10
 conf0.vel_g = 1
