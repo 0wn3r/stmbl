@@ -71,6 +71,20 @@ uint32_t hal_get_systick_freq() {
 void SystemClock_Config(void);
 void Error_Handler(void);
 
+// Switch the bridge off in hardware. TIM8 keeps running on its own, so once
+// the rt stops -- an overrun here or in hal_run_rt, a MISC_ERROR, a stop
+// command -- the last compare values stay latched and the bridge goes on
+// applying them with no current loop until the break comparator trips. On X
+// the f3 went silent under a 19 A burst and the bridge was found shorted.
+// Nothing in the rt path reliably calls rt_stop (hal_run_rt's own overrun
+// branch does not), so check the state after every tick instead.
+static void bridge_off(void) {
+  TIM8->BDTR &= ~TIM_BDTR_MOE;
+#ifdef HV_EN_PIN
+  HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
+#endif
+}
+
 void TIM8_UP_IRQHandler() {
   GPIOA->BSRR |= GPIO_PIN_9;
   __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
@@ -78,6 +92,9 @@ void TIM8_UP_IRQHandler() {
   if(__HAL_TIM_GET_FLAG(&htim8, TIM_IT_UPDATE) == SET) {
     hal_stop();
     hal.hal_state = RT_TOO_LONG;
+  }
+  if(hal.rt_state == RT_STOP) {
+    bridge_off();
   }
   GPIOA->BSRR |= GPIO_PIN_9 << 16;
 }
