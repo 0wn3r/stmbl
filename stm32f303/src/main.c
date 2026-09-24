@@ -147,6 +147,27 @@ void about(char *ptr) {
 
 COMMAND("about", about, "show system infos");
 
+// DEBUG: why did the watchdog build not come up? RCC->CSR as found at boot,
+// before it is cleared, and TIM8->BDTR to see MOE after a stop.
+static uint32_t boot_csr;
+
+void resetflags(char *ptr) {
+  printf("RCC_CSR at boot 0x%08lx:%s%s%s%s%s%s%s\n", (unsigned long)boot_csr,
+         (boot_csr & RCC_CSR_LPWRRSTF) ? " LPWR" : "", (boot_csr & RCC_CSR_WWDGRSTF) ? " WWDG" : "",
+         (boot_csr & RCC_CSR_IWDGRSTF) ? " IWDG" : "", (boot_csr & RCC_CSR_SFTRSTF) ? " SFT" : "",
+         (boot_csr & RCC_CSR_PORRSTF) ? " POR" : "", (boot_csr & RCC_CSR_PINRSTF) ? " PIN" : "",
+         (boot_csr & RCC_CSR_OBLRSTF) ? " OBL" : "");
+  printf("IWDG running: %s, RLR %lu, PR %lu\n", (RCC->CSR & RCC_CSR_LSIRDY) ? "LSI on" : "LSI off",
+         (unsigned long)IWDG->RLR, (unsigned long)IWDG->PR);
+}
+COMMAND("resetflags", resetflags, "print reset cause captured at boot");
+
+void bdtr(char *ptr) {
+  printf("TIM8 BDTR 0x%08lx MOE %d, rt_state %d, hv_en pin %d\n", (unsigned long)TIM8->BDTR,
+         (TIM8->BDTR & TIM_BDTR_MOE) ? 1 : 0, (int)hal.rt_state, (int)HAL_GPIO_ReadPin(HV_EN_PORT, HV_EN_PIN));
+}
+COMMAND("bdtr", bdtr, "print TIM8 BDTR, MOE and rt state");
+
 void bootloader(char *ptr) {
 #ifdef USB_DISCONNECT_PIN
   HAL_GPIO_WritePin(USB_DISCONNECT_PORT, USB_DISCONNECT_PIN, GPIO_PIN_SET);
@@ -167,6 +188,8 @@ int main(void) {
   // Relocate interrupt vectors
   extern void *g_pfnVectors;
   SCB->VTOR = (uint32_t)&g_pfnVectors;
+  boot_csr = RCC->CSR;
+  RCC->CSR |= RCC_CSR_RMVF;
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
@@ -407,9 +430,13 @@ int main(void) {
   // hal_init_nrt();
   // error foo
   hal_start();
-  hal_init_watchdog(0.005);
+  uint32_t wd_at = HAL_GetTick() + 10000;  // DEBUG: start the watchdog 10 s after boot
 
   while(1) {
+    if(wd_at && (int32_t)(HAL_GetTick() - wd_at) >= 0) {
+      hal_init_watchdog(0.005);
+      wd_at = 0;
+    }
     hal_run_nrt();
     cdc_poll();
     HAL_Delay(1);
