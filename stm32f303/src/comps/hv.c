@@ -6,14 +6,23 @@
 #include "angle.h"
 #include "tim.h"
 #include "f3hw.h"
+#include "common.h"
 
 HAL_COMP(hv);
 
 HAL_PIN(drop);    // dead time compensation, fixed volts
 HAL_PIN(drop_k);  // dead time compensation, scaled by dc link and pwm period
 
-//IU IV IW input in amp
-HAL_PIN(iu);
+// Sign source for the dead time compensation: the COMMANDED current, never
+// the measured one. d/q come from the f4, si/co are dq0's sin and cos of the
+// same angle, so the reference phase currents cost a few multiplies here
+// instead of a second idq in the rt (see main.c).
+HAL_PIN(d_cmd);
+HAL_PIN(q_cmd);
+HAL_PIN(si);
+HAL_PIN(co);
+HAL_PIN(phase_mode);  // the compensation runs in 120 deg 3ph mode only
+HAL_PIN(iu);          // reference phase currents, outputs for the scope
 HAL_PIN(iv);
 HAL_PIN(iw);
 
@@ -35,6 +44,7 @@ HAL_PIN(min_off);  // min off time [s]
 
 HAL_PIN(arr);
 
+HAL_PIN(cmd_mode);   // the compensation runs in current mode only
 HAL_PIN(drop_band);  // current at which the compensation's sign latches [A]
 
 struct hv_ctx_t {
@@ -129,8 +139,31 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //
   // Over-compensating is worse than under-compensating: past the real drop the
   // residual changes sign and sits in phase with the current instead of
-  // opposing it.
+  // opposing it. That only becomes self excitation if the sign is read from
+  // the current it pushes, which is why iu/iv/iw carry the command.
   float dt_drop = PIN(drop) + PIN(drop_k) * (float)PWM_DEADTIME_TICKS / (2.0 * (float)ctx->pwm_res) * udc;
+
+  // Current mode only. The sign is the commanded current, and in volt mode
+  // there is none: the command is a voltage, whose sign leads the current by
+  // the load's power factor angle -- up to most of a quarter cycle on a lightly
+  // loaded induction motor under uf, which would put the compensation
+  // backwards for much of every cycle. Falling back to measured current there
+  // would restore the self excitation, with no current loop to null it. The
+  // volt mode users are the id comps' l and pp tests, which do not need the
+  // compensation (the l test measures a time constant, which a constant drop
+  // does not touch), and open loop running (uf, acim_ttc mode 2), which loses
+  // the dead time volts at low speed as it always has -- acim_ttc's u_boost
+  // is the knob for that.
+  if(PIN(cmd_mode) == VOLT_MODE || PIN(phase_mode) != PHASE_120_3PH) {
+    dt_drop = 0.0;
+  }
+
+  // reference phase currents, inverse park and clarke of the command
+  float a  = PIN(d_cmd) * PIN(co) - PIN(q_cmd) * PIN(si);
+  float b  = PIN(d_cmd) * PIN(si) + PIN(q_cmd) * PIN(co);
+  PIN(iu)  = a;
+  PIN(iv)  = -a / 2.0 + b / 2.0 * M_SQRT3;
+  PIN(iw)  = -a / 2.0 - b / 2.0 * M_SQRT3;
 
   // A backstop on both pins. The compensation only ever adds volts, so a
   // negative one would invert it, and the honest figure is a few percent of

@@ -349,9 +349,19 @@ int main(void) {
   // hal_parse("sensorless0.iq = dq0.q");
   // hal_parse("sensorless0.ud = curpid0.ud");
   // hal_parse("sensorless0.uq = curpid0.uq");
-  hal_parse("hv0.iu = io0.iu");
-  hal_parse("hv0.iv = io0.iv");
-  hal_parse("hv0.iw = io0.iw");
+  // The dead time compensation's sign comes from the COMMAND, not from io0.
+  // Keyed on measured current it is a feedback path: near zero the fixed
+  // compensation exceeds the real drop and drives the current it reads, which
+  // split the r test's dwells and tripped the next run on the bench. hv0 builds
+  // the reference phase currents from the f4's d/q command and dq0's sin/cos,
+  // so no second transform runs in the rt (an idq1 here is the suspect for the
+  // f3 images that never came up). Volt mode switches it off (see hv.c).
+  hal_parse("hv0.d_cmd = ls0.d_cmd");
+  hal_parse("hv0.q_cmd = ls0.q_cmd");
+  hal_parse("hv0.si = dq0.si");
+  hal_parse("hv0.co = dq0.co");
+  hal_parse("hv0.cmd_mode = ls0.cmd_mode");
+  hal_parse("hv0.phase_mode = ls0.phase_mode");
 
   hal_parse("debug_level 0");
 
