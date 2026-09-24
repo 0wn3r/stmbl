@@ -17,6 +17,7 @@ HAL_PIN(d_cmd);
 HAL_PIN(q_cmd);
 HAL_PIN(pos);
 HAL_PIN(vel);
+HAL_PIN(adv);  // commutation advance [s], pos is sent as pos + vel * adv
 HAL_PIN(en);
 
 // config data from LS
@@ -213,6 +214,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(drop)             = 0;
   PIN(drop_k)           = 0;
   PIN(lq)               = 0;
+  PIN(adv)              = 0;
   send_to_bootloader    = 0;
   flash_state           = SLAVE_IN_APP;
   ctx->send_state       = 0;
@@ -225,6 +227,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float e                   = PIN(en);
   float pos                 = PIN(pos);
   float vel                 = PIN(vel);
+  pos                       = mod(pos + vel * PIN(adv));
 
   ctx->config.pins.r       = PIN(r);
   ctx->config.pins.l       = PIN(l);
