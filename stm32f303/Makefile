@@ -29,7 +29,6 @@ SOURCES += stm32f303/src/version.c
 SOURCES += stm32f303/src/hal_tbl.c
 
 CFLAGS += -DHAL_MAX_CTX=1024
-CFLAGS += -DHAL_WATCHDOG
 # term.c's ring is 64 on the f4; 8 here keeps the f3's HAL ctx inside 1024
 CFLAGS += -DTERM_BUF_SIZE=8
 
