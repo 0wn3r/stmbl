@@ -34,6 +34,11 @@ HAL_PIN(high_mot_temp);
 HAL_PIN(fan_hv_temp);
 HAL_PIN(fan_mot_temp);
 
+// bridge junction estimate from ipm0.temp, 0 when ipm is not linked
+HAL_PIN(ipm_temp);
+HAL_PIN(max_ipm_temp);
+HAL_PIN(high_ipm_temp);
+
 HAL_PIN(scale);
 
 HAL_PIN(dc_volt);
@@ -89,6 +94,7 @@ static const char *fault_string[] = {
     "Motor overcurrent rms",
     "Motor overcurrent peak",
     "Motor overcurrent hw limit",
+    "IPM junction overtemperature",
 };
 
 struct fault_ctx_t {
@@ -101,6 +107,7 @@ struct fault_ctx_t {
   float hv_temp_error;
   float dc_volt_error;
   float mot_temp_error;
+  float ipm_temp_error;
 };
 
 void enable(char *ptr) {
@@ -132,6 +139,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(high_mot_temp) = 80.0;
   PIN(fan_hv_temp)   = 60.0;
   PIN(fan_mot_temp)  = 60.0;
+  PIN(max_ipm_temp)  = 140.0;
+  PIN(high_ipm_temp) = 125.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -252,6 +261,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->state      = SOFT_FAULT;
   }
 
+  if(err_filter(&(ctx->ipm_temp_error), 5.0, 0.001, PIN(ipm_temp) > PIN(max_ipm_temp))) {
+    ctx->fault      = IPM_TEMP_ERROR;
+    PIN(last_fault) = ctx->fault;
+    ctx->state      = SOFT_FAULT;
+  }
+
   float hv_error = PIN(hv_error);
   if(hv_error > 0.0) {
     ctx->fault      = hv_error;
@@ -263,6 +278,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   scale       = MIN(scale, SCALE(PIN(hv_temp), PIN(high_hv_temp), PIN(max_hv_temp)));
   scale       = MIN(scale, SCALE(PIN(dc_volt), PIN(high_dc_volt), PIN(max_dc_volt)));
   scale       = MIN(scale, SCALE(PIN(mot_temp), PIN(high_mot_temp), PIN(max_mot_temp)));
+  scale       = MIN(scale, SCALE(PIN(ipm_temp), PIN(high_ipm_temp), PIN(max_ipm_temp)));
   scale       = MIN(scale, SCALE(PIN(ac_cur), PIN(max_ac_cur), PIN(max_ac_cur) * 1.1));
   scale       = MIN(scale, SCALE(PIN(dc_cur), PIN(max_dc_cur), PIN(max_dc_cur) * 1.1));
 
@@ -357,6 +373,11 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     if(PIN(hv_temp) > PIN(high_hv_temp)) {
       printf("<font color='orange'>WARNING:</font> over temperature (driver) current clamping active\n");
+      PIN(warn_timer) = 1.0;
+    }
+
+    if(PIN(ipm_temp) > PIN(high_ipm_temp)) {
+      printf("<font color='orange'>WARNING:</font> over temperature (ipm junction) current clamping active\n");
       PIN(warn_timer) = 1.0;
     }
   }

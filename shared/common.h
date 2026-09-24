@@ -164,6 +164,7 @@ typedef enum {
   HV_OVERCURRENT_RMS,
   HV_OVERCURRENT_PEAK,
   HV_OVERCURRENT_HW,
+  IPM_TEMP_ERROR,
 } fault_t;
 
 //check if structs can be send at 5kHz with DATABAUD

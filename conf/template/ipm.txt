@@ -1,0 +1,23 @@
+# bridge junction temperature model and its derate. link it after the motor
+# template (pid, mpid or uf), which loads hv0, fault0 and conf0:
+#   link pid
+#   link ipm
+# the model defaults are for the IKCM30F60GD fitted to v5.0; link
+# ipm_im06b50gc1 after this one if that module is fitted instead.
+#
+# the current vector sets the loss, the voltage vector splits it between
+# transistor and diode, and the module ntc carries the slow part. ipm0.temp
+# is a junction, not a case, so it gets its own limits: conf0.high_ipm_temp
+# starts the current derate and conf0.max_ipm_temp trips, next to the ntc's
+# own high_hv_temp and max_hv_temp.
+load ipm
+ipm0.rt_prio = 13
+ipm0.id = hv0.id_fb
+ipm0.iq = hv0.iq_fb
+ipm0.ud = hv0.ud_fb
+ipm0.uq = hv0.uq_fb
+ipm0.dc_volt = hv0.dc_volt
+ipm0.case_temp = hv0.hv_temp
+fault0.ipm_temp = ipm0.temp
+fault0.high_ipm_temp = conf0.high_ipm_temp
+fault0.max_ipm_temp = conf0.max_ipm_temp
