@@ -271,7 +271,6 @@ int main(void) {
   hal_parse("load ls");
   hal_parse("load dq");
   hal_parse("load idq");
-  hal_parse("load idq");  // idq1: commanded phase quantities for hv0's dead time sign
   hal_parse("load svm");
   hal_parse("load hv");
   hal_parse("load curpid");
@@ -281,7 +280,6 @@ int main(void) {
   hal_parse("dq0.rt_prio = 2.0");
   hal_parse("curpid0.rt_prio = 3.0");
   hal_parse("idq0.rt_prio = 4.0");
-  hal_parse("idq1.rt_prio = 4.5");
   hal_parse("svm0.rt_prio = 5.0");
   hal_parse("hv0.rt_prio = 6.0");
 
@@ -351,26 +349,9 @@ int main(void) {
   // hal_parse("sensorless0.iq = dq0.q");
   // hal_parse("sensorless0.ud = curpid0.ud");
   // hal_parse("sensorless0.uq = curpid0.uq");
-  // The dead time compensation's sign comes from the COMMAND, not from io0.
-  // Keyed on measured current it is a feedback path: dt_drop is a fixed volt
-  // figure, the real drop falls at low current, so near zero the compensation
-  // exceeds it and drives the current it is reading -- on the bench, with
-  // drop_k = 0.92 and the latching sign already in place, that split the r
-  // test's dwells and tripped the next run. The command has no path back from
-  // the bridge, so there is nothing to excite.
-  //
-  // idq1 is the same inverse park/clarke as idq0, fed the f4's d/q command
-  // instead of the current loop's output: the reference phase current. In
-  // volt mode the command is a voltage, so hv0 switches the compensation off
-  // there (see hv.c).
-  hal_parse("idq1.pos = ls0.pos");
-  hal_parse("idq1.mode = ls0.phase_mode");
-  hal_parse("idq1.d = ls0.d_cmd");
-  hal_parse("idq1.q = ls0.q_cmd");
-  hal_parse("hv0.iu = idq1.u");
-  hal_parse("hv0.iv = idq1.v");
-  hal_parse("hv0.iw = idq1.w");
-  hal_parse("hv0.cmd_mode = ls0.cmd_mode");
+  hal_parse("hv0.iu = io0.iu");
+  hal_parse("hv0.iv = io0.iv");
+  hal_parse("hv0.iw = io0.iw");
 
   hal_parse("debug_level 0");
 
