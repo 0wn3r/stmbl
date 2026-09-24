@@ -24,7 +24,8 @@
 //   ud - ud_expected = -uq sin(d)
 // and d = w * (delay - adv), so each dwell moves adv by -(ud - ud_exp) / uq / w.
 // By hand on X at 100 rad/s: 0 -> -6.07 V, 0.5 ms -> -3.46 V, 0.9 ms -> -1.60 V
-// against -1.63 V expected.
+// against -1.63 V expected. At 50 rad/s the model breaks down (adv runs to its
+// limit), so the dwell is at 100 and a clamped adv is reported as a failure.
 
 HAL_COMP(idtune);
 
@@ -64,7 +65,7 @@ HAL_PIN(ud_exp);   // ud expected in the last dwell [V]
 HAL_PIN(uq_mean);  // uq in the last dwell [V]
 HAL_PIN(iq_mean);  // iq in the last dwell [A]
 HAL_PIN(w_mean);   // electrical speed in the last dwell [rad/s]
-HAL_PIN(fail);     // 0 none, 1 stalled, 2 never settled, 3 adv did not converge
+HAL_PIN(fail);     // 0 none, 1 stalled, 2 never settled, 3 adv did not converge, 4 adv hit its limit
 
 #define DK_MAX 1.2     // drop_k search range 0..DK_MAX
 #define DK_ITER 7      // bisection steps, DK_MAX / 2^7 = 0.01
@@ -128,6 +129,13 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("conf0.polecount, conf0.mot_fb_offset and out_rev\n");
       } else if(PIN(fail) == 2.0) {
         printf("<font color='red'>adv failed</font>: the speed never settled inside %i%% of %f rad/s\n", (int)(VEL_BAND * 100.0), PIN(test_vel));
+      } else if(PIN(fail) == 4.0) {
+        // On X at 50 rad/s adv ran to 3 ms with ud matching there, where 100
+        // rad/s gives 1.0 ms: at low speed what is left of ud is not an angle
+        // lag (dead time residue on d, r), and dividing it by a small w blows
+        // it up. 100 rad/s is the default for that reason.
+        printf("<font color='red'>adv failed</font>: it ran to %f s. ud at this speed is not\n", PIN(adv));
+        printf("an angle lag; raise idtune0.test_vel (%f rad/s) and rerun\n", PIN(test_vel));
       } else {
         printf("<font color='red'>adv failed</font>: it did not converge in %i dwells, last %f s,\n", ADV_ITER, PIN(adv));
         printf("ud off by %f V. check conf0.lq and conf0.r\n", PIN(ud_err));
@@ -248,7 +256,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           ctx->n   = 0;
           ctx->t   = 0.0;
           ctx->it++;
-          if(ABS(step) < ADV_TOL) {
+          if(PIN(adv) >= ADV_MAX || (PIN(adv) <= 0.0 && step < 0.0)) {
+            PIN(fail) = 4.0;
+          } else if(ABS(step) < ADV_TOL) {
             PIN(state) = 1.3;
           } else if(ctx->it >= ADV_ITER) {
             PIN(fail) = 3.0;
