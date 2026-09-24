@@ -85,6 +85,27 @@ static void bridge_off(void) {
 #endif
 }
 
+// Independent watchdog, from its own 40 kHz LSI. hal.c kicks it at the end of
+// every rt, frt and nrt run (HAL_WATCHDOG, set in stm32f303/Makefile), so it
+// only fires when the f3 hangs outright -- stuck in the rt interrupt, which
+// also starves nrt, or locked up. A clean rt stop is bridge_off()'s job. After
+// the reset the pwm pins are inputs, and PA15 (HV_EN) comes up with its JTDI
+// pull-up on the IPM's ITRIP, which holds all six gates off. A system reset
+// stops the IWDG, so the bootloader (ls.c resets into it) is not affected.
+void hal_init_watchdog(float time) {
+  IWDG->KR  = 0xCCCC;  // start; from here only a reset stops it
+  IWDG->KR  = 0x5555;  // unlock PR and RLR
+  IWDG->PR  = 0;       // LSI / 4: 0.1 ms per count
+  IWDG->RLR = (uint32_t)CLAMP(time * 10000.0, 1.0, 4095.0);
+  while(IWDG->SR) {
+  }
+  IWDG->KR = 0xAAAA;
+}
+
+void hal_reset_watchdog() {
+  IWDG->KR = 0xAAAA;
+}
+
 void TIM8_UP_IRQHandler() {
   GPIOA->BSRR |= GPIO_PIN_9;
   __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
@@ -386,6 +407,7 @@ int main(void) {
   // hal_init_nrt();
   // error foo
   hal_start();
+  hal_init_watchdog(0.005);
 
   while(1) {
     hal_run_nrt();
