@@ -8,7 +8,19 @@
 #include "angle.h"
 
 #define TERM_NUM_WAVES 8
-#define TERM_BUF_SIZE 8
+// rt fills this every send_step ticks and nrt drains it. At 8 entries a
+// main loop slower than 8 * send_step * period lapped it: at send_step 1 the
+// host got 1000 of 5000 packets/s, in runs of exactly 8 lost, with nothing to
+// say so. 64 covers 12.8 ms of main loop at send_step 1.
+//
+// This file is built into the f3 image too, and there the whole HAL gets
+// HAL_MAX_CTX = 1024 bytes (stm32f303/Makefile). At 64 entries term's ctx is
+// 2060 bytes on its own; the f3's comps then need 2200, the load fails, and
+// the hv board never answers the f4 again -- which is what the first
+// hv_update of this change did. The f3 Makefile keeps it at the old 8.
+#ifndef TERM_BUF_SIZE
+#define TERM_BUF_SIZE 64
+#endif
 
 HAL_COMP(term);
 
@@ -41,13 +53,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct term_pin_ctx_t *pins = (struct term_pin_ctx_t *)pin_ptr;
 
   if(ctx->send_counter++ >= PIN(send_step) - 1) {
-    for(int i = 0; i < TERM_NUM_WAVES; i++) {
-      ctx->wave_buf[ctx->write_pos][i] = PINA(wave, i);
-    }
-
-    ctx->write_pos++;
-    ctx->write_pos %= TERM_BUF_SIZE;
     ctx->send_counter = 0;
+    // full: drop this sample instead of lapping the reader, which silently
+    // threw away a whole buffer's worth at once
+    uint32_t next = (ctx->write_pos + 1) % TERM_BUF_SIZE;
+    if(next != ctx->read_pos) {
+      for(int i = 0; i < TERM_NUM_WAVES; i++) {
+        ctx->wave_buf[ctx->write_pos][i] = PINA(wave, i);
+      }
+      ctx->write_pos = next;
+    }
   }
 }
 
