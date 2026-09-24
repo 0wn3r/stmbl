@@ -1,0 +1,51 @@
+# IM06B50GC1, 600 V 50 A. Also pin and package compatible with the
+# IKCM30F60GD - same 24 pins, same DIP 36x21 outline to every dimension,
+# same 85 kOhm B4092 thermistor - so it drops in without a board change.
+# Like the GD it is a DCB part: datasheet Rth 0.6 and 1.0 K/W against the
+# GD's 1.58 and 2.05.
+#
+# Note the loss goes the other way. Bigger dies mean a higher knee and
+# slower edges, so switching costs 70.8 uJ/A where the GD costs 56.65.
+# And once each part's Rth is scaled to reproduce an SOA chart, the gap in
+# the thermal path mostly closes: 2.18 and 3.63 here against the GD's 2.37
+# and 3.08. At the same current this part's transistor runs about as hot as
+# the GD's and its diode hotter, so on these numbers it buys current
+# headroom, not temperature.
+#
+# ITRIP trips at 525 mV rather than 470 mV typical, which does not matter
+# here: PA15 drives that pin as HV_EN and the module's own overcurrent
+# protection is unused. VDDUV+ is 12.4 V rather than 12.1 V, so the 15 V
+# rail has that much less room. Dead time wants the same 2.0 us minimum,
+# and toff - ton is 295 ns against the GD's 300 ns, so drop_k carries
+# over unchanged.
+#
+# rth here is the datasheet value times 3.6, not the 1.5 the GD carries.
+# That is what this part's own SOA chart needs, and it is the reason the
+# factor belongs in a per module template rather than in ipm.c.
+#
+# ABS_MAX_CURRENT in f3hw.h still stops the drive at 30 A reported. This
+# template does not change that, and should not: the current sense chain
+# and the shunts are what would have to be looked at first.
+ipm0.f_sw = 15000
+ipm0.e_volt = 300
+ipm0.v_tc = 0.00156
+
+ipm0.vi = 0.90
+ipm0.ri = 0.0180
+ipm0.ei = 70.8e-6
+ipm0.ei_tc = 0.00327
+ipm0.rth_i = 2.18
+
+ipm0.vd = 1.15
+ipm0.rd = 0.0230
+ipm0.ed = 2.9e-6
+ipm0.ed_tc = 0.01462
+ipm0.rth_d = 3.63
+
+ipm0.tau1 = 0.00193
+ipm0.tau2 = 0.0498
+ipm0.tau3 = 0.988
+ipm0.fi1 = 0.132
+ipm0.fi2 = 0.430
+ipm0.fd1 = 0.356
+ipm0.fd2 = 0.430

@@ -1,0 +1,45 @@
+# IKCM30F60GD, the module fitted to v5.0. A DCB part, with the heatsink
+# soldered to it with Bi58Sn42. These are ipm.c's own nrt_init defaults
+# restated, so linking this after another module's template puts the bridge
+# model back where it started. Change one and change the other.
+#
+# Conduction is the datasheet drop at 20 A split 0.43 knee to 0.57 slope, at
+# 25 C, with v_tc carrying it to the 150 C figure; that stays within 2 % of
+# the typical curve from 10 A to 30 A hot. The diode's drop hardly moves with
+# temperature, so its knee and slope are fitted at 150 C and divided back by
+# the shared v_tc. Switching is Eon + Eoff and Erec per amp at 300 V, again
+# at 25 C with their own coefficients.
+#
+# rth_i and rth_d are the datasheet Rth(J-C), 1.58 and 2.05 K/W, times 1.5.
+# The GD has no SOA chart; 1.5 is what reproducing the IM535-U6D's chart
+# with its own datasheet needs. The IM535-U6D is a reference only, not a
+# part this template or any other is for. Trim these against the real
+# heatsink; conf0.high_ipm_temp and conf0.max_ipm_temp are only as good as
+# they are.
+#
+# The Foster shape is the GD's own Zth(J-C) curve with all six IGBTs heating.
+# The GD has no diode curve, so the diode shares are the IGBT's scaled by how
+# far the IM535-U6D's diode curve leads its IGBT curve in AN2022-06.
+ipm0.f_sw = 15000
+ipm0.e_volt = 300
+ipm0.v_tc = 0.00155
+
+ipm0.vi = 0.667
+ipm0.ri = 0.0442
+ipm0.ei = 56.65e-6
+ipm0.ei_tc = 0.00316
+ipm0.rth_i = 2.37
+
+ipm0.vd = 0.729
+ipm0.rd = 0.0306
+ipm0.ed = 4.75e-6
+ipm0.ed_tc = 0.00665
+ipm0.rth_d = 3.08
+
+ipm0.tau1 = 0.00041
+ipm0.tau2 = 0.0143
+ipm0.tau3 = 0.229
+ipm0.fi1 = 0.054
+ipm0.fi2 = 0.170
+ipm0.fd1 = 0.110
+ipm0.fd2 = 0.247
