@@ -110,6 +110,9 @@ typedef union {
     float dac;
     float drop;
     float drop_k;
+    // q axis inductance, 0 = same as l. an older f3 drops the word, and an
+    // f3 fed by an older f4 never gets it and keeps its 0 reset.
+    float lq;
   } pins;
   float data[sizeof(struct f3_config_data_temp) / 4];
 } f3_config_data_t;
