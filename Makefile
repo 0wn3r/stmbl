@@ -23,7 +23,6 @@ SOURCES += src/main.c
 SOURCES += src/stm32f4xx_it.c
 SOURCES += src/system_stm32f4xx.c #TODO: update this, system file from cmsis
 SOURCES += src/setup.c
-SOURCES += src/f4_flash.c
 SOURCES += src/config.c
 # SOURCES += src/hal_conf.c
 SOURCES += src/hal_tbl.c
@@ -104,6 +103,8 @@ SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_rcc_ex.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_gpio.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd_ex.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_flash.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_flash_ex.c
 
 SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 

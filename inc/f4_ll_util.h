@@ -1,7 +1,7 @@
 #pragma once
 
 // Small helpers for things STM32CubeF4 LL does not cover the way the old
-// StdPeriph code used them: DMA streams addressed by pointer, and flash.
+// StdPeriph code used them, like DMA streams addressed by pointer.
 
 #include "stm32f4xx.h"
 #include "stm32f4xx_ll_gpio.h"
@@ -48,12 +48,6 @@ static inline void dma_disable(DMA_Stream_TypeDef *s) {
 static inline void dma_enable(DMA_Stream_TypeDef *s) {
   s->CR |= DMA_SxCR_EN;
 }
-
-// Flash (replaces stm32f4xx_flash.c), 2.7-3.6V range, byte/word programming
-int flash_unlock(void);
-void flash_lock(void);
-int flash_erase_sector(uint32_t sector);
-int flash_program_byte(uint32_t addr, uint8_t data);
 
 // CRC over 32-bit words (replaces CRC_CalcBlockCRC, does not reset)
 static inline uint32_t crc_calc_block(const uint32_t *buf, uint32_t len) {

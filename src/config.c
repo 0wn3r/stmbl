@@ -23,6 +23,7 @@
 #include "hal.h"
 #include "commands.h"
 #include "stm32f4xx_conf.h"
+#include "stm32f4xx_hal.h"
 
 char config[15 * 1024];
 const char *config_ro = (char *)0x08008000;
@@ -46,24 +47,26 @@ COMMAND("flashloadconf", flashloadconf, "load config from flash");
 
 void flashsaveconf(char *ptr) {
   printf("erasing flash page...\n");
-  flash_unlock();
-  if(flash_erase_sector(2)) {
+  HAL_FLASH_Unlock();
+  uint32_t sector_error;
+  FLASH_EraseInitTypeDef erase = {.TypeErase = FLASH_TYPEERASE_SECTORS, .Sector = FLASH_SECTOR_2, .NbSectors = 1, .VoltageRange = FLASH_VOLTAGE_RANGE_3};
+  if(HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK) {
     printf("error!\n");
-    flash_lock();
+    HAL_FLASH_Lock();
     return;
   }
   printf("saving conf\n");
   int i   = 0;
   int ret = 0;
   do {
-    ret = flash_program_byte((uint32_t)(config_ro + i), config[i]);
+    ret = HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, (uint32_t)(config_ro + i), config[i]) != HAL_OK;
     if(ret) {
       printf("error writing %i\n", ret);
       break;
     }
   } while(config[i++] != 0);
   printf("OK %i bytes written\n", i);
-  flash_lock();
+  HAL_FLASH_Lock();
 }
 COMMAND("flashsaveconf", flashsaveconf, "save config to flash");
 
@@ -91,14 +94,16 @@ COMMAND("deleteconf", deleteconf, "delete config");
 
 void hardboot(char *ptr) {
   printf("erasing flash page...\n");
-  flash_unlock();
-  if(flash_erase_sector(4)) {
+  HAL_FLASH_Unlock();
+  uint32_t sector_error;
+  FLASH_EraseInitTypeDef erase = {.TypeErase = FLASH_TYPEERASE_SECTORS, .Sector = FLASH_SECTOR_4, .NbSectors = 1, .VoltageRange = FLASH_VOLTAGE_RANGE_3};
+  if(HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK) {
     printf("error!\n");
-    flash_lock();
+    HAL_FLASH_Lock();
     return;
   }
   printf("OK, call bootloader\n");
-  flash_lock();
+  HAL_FLASH_Lock();
   NVIC_SystemReset();
 }
 COMMAND("hardboot", hardboot, "destroy firmware to force bootloader");
