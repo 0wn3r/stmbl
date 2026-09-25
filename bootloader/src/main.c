@@ -35,8 +35,8 @@ static int app_ok(void) {
   if(!APP_RANGE_VALID(APP_START, app_info->image_size)) {
     return 0;
   }
-  CRC_ResetDR();
-  uint32_t crc = CRC_CalcBlockCRC((uint32_t *)APP_START, app_info->image_size / 4);
+  CRC->CR      = CRC_CR_RESET;
+  uint32_t crc = crc_calc_block((const uint32_t *)APP_START, app_info->image_size / 4);
 
   if(crc != 0) {
     return 0;
@@ -46,18 +46,14 @@ static int app_ok(void) {
 }
 
 int main(void) {
-  GPIO_InitTypeDef GPIO_InitDef;
-  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA | RCC_AHB1Periph_CRC, ENABLE);
-  GPIO_InitDef.GPIO_Pin   = GPIO_Pin_13;
-  GPIO_InitDef.GPIO_Mode  = GPIO_Mode_IN;
-  GPIO_InitDef.GPIO_OType = GPIO_OType_PP;
-  GPIO_InitDef.GPIO_PuPd  = GPIO_PuPd_UP;
-  GPIO_InitDef.GPIO_Speed = GPIO_Speed_2MHz;
-  GPIO_Init(GPIOA, &GPIO_InitDef);
-  uint32_t pin = !GPIO_ReadInputDataBit(GPIOA, GPIO_Pin_13);
-  RCC_AHB1PeriphResetCmd(RCC_AHB1Periph_GPIOA, ENABLE);  // reset gpio a
-  RCC_AHB1PeriphResetCmd(RCC_AHB1Periph_GPIOA, DISABLE);
-  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, DISABLE);
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_CRC);
+  // PA13 input with pull up
+  LL_GPIO_SetPinPull(GPIOA, LL_GPIO_PIN_13, LL_GPIO_PULL_UP);
+  LL_GPIO_SetPinMode(GPIOA, LL_GPIO_PIN_13, LL_GPIO_MODE_INPUT);
+  uint32_t pin = !LL_GPIO_IsInputPinSet(GPIOA, LL_GPIO_PIN_13);
+  LL_AHB1_GRP1_ForceReset(LL_AHB1_GRP1_PERIPH_GPIOA);  // reset gpio a
+  LL_AHB1_GRP1_ReleaseReset(LL_AHB1_GRP1_PERIPH_GPIOA);
+  LL_AHB1_GRP1_DisableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
 
   void (*SysMemBootJump)(void);
   if((*((unsigned long *)0x2001C000) == 0xDEADBEEF) || pin || !app_ok()) {  //Memory map, datasheet

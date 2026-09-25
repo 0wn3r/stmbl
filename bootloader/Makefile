@@ -13,7 +13,6 @@ OBJDIR = obj_boot
 TARGET = $(OBJDIR)/blboot
 
 # Define all C source files (dependencies are generated automatically)
-INCDIRS += lib/STM32F4xx_StdPeriph_Driver-V1.6.0/cmsis_legacy
 INCDIRS += inc
 INCDIRS += bootloader/src
 INCDIRS += shared
@@ -23,28 +22,18 @@ SOURCES += bootloader/src/version.c
 SOURCES += bootloader/src/stm32f4xx_it.c
 SOURCES += bootloader/src/system_stm32f4xx.c
 
-# Standard peripheral library
-CPPFLAGS += -DUSE_STDPERIPH_DRIVER
-#CPPFLAGS += -DUSE_FULL_ASSERT
-
-PERIPH_DRV_DIR = lib/STM32F4xx_StdPeriph_Driver-V1.6.0
-
-INCDIRS += $(PERIPH_DRV_DIR)/inc
+# STM32CubeF4 LL drivers (header only inline functions)
+CPPFLAGS += -DUSE_FULL_LL_DRIVER
+INCDIRS += lib/STM32F4xx_HAL_Driver/inc
 INCDIRS += lib/CMSIS/Include
 INCDIRS += lib/CMSIS/Device/ST/STM32F4xx/Include
 
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_flash.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_crc.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_gpio.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_pwr.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_rcc.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_usart.c
-SOURCES += $(PERIPH_DRV_DIR)/src/misc.c
+SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 
-SOURCES += lib/STM32F4xx_StdPeriph_Driver-V1.6.0/cmsis_legacy/startup_stm32f40_41xxx.s
-
-CPPFLAGS += -DSTM32F40_41xxx
+CPPFLAGS += -DSTM32F405xx
 CPPFLAGS += -DHSE_VALUE=8000000
+CPPFLAGS += -DHSI_VALUE=16000000
+CPPFLAGS += -DHSE_STARTUP_TIMEOUT=0x05000
 LDSCRIPT = bootloader/stm32_flash.ld
 
 #============================================================================
