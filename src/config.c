@@ -29,8 +29,8 @@ const char *config_ro = (char *)0x08008000;
 
 void confcrc(char *ptr) {
   uint32_t len = strnlen(config, sizeof(config) - 1);
-  CRC_ResetDR();
-  uint32_t crc = CRC_CalcBlockCRC((uint32_t *)config, len / 4);
+  CRC->CR = CRC_CR_RESET;
+  uint32_t crc = crc_calc_block((uint32_t *)config, len / 4);
   for(int i = 0; i < len; i++) {
     printf("%x ", config[i]);
   }
@@ -46,24 +46,24 @@ COMMAND("flashloadconf", flashloadconf, "load config from flash");
 
 void flashsaveconf(char *ptr) {
   printf("erasing flash page...\n");
-  FLASH_Unlock();
-  if(FLASH_EraseSector(FLASH_Sector_2, VoltageRange_3) != FLASH_COMPLETE) {
+  flash_unlock();
+  if(flash_erase_sector(2)) {
     printf("error!\n");
-    FLASH_Lock();
+    flash_lock();
     return;
   }
   printf("saving conf\n");
   int i   = 0;
   int ret = 0;
   do {
-    ret = FLASH_ProgramByte((uint32_t)(config_ro + i), config[i]) != FLASH_COMPLETE;
+    ret = flash_program_byte((uint32_t)(config_ro + i), config[i]);
     if(ret) {
       printf("error writing %i\n", ret);
       break;
     }
   } while(config[i++] != 0);
   printf("OK %i bytes written\n", i);
-  FLASH_Lock();
+  flash_lock();
 }
 COMMAND("flashsaveconf", flashsaveconf, "save config to flash");
 
@@ -91,14 +91,14 @@ COMMAND("deleteconf", deleteconf, "delete config");
 
 void hardboot(char *ptr) {
   printf("erasing flash page...\n");
-  FLASH_Unlock();
-  if(FLASH_EraseSector(FLASH_Sector_4, VoltageRange_3) != FLASH_COMPLETE) {
+  flash_unlock();
+  if(flash_erase_sector(4)) {
     printf("error!\n");
-    FLASH_Lock();
+    flash_lock();
     return;
   }
   printf("OK, call bootloader\n");
-  FLASH_Lock();
+  flash_lock();
   NVIC_SystemReset();
 }
 COMMAND("hardboot", hardboot, "destroy firmware to force bootloader");

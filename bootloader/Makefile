@@ -13,6 +13,7 @@ OBJDIR = obj_boot
 TARGET = $(OBJDIR)/blboot
 
 # Define all C source files (dependencies are generated automatically)
+INCDIRS += lib/STM32F4xx_StdPeriph_Driver-V1.6.0/cmsis_legacy
 INCDIRS += inc
 INCDIRS += bootloader/src
 INCDIRS += shared
@@ -40,7 +41,7 @@ SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_rcc.c
 SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_usart.c
 SOURCES += $(PERIPH_DRV_DIR)/src/misc.c
 
-SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f40_41xxx.s
+SOURCES += lib/STM32F4xx_StdPeriph_Driver-V1.6.0/cmsis_legacy/startup_stm32f40_41xxx.s
 
 CPPFLAGS += -DSTM32F40_41xxx
 CPPFLAGS += -DHSE_VALUE=8000000

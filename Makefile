@@ -23,6 +23,7 @@ SOURCES += src/main.c
 SOURCES += src/stm32f4xx_it.c
 SOURCES += src/system_stm32f4xx.c #TODO: update this, system file from cmsis
 SOURCES += src/setup.c
+SOURCES += src/f4_flash.c
 SOURCES += src/usb_cdc.c
 SOURCES += src/config.c
 # SOURCES += src/hal_conf.c
@@ -86,32 +87,33 @@ SOURCES += $(USB_DRIVER_DIR)/src/usb_core.c
 SOURCES += $(USB_DRIVER_DIR)/src/usb_dcd.c
 SOURCES += $(USB_DRIVER_DIR)/src/usb_dcd_int.c
 
-# Standard peripheral library
-CPPFLAGS += -DUSE_STDPERIPH_DRIVER
-#CPPFLAGS += -DUSE_FULL_ASSERT
+# STM32CubeF4 LL drivers
+CPPFLAGS += -DUSE_FULL_LL_DRIVER
 
-PERIPH_DRV_DIR = lib/STM32F4xx_StdPeriph_Driver-V1.6.0
+LL_DRV_DIR = lib/STM32F4xx_LL_Driver
 
-INCDIRS += $(PERIPH_DRV_DIR)/inc
+INCDIRS += $(LL_DRV_DIR)/inc
 INCDIRS += lib/CMSIS/Include
 INCDIRS += lib/CMSIS/Device/ST/STM32F4xx/Include
 
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_adc.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_crc.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_dma.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_flash.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_gpio.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_pwr.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_rcc.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_tim.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_usart.c
-SOURCES += $(PERIPH_DRV_DIR)/src/stm32f4xx_spi.c
-SOURCES += $(PERIPH_DRV_DIR)/src/misc.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_adc.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_crc.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_dma.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_exti.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_gpio.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_pwr.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_rcc.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_tim.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_usart.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_spi.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_utils.c
 
-SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f40_41xxx.s
+SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 
-CPPFLAGS += -DSTM32F40_41xxx
+CPPFLAGS += -DSTM32F405xx
 CPPFLAGS += -DHSE_VALUE=8000000
+CPPFLAGS += -DHSI_VALUE=16000000
+CPPFLAGS += -DHSE_STARTUP_TIMEOUT=0x05000
 LDSCRIPT = stm32_flash.ld
 
 #============================================================================

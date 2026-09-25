@@ -770,12 +770,10 @@ static uint32_t DCD_HandleEnumDone_ISR(USB_OTG_CORE_HANDLE *pdev)
   
   USB_OTG_GINTSTS_TypeDef  gintsts;
   USB_OTG_GUSBCFG_TypeDef  gusbcfg;
-  RCC_ClocksTypeDef RCC_Clocks;
   USB_OTG_EP0Activate(pdev);
   
-  /* Get HCLK frequency */
-  RCC_GetClocksFreq(&RCC_Clocks);
-  hclk = RCC_Clocks.HCLK_Frequency;
+  /* Get HCLK frequency (stmbl: AHB prescaler is 1, no StdPeriph RCC driver) */
+  hclk = SystemCoreClock;
 
   /* Clear default TRDT value and Set USB turn-around time based on device speed and PHY interface. */
   gusbcfg.d32 = USB_OTG_READ_REG32(&pdev->regs.GREGS->GUSBCFG);

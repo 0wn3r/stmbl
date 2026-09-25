@@ -63,18 +63,12 @@ void USB_OTG_BSP_Init(USB_OTG_CORE_HANDLE *pdev) {
 
   // Configure DM and DP Pins
   //
-  GPIO_PinAFConfig(GPIOA, GPIO_PinSource11, GPIO_AF_OTG1_FS);
-  GPIO_PinAFConfig(GPIOA, GPIO_PinSource12, GPIO_AF_OTG1_FS);
-
-  GPIO_Init(GPIOA, &(GPIO_InitTypeDef){.GPIO_Pin = GPIO_Pin_11 | GPIO_Pin_12, .GPIO_Speed = GPIO_Speed_50MHz, .GPIO_Mode = GPIO_Mode_AF, .GPIO_OType = GPIO_OType_PP, .GPIO_PuPd = GPIO_PuPd_NOPULL});
+  LL_GPIO_Init(GPIOA, &(LL_GPIO_InitTypeDef){.Pin = LL_GPIO_PIN_11 | LL_GPIO_PIN_12, .Speed = LL_GPIO_SPEED_FREQ_HIGH, .Mode = LL_GPIO_MODE_ALTERNATE, .OutputType = LL_GPIO_OUTPUT_PUSHPULL, .Pull = LL_GPIO_PULL_NO, .Alternate = LL_GPIO_AF_10});
 }
 
 void USB_OTG_BSP_EnableInterrupt(USB_OTG_CORE_HANDLE *pdev) {
-  NVIC_Init(&(NVIC_InitTypeDef){
-      .NVIC_IRQChannel                   = OTG_FS_IRQn,
-      .NVIC_IRQChannelPreemptionPriority = 15,
-      .NVIC_IRQChannelSubPriority        = 0,
-      .NVIC_IRQChannelCmd                = ENABLE});
+  NVIC_SetPriority(OTG_FS_IRQn, 15);
+  NVIC_EnableIRQ(OTG_FS_IRQn);
 }
 
 
