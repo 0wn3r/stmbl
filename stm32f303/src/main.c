@@ -164,6 +164,14 @@ void reset(char *ptr) {
 COMMAND("reset", reset, "reset STMBL");
 
 int main(void) {
+  // Copy the rt path into CCM RAM (see the .ccmram section in the linker
+  // script). The startup code only copies .data. Nothing that runs before
+  // this point lives in CCM.
+  extern uint32_t _siccmram, _sccmram, _eccmram;
+  for(uint32_t *src = &_siccmram, *dst = &_sccmram; dst < &_eccmram;) {
+    *dst++ = *src++;
+  }
+
   // Relocate interrupt vectors
   extern void *g_pfnVectors;
   SCB->VTOR = (uint32_t)&g_pfnVectors;
