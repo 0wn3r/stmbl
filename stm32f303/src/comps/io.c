@@ -19,6 +19,15 @@ HAL_PIN(iw);
 //total current
 HAL_PIN(iabs);
 
+// Software overcurrent trip that follows the configured current: iabs above
+// oc_k * max_cur (at least oc_min, at most ABS_MAX_CURRENT) stops the bridge in
+// the same tick. max_cur comes from the f4 (ls0.max_cur, conf0.max_ac_cur times
+// the fault scale). Until 2026-09 the only software trip was a fixed 30 A.
+HAL_PIN(max_cur);
+HAL_PIN(oc_k);    // default 1.3
+HAL_PIN(oc_min);  // default 5 A
+HAL_PIN(oc_lim);  // the limit in force [A], out
+
 //phase voltage
 HAL_PIN(u);
 HAL_PIN(v);
@@ -181,6 +190,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   HAL_GPIO_Init(HV_FAULT_PORT, &GPIO_InitStruct);
 #endif
   PIN(dac) = 0;
+  PIN(oc_k)   = 1.3;
+  PIN(oc_min) = 5.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -235,6 +246,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     if(err_filter(&(ctx->overcurrent_error), 5.0, 0.001, PIN(iabs) > ABS_MAX_CURRENT * 0.95)) {
       ctx->fault = HV_OVERCURRENT_RMS;
+    }
+
+    PIN(oc_lim) = PIN(max_cur) > 0.0 ? CLAMP(PIN(oc_k) * PIN(max_cur), PIN(oc_min), ABS_MAX_CURRENT) : ABS_MAX_CURRENT;
+    if(PIN(iabs) > PIN(oc_lim)) {
+      ctx->fault = HV_OVERCURRENT_PEAK;
     }
 
     if(PIN(iabs) > ABS_MAX_CURRENT) {
