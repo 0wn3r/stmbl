@@ -44,6 +44,10 @@ HAL_PIN(cu);
 HAL_PIN(cv);
 HAL_PIN(cw);
 
+// time rt spent waiting for the current ADC DMA, us (diagnostic)
+HAL_PIN(wait);
+HAL_PIN(wait_max);
+
 //enable in
 HAL_PIN(hv_en);
 
@@ -118,6 +122,11 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   PIN(brk_present) = 0.0;
   PIN(brk)         = 0.0;
+
+  // cycle counter for the wait pins
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
   GPIO_InitTypeDef GPIO_InitStruct;
   //LED
@@ -195,10 +204,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct io_ctx_t *ctx      = (struct io_ctx_t *)ctx_ptr;
   struct io_pin_ctx_t *pins = (struct io_pin_ctx_t *)pin_ptr;
 
+  uint32_t wait_start = DWT->CYCCNT;
   while(!(DMA1->ISR & DMA_ISR_TCIF1)) {
   }
   while(!(DMA2->ISR & DMA_ISR_TCIF5)) {
   }
+  PIN(wait)     = (float)(DWT->CYCCNT - wait_start) * (1000000.0 / (float)SystemCoreClock);
+  PIN(wait_max) = MAX(PIN(wait_max), PIN(wait));
 
   DMA1->IFCR = DMA_IFCR_CTCIF1;
   DMA2->IFCR = DMA_IFCR_CTCIF5;

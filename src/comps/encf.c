@@ -31,6 +31,11 @@ HAL_PIN(crc_er);
 HAL_PIN(freq);
 HAL_PIN(bit_ticks);
 
+// rt section times, us (diagnostic): frame decode, crc and position, dma restart
+HAL_PIN(t_dec);
+HAL_PIN(t_pos);
+HAL_PIN(t_end);
+
 static volatile uint32_t sendf;
 static uint32_t send_counterf;
 static volatile uint16_t tim_data[160];
@@ -106,6 +111,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
   struct encf_pin_ctx_t *pins = (struct encf_pin_ctx_t *)pin_ptr;
   GPIO_InitTypeDef GPIO_InitStruct;
+
+  // cycle counter for the section time pins
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
   //TX enable
   GPIO_InitStruct.GPIO_Pin   = GPIO_Pin_15;
@@ -199,6 +208,7 @@ static inline void set_bits(uint32_t *w, int a, int b) {
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx      = (struct encf_ctx_t *)ctx_ptr;
   struct encf_pin_ctx_t *pins = (struct encf_pin_ctx_t *)pin_ptr;
+  uint32_t t0                 = DWT->CYCCNT;
 
   uint32_t count = ARRAY_SIZE(tim_data) - DMA1_Stream0->NDTR;
   PIN(dma)       = count;
@@ -233,6 +243,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     memcpy((void *)print_buf, (void *)data.enc_data, 10);
     sendf = 1;
   }
+  uint32_t t1 = DWT->CYCCNT;
   if(bits_sum > 50) {
     //check crc, MSB first: http://freeby.mesanet.com/fabsread.pas
     //bit k of crc is the old crc[k]; feedback taps are bits 0, 2 and 4
@@ -285,6 +296,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(state)    = 1;
     state_counter = 0;
   }
+  uint32_t t2 = DWT->CYCCNT;
   //reset timer
   FB0_ENC_TIM->CNT  = 0;
   FB0_ENC_TIM->CCR1 = 0;
@@ -296,6 +308,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_Cmd(DMA1_Stream0, DISABLE);
   DMA_ClearFlag(DMA1_Stream0, DMA_FLAG_TCIF0);
   DMA_Cmd(DMA1_Stream0, ENABLE);
+
+  const float us = 1000000.0 / (float)SystemCoreClock;
+  PIN(t_dec)     = (float)(t1 - t0) * us;
+  PIN(t_pos)     = (float)(t2 - t1) * us;
+  PIN(t_end)     = (float)(DWT->CYCCNT - t2) * us;
 }
 
 static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
