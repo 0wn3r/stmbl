@@ -5,7 +5,7 @@ LV_SRC_COMPS += src/comps/hv.c
 # F4 LL port pending: LV_SRC_COMPS += src/comps/sserial.c
 # F4 LL port pending: LV_SRC_COMPS += src/comps/yaskawa.c
 # F4 LL port pending: LV_SRC_COMPS += src/comps/encs.c
-# F4 LL port pending: LV_SRC_COMPS += src/comps/encf.c
+LV_SRC_COMPS += src/comps/encf.c
 # F4 LL port pending: LV_SRC_COMPS += src/comps/endat.c
 
 # F4 LL port pending: LV_SRC_COMPS += src/comps/usart.c
