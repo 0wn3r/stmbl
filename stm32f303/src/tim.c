@@ -90,11 +90,13 @@ void MX_TIM8_Init(void) {
   sBreakDeadTimeConfig.DeadTime         = PWM_DEADTIME;
   sBreakDeadTimeConfig.BreakState       = TIM_BREAK_ENABLE;
   sBreakDeadTimeConfig.BreakPolarity    = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.BreakFilter      = 0xa;  //0.55uS
+  // 0xF: fDTS/32, N = 8. The sense nodes ring for about 0.5 us after every
+  // edge; a real short still trips well inside the short-circuit time.
+  sBreakDeadTimeConfig.BreakFilter      = 0xf;
   // BRK2 carries COMP1, phase W's overcurrent comparator (main.c)
   sBreakDeadTimeConfig.Break2State      = TIM_BREAK2_ENABLE;
   sBreakDeadTimeConfig.Break2Polarity   = TIM_BREAK2POLARITY_HIGH;
-  sBreakDeadTimeConfig.Break2Filter     = 0xa;  //0.55uS
+  sBreakDeadTimeConfig.Break2Filter     = 0xf;
   sBreakDeadTimeConfig.AutomaticOutput  = TIM_AUTOMATICOUTPUT_DISABLE;
   if(HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK) {
     Error_Handler();
