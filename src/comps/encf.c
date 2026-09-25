@@ -224,6 +224,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       set_bits(w, bits_sum, end);
     }
     bits_sum = end;
+    if(bits_sum == max_bits) {  //frame full, later captures change nothing
+      break;
+    }
   }
   //set remaining bits to 1
   set_bits(w, bits_sum, 77);
