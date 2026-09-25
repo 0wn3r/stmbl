@@ -333,6 +333,9 @@ int main(void) {
   hal_parse("curpid0.iq_cmd = ls0.q_cmd");
   hal_parse("idq0.pos = ls0.pos");
   hal_parse("idq0.mode = ls0.phase_mode");
+  hal_parse("idq0.si = dq0.si");  // dq0 runs first on the same ls0.pos
+  hal_parse("idq0.co = dq0.co");
+  hal_parse("idq0.ext_sc = 1");
   hal_parse("dq0.pos = ls0.pos");
   hal_parse("dq0.mode = ls0.phase_mode");
   hal_parse("io0.hv_en = ls0.en");
