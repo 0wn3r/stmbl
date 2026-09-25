@@ -13,7 +13,6 @@ load io
 load iit
 load pe
 link conf
-adc0.rt_prio = 1
 hv0.rt_prio = 10
 reslimit0.rt_prio = 3
 rev0.rt_prio = 4
