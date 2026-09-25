@@ -12,9 +12,9 @@ void OTG_FS_IRQHandler(void) {
 }
 
 void HAL_PCD_MspInit(PCD_HandleTypeDef *hpcd) {
-  // Enable peripheral clocks, kept as in the old USB_OTG_BSP_Init()
+  // Enable peripheral clocks
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-  RCC->AHB2ENR |= RCC_APB2ENR_SYSCFGEN;  // FIXME: SYSCFGEN is an APB2ENR bit, this sets a reserved AHB2ENR bit
+  RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;  // needed for SYSCFG->CMPCR below
   RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
 
   // enable I/O compensation cell to reduce the I/O noise on power supply
