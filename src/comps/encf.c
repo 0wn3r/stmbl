@@ -186,6 +186,16 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(freq)     = 1024000;
 }
 
+// set bits [a, b) of the frame words w
+static inline void set_bits(uint32_t *w, int a, int b) {
+  while(a < b) {
+    int n      = MIN(b - a, 32 - (a & 31));
+    uint32_t m = (n == 32) ? 0xffffffff : (((1u << n) - 1) << (a & 31));
+    w[a >> 5] |= m;
+    a += n;
+  }
+}
+
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx      = (struct encf_ctx_t *)ctx_ptr;
   struct encf_pin_ctx_t *pins = (struct encf_pin_ctx_t *)pin_ptr;
@@ -193,55 +203,45 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint32_t count = ARRAY_SIZE(tim_data) - DMA1_Stream0->NDTR;
   PIN(dma)       = count;
 
-  for(int i = 0; i < 10; i++) {
-    data.enc_data[i] = 0;
-  }
-
   //1 bit = 80 ticks 82e6/1.024e6
-  PIN(bit_ticks) = 82000000 / PIN(freq);
+  PIN(bit_ticks)      = 82000000 / PIN(freq);
+  const float per_bit = 1.0 / PIN(bit_ticks);
 
+  // The frame is built a word at a time: a run of ones is one or two ORs
+  // instead of a byte and shift per bit. Little endian, so bit j of w is bit
+  // j % 8 of enc_data[j / 8], the layout fanuc_t reads.
+  uint32_t w[3]      = {0, 0, 0};
   const int max_bits = sizeof(data.enc_data) * 8;
-  uint8_t bits_sum   = 0;
-  for(int i = 1; i < count; i++) {  //each capture form dma
-    //calculate time between edges
-    uint16_t diff = tim_data[i] - tim_data[i - 1];
-    //number of bits to set
-    int bits = (float)diff / PIN(bit_ticks) + 0.5;
-    if(i % 2 == 0) {  //line starts high, set every even numbered captures to 1
-      for(int j = bits_sum; j < bits + bits_sum && j < max_bits; j++) {
-        data.enc_data[j / 8] |= (1 << j % 8);
-      }
+  int bits_sum       = 0;
+  uint16_t prev      = tim_data[0];
+  for(uint32_t i = 1; i < count; i++) {  //each capture form dma
+    //time between edges, rounded to a number of bits
+    uint16_t t = tim_data[i];
+    int bits   = (float)(uint16_t)(t - prev) * per_bit + 0.5;
+    prev       = t;
+    int end    = MIN(bits_sum + bits, max_bits);
+    if((i & 1) == 0) {  //line starts high, set every even numbered captures to 1
+      set_bits(w, bits_sum, end);
     }
-    bits_sum = MIN(bits_sum + bits, max_bits);
+    bits_sum = end;
   }
   //set remaining bits to 1
-  for(int j = bits_sum; j < 77; j++) {
-    data.enc_data[j / 8] |= (1 << j % 8);
-  }
+  set_bits(w, bits_sum, 77);
+  memcpy((void *)data.enc_data, w, sizeof(data.enc_data));
 
   if(!sendf) {
     memcpy((void *)print_buf, (void *)data.enc_data, 10);
     sendf = 1;
   }
   if(bits_sum > 50) {
-    //check crc. TODO: use result, change to word/byte algorithm
-    //http://freeby.mesanet.com/fabsread.pas
-    uint8_t crc[5]    = {0, 0, 0, 0, 0};
-    uint8_t oldcrc[5] = {0, 0, 0, 0, 0};
-    for(uint8_t i = 76; i >= 1; i--) {
-      uint8_t bit = (data.enc_data[i / 8] & (1 << i % 8)) ? 1 : 0;
-      crc[0]      = oldcrc[4] ^ bit;
-      crc[1]      = oldcrc[0];
-      crc[2]      = oldcrc[1] ^ bit ^ oldcrc[4];
-      crc[3]      = oldcrc[2];
-      crc[4]      = oldcrc[3] ^ bit ^ oldcrc[4];
-      oldcrc[0]   = crc[0];
-      oldcrc[1]   = crc[1];
-      oldcrc[2]   = crc[2];
-      oldcrc[3]   = crc[3];
-      oldcrc[4]   = crc[4];
+    //check crc, MSB first: http://freeby.mesanet.com/fabsread.pas
+    //bit k of crc is the old crc[k]; feedback taps are bits 0, 2 and 4
+    uint32_t crc = 0;
+    for(int i = 76; i >= 1; i--) {
+      uint32_t fb = ((w[i >> 5] >> (i & 31)) ^ (crc >> 4)) & 1;
+      crc         = ((crc << 1) & 0x1f) ^ (fb ? 0x15 : 0);
     }
-    if(crc[0] == 0 && crc[1] == 0 && crc[2] == 0 && crc[3] == 0 && crc[4] == 0) {
+    if(crc == 0) {
       PIN(crc_ok)
       ++;
       int32_t pos = data.fanuc.pos_lo + (data.fanuc.pos_hi << 6);
