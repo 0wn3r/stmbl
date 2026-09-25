@@ -371,6 +371,7 @@ int main(void) {
   hal_parse("curpid0.ff = ls0.cur_ff");
   hal_parse("curpid0.kind = ls0.cur_ind");
   hal_parse("curpid0.max_cur = ls0.max_cur");
+  hal_parse("io0.max_cur = ls0.max_cur");
   hal_parse("curpid0.pwm_volt = ls0.pwm_volt");
   hal_parse("curpid0.vel = ls0.vel");
   hal_parse("curpid0.en = ls0.en");
