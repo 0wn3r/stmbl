@@ -24,7 +24,6 @@ SOURCES += src/stm32f4xx_it.c
 SOURCES += src/system_stm32f4xx.c #TODO: update this, system file from cmsis
 SOURCES += src/setup.c
 SOURCES += src/f4_flash.c
-SOURCES += src/usb_cdc.c
 SOURCES += src/config.c
 # SOURCES += src/hal_conf.c
 SOURCES += src/hal_tbl.c
@@ -61,36 +60,26 @@ SOURCES += src/conf_templates.c
 
 SOURCES += shared/ringbuf.c
 
-USB_VCP_DIR = lib/STM32_USB_Device_VCP-1.2.0
-
+# STM32 USB Device Library (Cube middleware) on HAL PCD
 CPPFLAGS += -DUSBD_PRODUCT_STRING='"STMBL Virtual ComPort"'
-CPPFLAGS += -DCDC_IN_FRAME_INTERVAL=1
 CPPFLAGS += -DAPP_RX_DATA_SIZE=4096
+INCDIRS += src/usb
+SOURCES += src/usb/usb_cdc.c
+SOURCES += src/usb/usbd_conf.c
+SOURCES += src/usb/usbd_desc.c
 
-INCDIRS += $(USB_VCP_DIR)/inc
-SOURCES += $(USB_VCP_DIR)/src/usbd_desc.c
+USB_DEVICE_DIR = lib/STM32_USB_Device_Library-2.11.4
+INCDIRS += $(USB_DEVICE_DIR)/Core/Inc
+INCDIRS += $(USB_DEVICE_DIR)/Class/CDC/Inc
+SOURCES += $(USB_DEVICE_DIR)/Core/Src/usbd_core.c
+SOURCES += $(USB_DEVICE_DIR)/Core/Src/usbd_ctlreq.c
+SOURCES += $(USB_DEVICE_DIR)/Core/Src/usbd_ioreq.c
+SOURCES += $(USB_DEVICE_DIR)/Class/CDC/Src/usbd_cdc.c
 
-USB_DEVICE_DIR = lib/STM32_USB_Device_Library-1.2.0
-
-INCDIRS += $(USB_DEVICE_DIR)/Class/cdc/inc
-SOURCES += $(USB_DEVICE_DIR)/Class/cdc/src/usbd_cdc_core.c
-
-INCDIRS += $(USB_DEVICE_DIR)/Core/inc
-SOURCES += $(USB_DEVICE_DIR)/Core/src/usbd_core.c
-SOURCES += $(USB_DEVICE_DIR)/Core/src/usbd_ioreq.c
-SOURCES += $(USB_DEVICE_DIR)/Core/src/usbd_req.c
-
-USB_DRIVER_DIR = lib/STM32_USB_OTG_Driver-2.2.0
-
-INCDIRS += $(USB_DRIVER_DIR)/inc
-SOURCES += $(USB_DRIVER_DIR)/src/usb_core.c
-SOURCES += $(USB_DRIVER_DIR)/src/usb_dcd.c
-SOURCES += $(USB_DRIVER_DIR)/src/usb_dcd_int.c
-
-# STM32CubeF4 LL drivers
+# STM32CubeF4 LL drivers, HAL only for USB (PCD) and flash
 CPPFLAGS += -DUSE_FULL_LL_DRIVER
 
-LL_DRV_DIR = lib/STM32F4xx_LL_Driver
+LL_DRV_DIR = lib/STM32F4xx_HAL_Driver
 
 INCDIRS += $(LL_DRV_DIR)/inc
 INCDIRS += lib/CMSIS/Include
@@ -107,6 +96,14 @@ SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_tim.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_usart.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_spi.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_utils.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_ll_usb.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_cortex.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_rcc.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_rcc_ex.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_gpio.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd.c
+SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd_ex.c
 
 SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 

@@ -48,6 +48,11 @@ void SysTick_Handler(void) {
   systime++;
 }
 
+// HAL (USB, flash) timebase: the 1 kHz SysTick above, no HAL_Init()
+uint32_t HAL_GetTick(void) {
+  return (uint32_t)systime;
+}
+
 //20kHz
 void TIM_SLAVE_HANDLER(void) {
   LL_TIM_ClearFlag_UPDATE(TIM_SLAVE);

@@ -21,6 +21,13 @@ void setup() {
 
   NVIC_SetPriorityGrouping(3);  // 4 bits preemption, 0 bits subpriority
 
+  // systick timer, before usb_init(): the HAL USB driver waits with HAL_Delay()
+  LL_RCC_GetSystemClocksFreq(&RCC_Clocks);
+  SysTick_Config(RCC_Clocks.HCLK_Frequency / 1000);
+  //systick prio
+
+  NVIC_SetPriority(SysTick_IRQn, 14);
+
   setup_res();
   usb_init();
 
@@ -36,12 +43,6 @@ void setup() {
   GPIO_InitStructure.Pin = LL_GPIO_PIN_1 | LL_GPIO_PIN_0;
   LL_GPIO_Init(GPIOD, &GPIO_InitStructure);
 
-  // systick timer
-  LL_RCC_GetSystemClocksFreq(&RCC_Clocks);
-  SysTick_Config(RCC_Clocks.HCLK_Frequency / 1000);
-  //systick prio
-
-  NVIC_SetPriority(SysTick_IRQn, 14);
 }
 
 static const uint32_t adc_reg_rank[16] = {
