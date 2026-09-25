@@ -81,6 +81,23 @@ static void bridge_off(void) {
 #endif
 }
 
+// Independent watchdog on the 40 kHz LSI, kicked by hal.c after every rt,
+// frt and nrt run (HAL_WATCHDOG). It fires only on a hang; after the reset
+// the pwm pins are inputs and HV_EN's pull-up holds the gates off.
+void hal_init_watchdog(float time) {
+  IWDG->KR  = 0xCCCC;  // start; from here only a reset stops it
+  IWDG->KR  = 0x5555;  // unlock PR and RLR
+  IWDG->PR  = 0;       // LSI / 4: 0.1 ms per count
+  IWDG->RLR = (uint32_t)CLAMP(time * 10000.0, 1.0, 4095.0);
+  while(IWDG->SR) {
+  }
+  IWDG->KR = 0xAAAA;
+}
+
+void hal_reset_watchdog() {
+  IWDG->KR = 0xAAAA;
+}
+
 void TIM8_UP_IRQHandler() {
   GPIOA->BSRR |= GPIO_PIN_9;
   __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
@@ -375,6 +392,7 @@ int main(void) {
   // hal_init_nrt();
   // error foo
   hal_start();
+  hal_init_watchdog(0.005);
 
   while(1) {
     hal_run_nrt();
