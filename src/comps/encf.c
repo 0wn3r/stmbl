@@ -195,6 +195,25 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(freq)     = 1024000;
 }
 
+// crc5 of four bits (MSB first) from a zero register
+static const uint8_t crc5_nib[16] = {0x00, 0x15, 0x1f, 0x0a, 0x0b, 0x1e, 0x14, 0x01, 0x16, 0x03, 0x09, 0x1c, 0x1d, 0x08, 0x02, 0x17};
+
+// feed 32 bits into the crc5, MSB first
+static inline uint32_t crc5_word(uint32_t crc, uint32_t x) {
+  for(int j = 28; j >= 0; j -= 4) {
+    crc = ((crc << 4) & 0x1f) ^ crc5_nib[((crc >> 1) ^ (x >> j)) & 0xf];
+  }
+  return crc;
+}
+
+// angle of a count on an n bit circle, in [-pi, pi). Wrapping the integer
+// replaces mod()'s fmodf and is exact; same result as mod() to within one
+// float rounding.
+static inline float wrap_bits(uint32_t count, int n) {
+  int32_t c = (int32_t)(count << (32 - n)) >> (32 - n);
+  return (float)c * (2.0 * M_PI / (float)(1 << n));
+}
+
 // set bits [a, b) of the frame words w
 static inline void set_bits(uint32_t *w, int a, int b) {
   while(a < b) {
@@ -246,12 +265,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint32_t t1 = DWT->CYCCNT;
   if(bits_sum > 50) {
     //check crc, MSB first: http://freeby.mesanet.com/fabsread.pas
-    //bit k of crc is the old crc[k]; feedback taps are bits 0, 2 and 4
+    //bit k of crc is the old crc[k]; feedback taps are bits 0, 2 and 4.
+    //Four bits per step: bits 76..65, then 64..33 and 32..1 as words.
     uint32_t crc = 0;
-    for(int i = 76; i >= 1; i--) {
-      uint32_t fb = ((w[i >> 5] >> (i & 31)) ^ (crc >> 4)) & 1;
-      crc         = ((crc << 1) & 0x1f) ^ (fb ? 0x15 : 0);
+    for(int j = 9; j >= 1; j -= 4) {
+      crc = ((crc << 4) & 0x1f) ^ crc5_nib[((crc >> 1) ^ (w[2] >> j)) & 0xf];
     }
+    crc = crc5_word(crc, (w[2] << 31) | (w[1] >> 1));
+    crc = crc5_word(crc, (w[1] << 31) | (w[0] >> 1));
     if(crc == 0) {
       PIN(crc_ok)
       ++;
@@ -259,7 +280,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(index)  = data.fanuc.no_index;
       PIN(batt)   = data.fanuc.bat;
 
-      PIN(abs_pos) = mod((float)pos * 2.0 * M_PI / (1 << 22));
+      PIN(abs_pos) = wrap_bits(pos, 22);
 
       if(PIN(index) > 0.0) {
         pos_offset    = pos;
@@ -272,7 +293,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(pos)      = PIN(abs_pos);
       } else {
         state_counter = 3;
-        PIN(pos)      = mod((float)(pos + pos_offset + ((uint32_t)PIN(pos_offset) << 6)) * 2.0 * M_PI / (1 << 22));
+        PIN(pos)      = wrap_bits(pos + pos_offset + ((uint32_t)PIN(pos_offset) << 6), 22);
         PIN(state)    = 3;
       }
 
@@ -283,7 +304,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
 
       pos          = data.fanuc.com_pos;
-      PIN(com_pos) = mod(pos * 2.0 * M_PI / 1024);
+      PIN(com_pos) = wrap_bits(pos, 10);
       PIN(error)   = 0;
     } else {
       PIN(crc_er)
