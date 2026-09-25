@@ -42,6 +42,7 @@ static void tx_kick(void) {
   }
 }
 
+// SOF, and after every USB interrupt (see OTG_FS_IRQHandler)
 void cdc_sof(void) {
   tx_kick();
 }
@@ -134,12 +135,17 @@ int cdc_tx(void *data, uint32_t len) {
     return 0;
   }
   cdc_tx_put((const uint8_t *)data, len);
+  NVIC_SetPendingIRQ(OTG_FS_IRQn);  // start sending from the USB interrupt
   return len;
 }
 
 // Text waits a little for the interrupt to drain, then drops what does not
-// fit rather than overwriting what has not been sent.
+// fit rather than overwriting what has not been sent. Without a host it is
+// dropped right away.
 int cdc_tx_text(const char *data, int len) {
+  if(!cdc_is_connected()) {
+    return len;  // no host, nothing will drain the ring: drop instead of spinning
+  }
   int sent = 0;
   for(uint32_t spin = 0; len > 0 && spin < 200000; spin++) {
     uint32_t room = cdc_tx_room();
@@ -148,6 +154,7 @@ int cdc_tx_text(const char *data, int len) {
     }
     uint32_t n = (uint32_t)len < room ? (uint32_t)len : room;
     cdc_tx_put((const uint8_t *)data + sent, n);
+    NVIC_SetPendingIRQ(OTG_FS_IRQn);
     sent += n;
     len -= n;
   }

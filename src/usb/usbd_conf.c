@@ -7,8 +7,13 @@
 
 PCD_HandleTypeDef hpcd_fs;
 
+void cdc_sof(void);
+
+// Also entered by cdc_tx*() pending the IRQ, so new data starts sending right
+// away instead of on the next SOF, always from this one interrupt context.
 void OTG_FS_IRQHandler(void) {
   HAL_PCD_IRQHandler(&hpcd_fs);
+  cdc_sof();
 }
 
 void HAL_PCD_MspInit(PCD_HandleTypeDef *hpcd) {
@@ -45,8 +50,6 @@ void HAL_PCD_DataOutStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum) {
 void HAL_PCD_DataInStageCallback(PCD_HandleTypeDef *hpcd, uint8_t epnum) {
   USBD_LL_DataInStage(hpcd->pData, epnum, hpcd->IN_ep[epnum].xfer_buff);
 }
-
-void cdc_sof(void);
 
 void HAL_PCD_SOFCallback(PCD_HandleTypeDef *hpcd) {
   USBD_LL_SOF(hpcd->pData);
