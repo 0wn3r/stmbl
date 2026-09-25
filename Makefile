@@ -174,6 +174,7 @@ CXXFLAGS += -Wall
 #
 LDFLAGS += $(OPT)
 LDFLAGS += -lm
+LDFLAGS += -specs=nosys.specs
 LDFLAGS += -Wl,-Map=$(TARGET).map,--cref
 LDFLAGS += -Wl,--gc-sections
 
