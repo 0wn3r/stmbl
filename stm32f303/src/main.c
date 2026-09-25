@@ -71,6 +71,16 @@ uint32_t hal_get_systick_freq() {
 void SystemClock_Config(void);
 void Error_Handler(void);
 
+// TIM8 runs on its own: once the rt stops (overrun, MISC_ERROR, stop) the
+// last compares stay latched with no current loop behind them. Nothing on
+// that path reliably calls rt_stop, so the tick checks the state instead.
+static void bridge_off(void) {
+  TIM8->BDTR &= ~TIM_BDTR_MOE;
+#ifdef HV_EN_PIN
+  HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
+#endif
+}
+
 void TIM8_UP_IRQHandler() {
   GPIOA->BSRR |= GPIO_PIN_9;
   __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
@@ -78,6 +88,9 @@ void TIM8_UP_IRQHandler() {
   if(__HAL_TIM_GET_FLAG(&htim8, TIM_IT_UPDATE) == SET) {
     hal_stop();
     hal.hal_state = RT_TOO_LONG;
+  }
+  if(hal.rt_state == RT_STOP) {
+    bridge_off();
   }
   GPIOA->BSRR |= GPIO_PIN_9 << 16;
 }
