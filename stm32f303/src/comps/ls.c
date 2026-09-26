@@ -4,12 +4,11 @@
 #include "math.h"
 #include "defines.h"
 #include "angle.h"
-#include "stm32f3xx_hal.h"
+#include "periph.h"
 #include "common.h"
 #include "f3hw.h"
 #include "ringbuf.h"
 
-extern CRC_HandleTypeDef hcrc;
 
 HAL_COMP(ls);
 
@@ -88,37 +87,43 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct ls_ctx_t *ctx = (struct ls_ctx_t *)ctx_ptr;
   // struct ls_pin_ctx_t * pins = (struct ls_pin_ctx_t *)pin_ptr;
 
-  GPIO_InitTypeDef GPIO_InitStruct;
-
   /* Peripheral clock enable */
-  __HAL_RCC_USART3_CLK_ENABLE();
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART3);
 
-  UART_HandleTypeDef huart3;
-  huart3.Instance                    = USART3;
-  huart3.Init.BaudRate               = DATABAUD;
-  huart3.Init.WordLength             = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits               = UART_STOPBITS_1;
-  huart3.Init.Parity                 = UART_PARITY_NONE;
-  huart3.Init.Mode                   = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl              = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling           = UART_OVERSAMPLING_8;
-  huart3.Init.OneBitSampling         = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  // 8N1, 8x oversampling, clocked from SYSCLK; DMA requests and overrun
+  // disable are set first and kept by the init, as with HAL_UART_Init()
   USART3->CR3 |= USART_CR3_DMAT | USART_CR3_DMAR | USART_CR3_OVRDIS;
-  HAL_UART_Init(&huart3);
+  LL_USART_Disable(USART3);
+  LL_USART_Init(USART3, &(LL_USART_InitTypeDef){
+                            .BaudRate            = DATABAUD,
+                            .DataWidth           = LL_USART_DATAWIDTH_8B,
+                            .StopBits            = LL_USART_STOPBITS_1,
+                            .Parity              = LL_USART_PARITY_NONE,
+                            .TransferDirection   = LL_USART_DIRECTION_TX_RX,
+                            .HardwareFlowControl = LL_USART_HWCONTROL_NONE,
+                            .OverSampling        = LL_USART_OVERSAMPLING_8,
+                        });
+  LL_USART_DisableOneBitSamp(USART3);
+  USART3->CR2 &= ~(USART_CR2_LINEN | USART_CR2_CLKEN);
+  USART3->CR3 &= ~(USART_CR3_SCEN | USART_CR3_HDSEL | USART_CR3_IREN);
+  LL_USART_Enable(USART3);
+  while(!LL_USART_IsActiveFlag_TEACK(USART3) || !LL_USART_IsActiveFlag_REACK(USART3)) {
+  }
 
   /**USART3 GPIO Configuration    
    PB10     ------> USART3_TX
    PB11     ------> USART3_RX 
    */
-  GPIO_InitStruct.Pin       = GPIO_PIN_10 | GPIO_PIN_11;
-  GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull      = GPIO_PULLUP;
-  GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOB, &(LL_GPIO_InitTypeDef){
+                          .Pin        = LL_GPIO_PIN_10 | LL_GPIO_PIN_11,
+                          .Mode       = LL_GPIO_MODE_ALTERNATE,
+                          .Speed      = LL_GPIO_SPEED_FREQ_HIGH,
+                          .OutputType = LL_GPIO_OUTPUT_PUSHPULL,
+                          .Pull       = LL_GPIO_PULL_UP,
+                          .Alternate  = LL_GPIO_AF_7,
+                      });
 
-  __HAL_RCC_DMA1_CLK_ENABLE();
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
 
   //TX DMA
   DMA1_Channel2->CCR &= (uint16_t)(~DMA_CCR_EN);
@@ -195,7 +200,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint32_t fault = 0;
 
   if(dma_pos == sizeof(packet_to_hv_t)) {
-    uint32_t crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&(ctx->packet_to_hv.header.slave_addr), sizeof(packet_to_hv_t) / 4 - 1);
+    uint32_t crc = crc_calc((uint32_t *)&(ctx->packet_to_hv.header.slave_addr), sizeof(packet_to_hv_t) / 4 - 1);
     if(ctx->packet_to_hv.header.slave_addr == 0 && ctx->packet_to_hv.header.len == (sizeof(packet_to_hv_t) - sizeof(stmbl_talk_header_t)) / 4 && crc == ctx->packet_to_hv.header.crc) {
       //
       // An out of range address means the f4 was flashed with a newer config
@@ -277,7 +282,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   if(USART3->ISR & USART_ISR_RTOF) {                                    // idle line
     USART3->ICR |= USART_ICR_RTOCF | USART_ICR_FECF | USART_ICR_ORECF;  // timeout clear flag
-    GPIOA->BSRR |= GPIO_PIN_10;
+    GPIOA->BSRR |= LL_GPIO_PIN_10;
 
     PIN(idle)
     ++;
@@ -290,7 +295,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     DMA1_Channel3->CNDTR = sizeof(packet_to_hv_t);
     DMA1_Channel3->CCR |= DMA_CCR_EN;
     dma_pos = 0;
-    GPIOA->BSRR |= GPIO_PIN_10 << 16;
+    GPIOA->BSRR |= LL_GPIO_PIN_10 << 16;
 
     //ctx->send = 1;
   }
@@ -328,7 +333,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     } else {
       ctx->packet_from_hv.buf = 0x0;
     }
-    ctx->packet_from_hv.header.crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)&(ctx->packet_from_hv.header.slave_addr), sizeof(packet_from_hv_t) / 4 - 1);
+    ctx->packet_from_hv.header.crc = crc_calc((uint32_t *)&(ctx->packet_from_hv.header.slave_addr), sizeof(packet_from_hv_t) / 4 - 1);
 
     // start tx DMA
     DMA1_Channel2->CCR &= (uint16_t)(~DMA_CCR_EN);

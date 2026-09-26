@@ -4,7 +4,7 @@
 #include "math.h"
 #include "defines.h"
 #include "angle.h"
-#include "tim.h"
+#include "periph.h"
 #include "f3hw.h"
 #include "common.h"
 

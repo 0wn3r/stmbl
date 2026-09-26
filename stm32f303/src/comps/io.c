@@ -4,7 +4,7 @@
 #include "math.h"
 #include "defines.h"
 #include "angle.h"
-#include "stm32f3xx_hal.h"
+#include "periph.h"
 #include "f3hw.h"
 #include "common.h"
 
@@ -119,24 +119,25 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(brk_present) = 0.0;
   PIN(brk)         = 0.0;
 
-  GPIO_InitTypeDef GPIO_InitStruct;
+  LL_GPIO_InitTypeDef GPIO_InitStruct;
+  LL_GPIO_StructInit(&GPIO_InitStruct);
   //LED
   GPIO_InitStruct.Pin   = LED_PIN;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_PORT, &GPIO_InitStruct);
+  GPIO_InitStruct.Mode  = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  LL_GPIO_Init(LED_PORT, &GPIO_InitStruct);
 
   // BRK
   GPIO_InitStruct.Pin   = BRK_PIN;
-  GPIO_InitStruct.Mode  = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(BRK_PORT, &GPIO_InitStruct);
+  GPIO_InitStruct.Mode  = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  LL_GPIO_Init(BRK_PORT, &GPIO_InitStruct);
 
-  if(HAL_GPIO_ReadPin(BRK_PORT, BRK_PIN)) {  // BRK circuit detected
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    HAL_GPIO_Init(BRK_PORT, &GPIO_InitStruct);
+  if(LL_GPIO_IsInputPinSet(BRK_PORT, BRK_PIN)) {  // BRK circuit detected
+    GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(BRK_PORT, &GPIO_InitStruct);
     PIN(brk_present) = 1.0;
   }
 
@@ -176,17 +177,17 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
 #ifdef HV_EN_PIN
   GPIO_InitStruct.Pin   = HV_EN_PIN;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
-  HAL_GPIO_Init(HV_EN_PORT, &GPIO_InitStruct);
+  GPIO_InitStruct.Mode  = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(HV_EN_PORT, &GPIO_InitStruct);
 #endif
 
 #ifdef HV_FAULT_PIN
   GPIO_InitStruct.Pin  = HV_FAULT_PIN;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(HV_FAULT_PORT, &GPIO_InitStruct);
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(HV_FAULT_PORT, &GPIO_InitStruct);
 #endif
   PIN(dac) = 0;
 }
@@ -257,14 +258,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         TIM8->BDTR |= TIM_BDTR_MOE;
 #ifdef HV_EN_PIN
         //clear driver enable pin
-        HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_RESET);
+        LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
 #endif
         ctx->enabled = 1;
       }
       if(ctx->fault == NO_ERROR) {
 #ifdef HV_FAULT_PIN
         //read fault pin from driver
-        if(PIN(ignore_fault_pin) <= 0.0 && err_filter(&(ctx->fault_pin_error), 5.0, 0.01, HAL_GPIO_ReadPin(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY)) {
+        if(PIN(ignore_fault_pin) <= 0.0 && err_filter(&(ctx->fault_pin_error), 5.0, 0.01, LL_GPIO_IsInputPinSet(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY)) {
           ctx->fault = HV_FAULT_ERROR;
         }
 #endif
@@ -277,7 +278,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->fault_pin_error = 0;
 #ifdef HV_EN_PIN
         //set driver enable pin
-        HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
+        LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
 #endif
       }
     } else {
@@ -285,14 +286,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->fault   = NO_ERROR;
 #ifdef HV_EN_PIN
       //set driver enable pin
-      HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
+      LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
 #endif
     }
 
     if(PIN(brk) > 0.0) {
-      HAL_GPIO_WritePin(BRK_PORT, BRK_PIN, GPIO_PIN_RESET);
+      LL_GPIO_ResetOutputPin(BRK_PORT, BRK_PIN);
     } else {
-      HAL_GPIO_WritePin(BRK_PORT, BRK_PIN, GPIO_PIN_SET);
+      LL_GPIO_SetOutputPin(BRK_PORT, BRK_PIN);
     }
   }
 
@@ -315,7 +316,11 @@ void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     led = 2;
   }
 
-  HAL_GPIO_WritePin(LED_PORT, LED_PIN, BLINK(led) > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  if(BLINK(led) > 0) {
+    LL_GPIO_SetOutputPin(LED_PORT, LED_PIN);
+  } else {
+    LL_GPIO_ResetOutputPin(LED_PORT, LED_PIN);
+  }
 
   PIN(hv_temp)  = r2temp(HV_R(ADC(ctx->hv_temp >> 16))) * 0.01 + PIN(hv_temp) * 0.99;
   PIN(mot_temp) = r2temp(MOT_R(MOT_REF(ADC(ctx->mot_temp >> 16)))) * 0.01 + PIN(mot_temp) * 0.99;
