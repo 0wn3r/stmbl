@@ -7,6 +7,13 @@
 #include "stm32f3xx_ll_bus.h"
 #include "stm32f3xx_ll_gpio.h"
 #include "stm32f3xx_ll_usart.h"
+#include "stm32f3xx_ll_rcc.h"
+#include "stm32f3xx_ll_system.h"
+#include "stm32f3xx_ll_pwr.h"
+#include "stm32f3xx_ll_tim.h"
+#include "stm32f3xx_ll_adc.h"
+#include "stm32f3xx_ll_dac.h"
+#include "stm32f3xx_ll_opamp.h"
 
 void delay_ms(uint32_t ms);
 

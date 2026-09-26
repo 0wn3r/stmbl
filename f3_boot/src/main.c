@@ -23,6 +23,11 @@
 #include "stm32f3xx_ll_bus.h"
 #include "stm32f3xx_ll_gpio.h"
 #include "stm32f3xx_ll_usart.h"
+#include "stm32f3xx_ll_rcc.h"
+#include "stm32f3xx_ll_system.h"
+#include "stm32f3xx_ll_pwr.h"
+#include "stm32f3xx_ll_tim.h"
+#include "stm32f3xx_ll_rtc.h"
 #include "version.h"
 #include "common.h"
 #include "f3hw.h"
@@ -298,37 +303,36 @@ void uart_init() {
 /* RTC init function: 24h, prescalers 127/255, no output, only if the calendar
    was never set up (HAL_RTC_Init()) */
 static void rtc_init(void) {
-  if(RTC->ISR & RTC_ISR_INITS) {
+  if(LL_RTC_IsActiveFlag_INITS(RTC)) {
     return;
   }
-  RTC->WPR = 0xCA;
-  RTC->WPR = 0x53;
+  LL_RTC_DisableWriteProtection(RTC);
   if(!(RTC->ISR & RTC_ISR_INITF)) {
     RTC->ISR |= RTC_ISR_INIT;
     uint64_t start = systime;
     while(!(RTC->ISR & RTC_ISR_INITF)) {
       if(systime - start > 1000) {
-        RTC->WPR = 0xFF;
+        LL_RTC_EnableWriteProtection(RTC);
         Error_Handler();
       }
     }
   }
-  RTC->CR &= ~(RTC_CR_FMT | RTC_CR_OSEL | RTC_CR_POL);
-  RTC->PRER = 255;
-  RTC->PRER |= 127U << RTC_PRER_PREDIV_A_Pos;
+  RTC->CR &= ~(RTC_CR_FMT | RTC_CR_OSEL | RTC_CR_POL);  // 24h, no output, high polarity
+  LL_RTC_SetSynchPrescaler(RTC, 255);
+  LL_RTC_SetAsynchPrescaler(RTC, 127);
   RTC->ISR &= ~RTC_ISR_INIT;
   if(!(RTC->CR & RTC_CR_BYPSHAD)) {
     RTC->ISR &= ~(RTC_ISR_INIT | RTC_ISR_RSF);
     uint64_t start = systime;
     while(!(RTC->ISR & RTC_ISR_RSF)) {
       if(systime - start > 1000) {
-        RTC->WPR = 0xFF;
+        LL_RTC_EnableWriteProtection(RTC);
         Error_Handler();
       }
     }
   }
-  RTC->TAFCR &= ~RTC_TAFCR_ALARMOUTTYPE;  // open drain
-  RTC->WPR = 0xFF;
+  LL_RTC_SetAlarmOutputType(RTC, LL_RTC_ALARM_OUTPUTTYPE_OPENDRAIN);
+  LL_RTC_EnableWriteProtection(RTC);
 }
 
 // TIM8 only times the rx framing here: 144 MHz / (2 * PWM_RES / 2), no outputs,
@@ -340,19 +344,20 @@ static void tim8_init(void) {
 
   uint32_t cr1 = TIM8->CR1;
   MODIFY_REG(cr1, TIM_CR1_DIR | TIM_CR1_CMS | TIM_CR1_CKD | TIM_CR1_ARPE, TIM_CR1_CMS);
-  TIM8->ARR = PWM_RES / 2;
-  TIM8->PSC = 0;
+  LL_TIM_SetAutoReload(TIM8, PWM_RES / 2);
+  LL_TIM_SetPrescaler(TIM8, 0);
 #ifdef PWM_INVERT
-  TIM8->RCR = 1;
+  LL_TIM_SetRepetitionCounter(TIM8, 1);
 #else
-  TIM8->RCR = 0;
+  LL_TIM_SetRepetitionCounter(TIM8, 0);
 #endif
-  TIM8->CR1 |= TIM_CR1_URS;  // load PSC/RCR without setting UIF
-  TIM8->EGR = TIM_EGR_UG;
+  LL_TIM_SetUpdateSource(TIM8, LL_TIM_UPDATESOURCE_COUNTER);  // load PSC/RCR without setting UIF
+  LL_TIM_GenerateEvent_UPDATE(TIM8);
   TIM8->CR1 = cr1;
 
   TIM8->SMCR &= ~(TIM_SMCR_SMS | TIM_SMCR_TS | TIM_SMCR_ETF | TIM_SMCR_ETPS | TIM_SMCR_ECE | TIM_SMCR_ETP | TIM_SMCR_MSM);
-  MODIFY_REG(TIM8->CR2, TIM_CR2_MMS | TIM_CR2_MMS2, TIM_CR2_MMS_1);
+  LL_TIM_SetTriggerOutput2(TIM8, LL_TIM_TRGO2_RESET);
+  LL_TIM_SetTriggerOutput(TIM8, LL_TIM_TRGO_UPDATE);
   TIM8->BDTR = PWM_DEADTIME | TIM_BDTR_BKP | TIM_BDTR_BK2P;  // breaks disabled
 }
 
@@ -366,7 +371,7 @@ int main(void) {
   /* Initialize all configured peripherals */
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_GPIOB | LL_AHB1_GRP1_PERIPH_GPIOC | LL_AHB1_GRP1_PERIPH_GPIOF);
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1 | LL_AHB1_GRP1_PERIPH_DMA2);
-  RCC->BDCR |= RCC_BDCR_RTCEN;
+  LL_RCC_EnableRTC();
 
   /*Configure GPIO pin Output Level */
   LL_GPIO_ResetOutputPin(LED_PORT, LED_PIN);
@@ -402,8 +407,8 @@ int main(void) {
     DMA1_Channel3->CCR |= DMA_CCR_EN;
 
     tim8_init();
-    TIM8->DIER |= TIM_DIER_UIE;
-    TIM8->CR1 |= TIM_CR1_CEN;
+    LL_TIM_EnableIT_UPDATE(TIM8);
+    LL_TIM_EnableCounter(TIM8);
   }
   RTC->BKP0R = 0x00000000;
 
@@ -419,7 +424,7 @@ int main(void) {
 // USART3 from SYSCLK, RTC from LSI, SysTick 1 kHz at priority 0.
 // Replaces HAL_Init() + the CubeMX SystemClock_Config().
 void SystemClock_Config(void) {
-  FLASH->ACR |= FLASH_ACR_PRFTBE;
+  LL_FLASH_EnablePrefetch();
   NVIC_SetPriorityGrouping(3);  // NVIC_PRIORITYGROUP_4
   LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
   NVIC_SetPriority(MemoryManagement_IRQn, 0);
@@ -429,53 +434,52 @@ void SystemClock_Config(void) {
   NVIC_SetPriority(DebugMonitor_IRQn, 0);
   NVIC_SetPriority(PendSV_IRQn, 0);
 
-  RCC->CR |= RCC_CR_HSEON;
-  while(!(RCC->CR & RCC_CR_HSERDY)) {
+  LL_RCC_HSE_Enable();
+  while(!LL_RCC_HSE_IsReady()) {
   }
-  MODIFY_REG(RCC->CFGR2, RCC_CFGR2_PREDIV, 0);  // HSE / 1
-  RCC->CSR |= RCC_CSR_LSION;
-  while(!(RCC->CSR & RCC_CSR_LSIRDY)) {
+  LL_RCC_LSI_Enable();
+  while(!LL_RCC_LSI_IsReady()) {
   }
-  RCC->CR &= ~RCC_CR_PLLON;
-  while(RCC->CR & RCC_CR_PLLRDY) {
+  LL_RCC_PLL_Disable();
+  while(LL_RCC_PLL_IsReady()) {
   }
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_PLLMUL | RCC_CFGR_PLLSRC, RCC_CFGR_PLLMUL9 | RCC_CFGR_PLLSRC_HSE_PREDIV);
-  RCC->CR |= RCC_CR_PLLON;
-  while(!(RCC->CR & RCC_CR_PLLRDY)) {
+  LL_RCC_PLL_ConfigDomain_SYS(LL_RCC_PLLSOURCE_HSE_DIV_1, LL_RCC_PLL_MUL_9);
+  LL_RCC_PLL_Enable();
+  while(!LL_RCC_PLL_IsReady()) {
   }
 
-  MODIFY_REG(FLASH->ACR, FLASH_ACR_LATENCY, FLASH_ACR_LATENCY_1);  // 2 wait states
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_CFGR_PPRE1_DIV16);
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, RCC_CFGR_PPRE2_DIV16);
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_HPRE, RCC_CFGR_HPRE_DIV1);
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_SW, RCC_CFGR_SW_PLL);
-  while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
+  LL_FLASH_SetLatency(LL_FLASH_LATENCY_2);
+  LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_16);
+  LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_16);
+  LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
+  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
+  while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL) {
   }
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_CFGR_PPRE1_DIV2);
-  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, RCC_CFGR_PPRE2_DIV1);
+  LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_2);
+  LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_1);
   SystemCoreClockUpdate();
 
   // RTC clock from LSI; the backup domain stays writable for RTC->BKP0R
-  uint32_t pwr_was_off = !(RCC->APB1ENR & RCC_APB1ENR_PWREN);
+  uint32_t pwr_was_off = !LL_APB1_GRP1_IsEnabledClock(LL_APB1_GRP1_PERIPH_PWR);
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
-  PWR->CR |= PWR_CR_DBP;
-  while(!(PWR->CR & PWR_CR_DBP)) {
+  LL_PWR_EnableBkUpAccess();
+  while(!LL_PWR_IsEnabledBkUpAccess()) {
   }
-  uint32_t rtcsel = RCC->BDCR & RCC_BDCR_RTCSEL;
-  if(rtcsel != 0 && rtcsel != RCC_BDCR_RTCSEL_LSI) {
+  uint32_t rtcsel = LL_RCC_GetRTCClockSource();
+  if(rtcsel != LL_RCC_RTC_CLKSOURCE_NONE && rtcsel != LL_RCC_RTC_CLKSOURCE_LSI) {
     uint32_t bdcr = RCC->BDCR & ~RCC_BDCR_RTCSEL;
-    RCC->BDCR |= RCC_BDCR_BDRST;
-    RCC->BDCR &= ~RCC_BDCR_BDRST;
+    LL_RCC_ForceBackupDomainReset();
+    LL_RCC_ReleaseBackupDomainReset();
     RCC->BDCR = bdcr;
   }
-  MODIFY_REG(RCC->BDCR, RCC_BDCR_RTCSEL, RCC_BDCR_RTCSEL_LSI);
+  LL_RCC_SetRTCClockSource(LL_RCC_RTC_CLKSOURCE_LSI);
   if(pwr_was_off) {
     LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_PWR);
   }
-  MODIFY_REG(RCC->CFGR3, RCC_CFGR3_USART3SW, RCC_CFGR3_USART3SW_SYSCLK);
-  RCC->CFGR3 |= RCC_CFGR3_TIM8SW;  // PLL clock
+  LL_RCC_SetUSARTClockSource(LL_RCC_USART3_CLKSOURCE_SYSCLK);
+  LL_RCC_SetTIMClockSource(LL_RCC_TIM8_CLKSOURCE_PLL);
 
-  SysTick_Config(SystemCoreClock / 1000);
+  SysTick_Config(SystemCoreClock / 1000);  // HCLK source
   NVIC_SetPriority(SysTick_IRQn, 0);
 }
 

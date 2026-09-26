@@ -209,7 +209,7 @@ int main(void) {
 #endif
 
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1 | LL_AHB1_GRP1_PERIPH_DMA2);
-  RCC->BDCR |= RCC_BDCR_RTCEN;
+  LL_RCC_EnableRTC();
 
   adc_calibrate();
   opamp_calibrate();
@@ -226,9 +226,9 @@ int main(void) {
 
   opamp_start();
 
-  TIM8->CCR1 = 0;
-  TIM8->CCR2 = 0;
-  TIM8->CCR3 = 0;
+  LL_TIM_OC_SetCompareCH1(TIM8, 0);
+  LL_TIM_OC_SetCompareCH2(TIM8, 0);
+  LL_TIM_OC_SetCompareCH3(TIM8, 0);
 
   adc_start();
   dac_start();
