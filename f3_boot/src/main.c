@@ -19,15 +19,16 @@
 */
 
 #include "main.h"
-#include "stm32f3xx_hal.h"
+#include "stm32f3xx.h"
+#include "stm32f3xx_ll_bus.h"
+#include "stm32f3xx_ll_gpio.h"
+#include "stm32f3xx_ll_usart.h"
 #include "version.h"
 #include "common.h"
 #include "f3hw.h"
-#include "tim.h"
 
 uint32_t systick_freq;
-CRC_HandleTypeDef hcrc;
-RTC_HandleTypeDef hrtc;
+volatile uint64_t systime = 0;
 
 volatile packet_bootloader_t rx_buf;
 volatile packet_bootloader_t tx_buf;
@@ -35,6 +36,91 @@ volatile packet_bootloader_t tx_buf;
 
 void SystemClock_Config(void);
 void Error_Handler(void);
+
+void SysTick_Handler(void) {
+  systime++;
+}
+
+// HAL_Delay() semantics: at least ms full SysTick periods
+static void delay_ms(uint32_t ms) {
+  uint64_t start = systime;
+  while(systime - start < (uint64_t)ms + 1) {
+  }
+}
+
+// CRC-32 over words from the reset value, CRC unit in its reset configuration
+static uint32_t crc_calc(const uint32_t *buf, uint32_t len) {
+  CRC->CR |= CRC_CR_RESET;
+  for(uint32_t i = 0; i < len; i++) {
+    CRC->DR = buf[i];
+  }
+  return CRC->DR;
+}
+
+// Flash, the register sequences of HAL_FLASH_Program() and HAL_FLASHEx_Erase()
+#define FLASH_TIMEOUT_MS 50000U
+#define FLASH_PAGE_SIZE 0x800U  // 2 KB pages on the F303xC
+
+static int flash_wait(void) {
+  uint64_t start = systime;
+  while(FLASH->SR & FLASH_SR_BSY) {
+    if(systime - start > FLASH_TIMEOUT_MS) {
+      return -1;
+    }
+  }
+  if(FLASH->SR & FLASH_SR_EOP) {
+    FLASH->SR = FLASH_SR_EOP;
+  }
+  if(FLASH->SR & (FLASH_SR_WRPERR | FLASH_SR_PGERR)) {
+    FLASH->SR = FLASH_SR_WRPERR | FLASH_SR_PGERR;
+    return -1;
+  }
+  return 0;
+}
+
+static void flash_unlock(void) {
+  if(FLASH->CR & FLASH_CR_LOCK) {
+    FLASH->KEYR = FLASH_KEY1;
+    FLASH->KEYR = FLASH_KEY2;
+  }
+}
+
+static void flash_lock(void) {
+  FLASH->CR |= FLASH_CR_LOCK;
+}
+
+static int flash_program_word(uint32_t addr, uint32_t data) {
+  if(flash_wait()) {
+    return -1;
+  }
+  for(uint32_t i = 0; i < 2; i++) {
+    FLASH->CR |= FLASH_CR_PG;
+    *(__IO uint16_t *)(addr + 2U * i) = (uint16_t)(data >> (16U * i));
+    int ret = flash_wait();
+    FLASH->CR &= ~FLASH_CR_PG;
+    if(ret) {
+      return -1;
+    }
+  }
+  return 0;
+}
+
+static int flash_erase_pages(uint32_t addr, uint32_t end) {
+  if(flash_wait()) {
+    return -1;
+  }
+  for(; addr < end; addr += FLASH_PAGE_SIZE) {
+    FLASH->CR |= FLASH_CR_PER;
+    FLASH->AR = addr;
+    FLASH->CR |= FLASH_CR_STRT;
+    int ret = flash_wait();
+    FLASH->CR &= ~FLASH_CR_PER;
+    if(ret) {
+      return -1;
+    }
+  }
+  return 0;
+}
 
 #define APP_START 0x08004000
 #define APP_END 0x08020000
@@ -46,7 +132,7 @@ static int app_ok(void) {
   if(!APP_RANGE_VALID(APP_START, app_info->image_size)) {
     return 0;
   }
-  uint32_t crc = HAL_CRC_Calculate(&hcrc, (uint32_t *)APP_START, app_info->image_size / 4);
+  uint32_t crc = crc_calc((uint32_t *)APP_START, app_info->image_size / 4);
 
   if(crc != 0) {
     return 0;
@@ -72,7 +158,7 @@ void TIM8_UP_IRQHandler() {
   }
 
   if(dma_count == 0) {
-    if(rx_buf.header.slave_addr == 255 && rx_buf.header.len == (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4 && rx_buf.header.crc == HAL_CRC_Calculate(&hcrc, (uint32_t *)&(rx_buf.header.slave_addr), sizeof(packet_bootloader_t) / 4 - 1)) {
+    if(rx_buf.header.slave_addr == 255 && rx_buf.header.len == (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4 && rx_buf.header.crc == crc_calc((uint32_t *)&(rx_buf.header.slave_addr), sizeof(packet_bootloader_t) / 4 - 1)) {
       //do stuff
       //tx_buf.state = do_stuff();
 
@@ -84,14 +170,14 @@ void TIM8_UP_IRQHandler() {
         case READ_CONF:
           break;
         case DO_RESET:
-          HAL_FLASH_Lock();
-          HAL_NVIC_SystemReset();
+          flash_lock();
+          NVIC_SystemReset();
           break;
         case BOOTLOADER:
           break;
       }
 
-      HAL_StatusTypeDef status = HAL_OK;
+      int status = 0;
       switch(rx_buf.cmd) {
         case BOOTLOADER_OPCODE_NOP:
           break;
@@ -102,42 +188,26 @@ void TIM8_UP_IRQHandler() {
 
         case BOOTLOADER_OPCODE_WRITE:
           if(*(uint32_t *)rx_buf.addr != rx_buf.value) {
-            status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, rx_buf.addr, rx_buf.value);
+            status = flash_program_word(rx_buf.addr, rx_buf.value);
           }
           if(*(uint32_t *)rx_buf.addr != rx_buf.value) {
-            status = HAL_ERROR;
+            status = -1;
           }
           tx_buf.value = *(uint32_t *)rx_buf.addr;
           tx_buf.addr  = rx_buf.addr;
           break;
 
         case BOOTLOADER_OPCODE_PAGEERASE:
-          HAL_FLASH_Unlock();
-          uint32_t NbOfPages = 0;
-          uint32_t PageError = 0;
-          /* Variable contains Flash operation status */
-          FLASH_EraseInitTypeDef eraseinitstruct;
-          //TODO: only erase APP pages
-          /* Get the number of sector to erase from 1st sector*/
-          NbOfPages = (APP_END - APP_START) / FLASH_PAGE_SIZE;
-          //NbOfPages                 = 1;
-          eraseinitstruct.TypeErase = FLASH_TYPEERASE_PAGES;
-          //eraseinitstruct.PageAddress = USBD_DFU_APP_DEFAULT_ADD;
-          eraseinitstruct.PageAddress = APP_START;
-          eraseinitstruct.NbPages     = NbOfPages;
-          status                      = HAL_FLASHEx_Erase(&eraseinitstruct, &PageError);
+          flash_unlock();
+          status = flash_erase_pages(APP_START, APP_END);
           break;
 
         case BOOTLOADER_OPCODE_CRCCHECK:
-          if(app_ok()) {
-            status = HAL_OK;
-          } else {
-            status = HAL_ERROR;
-          }
+          status = app_ok() ? 0 : -1;
           break;
       }
 
-      if(status != HAL_OK) {
+      if(status != 0) {
         tx_buf.state = BOOTLOADER_STATE_NAK;
       } else {
         tx_buf.state = BOOTLOADER_STATE_OK;
@@ -150,7 +220,7 @@ void TIM8_UP_IRQHandler() {
       tx_buf.header.conf_addr     = 0;
       tx_buf.header.config.u32    = 0;
       tx_buf.header.flags.cmd     = NO_CMD;
-      tx_buf.header.crc           = HAL_CRC_Calculate(&hcrc, (uint32_t *)&(tx_buf.header.slave_addr), sizeof(packet_bootloader_t) / 4 - 1);
+      tx_buf.header.crc           = crc_calc((uint32_t *)&(tx_buf.header.slave_addr), sizeof(packet_bootloader_t) / 4 - 1);
 
       rx_buf.header.crc = 0;
 
@@ -161,41 +231,47 @@ void TIM8_UP_IRQHandler() {
     }
   }
 
-  __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
+  TIM8->SR = ~TIM_SR_UIF;
 }
 
 void uart_init() {
-  GPIO_InitTypeDef GPIO_InitStruct;
-
   /* Peripheral clock enable */
-  __HAL_RCC_USART3_CLK_ENABLE();
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART3);
 
-  UART_HandleTypeDef huart3;
-  huart3.Instance                    = USART3;
-  huart3.Init.BaudRate               = DATABAUD;
-  huart3.Init.WordLength             = UART_WORDLENGTH_8B;
-  huart3.Init.StopBits               = UART_STOPBITS_1;
-  huart3.Init.Parity                 = UART_PARITY_NONE;
-  huart3.Init.Mode                   = UART_MODE_TX_RX;
-  huart3.Init.HwFlowCtl              = UART_HWCONTROL_NONE;
-  huart3.Init.OverSampling           = UART_OVERSAMPLING_8;
-  huart3.Init.OneBitSampling         = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  // 8N1, 8x oversampling, clocked from SYSCLK; DMA requests and overrun
+  // disable are set first and kept by the init, as with HAL_UART_Init()
   USART3->CR3 |= USART_CR3_DMAT | USART_CR3_DMAR | USART_CR3_OVRDIS;
-  HAL_UART_Init(&huart3);
+  LL_USART_Disable(USART3);
+  LL_USART_Init(USART3, &(LL_USART_InitTypeDef){
+                            .BaudRate            = DATABAUD,
+                            .DataWidth           = LL_USART_DATAWIDTH_8B,
+                            .StopBits            = LL_USART_STOPBITS_1,
+                            .Parity              = LL_USART_PARITY_NONE,
+                            .TransferDirection   = LL_USART_DIRECTION_TX_RX,
+                            .HardwareFlowControl = LL_USART_HWCONTROL_NONE,
+                            .OverSampling        = LL_USART_OVERSAMPLING_8,
+                        });
+  LL_USART_DisableOneBitSamp(USART3);
+  USART3->CR2 &= ~(USART_CR2_LINEN | USART_CR2_CLKEN);
+  USART3->CR3 &= ~(USART_CR3_SCEN | USART_CR3_HDSEL | USART_CR3_IREN);
+  LL_USART_Enable(USART3);
+  while(!LL_USART_IsActiveFlag_TEACK(USART3) || !LL_USART_IsActiveFlag_REACK(USART3)) {
+  }
 
   /**USART3 GPIO Configuration    
    PB10     ------> USART3_TX
    PB11     ------> USART3_RX 
    */
-  GPIO_InitStruct.Pin       = GPIO_PIN_10 | GPIO_PIN_11;
-  GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull      = GPIO_PULLUP;
-  GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF7_USART3;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOB, &(LL_GPIO_InitTypeDef){
+                          .Pin        = LL_GPIO_PIN_10 | LL_GPIO_PIN_11,
+                          .Mode       = LL_GPIO_MODE_ALTERNATE,
+                          .Speed      = LL_GPIO_SPEED_FREQ_HIGH,
+                          .OutputType = LL_GPIO_OUTPUT_PUSHPULL,
+                          .Pull       = LL_GPIO_PULL_UP,
+                          .Alternate  = LL_GPIO_AF_7,
+                      });
 
-  __HAL_RCC_DMA1_CLK_ENABLE();
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1);
 
   //TX DMA
   DMA1_Channel2->CCR &= (uint16_t)(~DMA_CCR_EN);
@@ -219,77 +295,88 @@ void uart_init() {
   USART3->ICR |= USART_ICR_RTOCF;  // timeout clear flag
 }
 
-/* RTC init function */
-static void MX_RTC_Init(void) {
-  /**Initialize RTC Only 
-    */
-  hrtc.Instance            = RTC;
-  hrtc.Init.HourFormat     = RTC_HOURFORMAT_24;
-  hrtc.Init.AsynchPrediv   = 127;
-  hrtc.Init.SynchPrediv    = 255;
-  hrtc.Init.OutPut         = RTC_OUTPUT_DISABLE;
-  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
-  hrtc.Init.OutPutType     = RTC_OUTPUT_TYPE_OPENDRAIN;
-  if(HAL_RTC_Init(&hrtc) != HAL_OK) {
-    Error_Handler();
+/* RTC init function: 24h, prescalers 127/255, no output, only if the calendar
+   was never set up (HAL_RTC_Init()) */
+static void rtc_init(void) {
+  if(RTC->ISR & RTC_ISR_INITS) {
+    return;
   }
+  RTC->WPR = 0xCA;
+  RTC->WPR = 0x53;
+  if(!(RTC->ISR & RTC_ISR_INITF)) {
+    RTC->ISR |= RTC_ISR_INIT;
+    uint64_t start = systime;
+    while(!(RTC->ISR & RTC_ISR_INITF)) {
+      if(systime - start > 1000) {
+        RTC->WPR = 0xFF;
+        Error_Handler();
+      }
+    }
+  }
+  RTC->CR &= ~(RTC_CR_FMT | RTC_CR_OSEL | RTC_CR_POL);
+  RTC->PRER = 255;
+  RTC->PRER |= 127U << RTC_PRER_PREDIV_A_Pos;
+  RTC->ISR &= ~RTC_ISR_INIT;
+  if(!(RTC->CR & RTC_CR_BYPSHAD)) {
+    RTC->ISR &= ~(RTC_ISR_INIT | RTC_ISR_RSF);
+    uint64_t start = systime;
+    while(!(RTC->ISR & RTC_ISR_RSF)) {
+      if(systime - start > 1000) {
+        RTC->WPR = 0xFF;
+        Error_Handler();
+      }
+    }
+  }
+  RTC->TAFCR &= ~RTC_TAFCR_ALARMOUTTYPE;  // open drain
+  RTC->WPR = 0xFF;
+}
+
+// TIM8 only times the rx framing here: 144 MHz / (2 * PWM_RES / 2), no outputs,
+// no break, update interrupt at priority 15 (MX_TIM8_Init())
+static void tim8_init(void) {
+  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_TIM8);
+  NVIC_SetPriority(TIM8_UP_IRQn, 15);
+  NVIC_EnableIRQ(TIM8_UP_IRQn);
+
+  uint32_t cr1 = TIM8->CR1;
+  MODIFY_REG(cr1, TIM_CR1_DIR | TIM_CR1_CMS | TIM_CR1_CKD | TIM_CR1_ARPE, TIM_CR1_CMS);
+  TIM8->ARR = PWM_RES / 2;
+  TIM8->PSC = 0;
+#ifdef PWM_INVERT
+  TIM8->RCR = 1;
+#else
+  TIM8->RCR = 0;
+#endif
+  TIM8->CR1 |= TIM_CR1_URS;  // load PSC/RCR without setting UIF
+  TIM8->EGR = TIM_EGR_UG;
+  TIM8->CR1 = cr1;
+
+  TIM8->SMCR &= ~(TIM_SMCR_SMS | TIM_SMCR_TS | TIM_SMCR_ETF | TIM_SMCR_ETPS | TIM_SMCR_ECE | TIM_SMCR_ETP | TIM_SMCR_MSM);
+  MODIFY_REG(TIM8->CR2, TIM_CR2_MMS | TIM_CR2_MMS2, TIM_CR2_MMS_1);
+  TIM8->BDTR = PWM_DEADTIME | TIM_BDTR_BKP | TIM_BDTR_BK2P;  // breaks disabled
 }
 
 int main(void) {
-  // Relocate interrupt vectors
   extern void *g_pfnVectors;
   SCB->VTOR = (uint32_t)&g_pfnVectors;
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
-
-  /* Configure the system clock */
   SystemClock_Config();
-  systick_freq = HAL_RCC_GetHCLKFreq();
+  systick_freq = SystemCoreClock;
+
   /* Initialize all configured peripherals */
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
-
-  __HAL_RCC_DMA1_CLK_ENABLE();
-  __HAL_RCC_DMA2_CLK_ENABLE();
-  __HAL_RCC_RTC_ENABLE();
-
-  hcrc.Instance                     = CRC;
-  hcrc.Init.DefaultPolynomialUse    = DEFAULT_POLYNOMIAL_ENABLE;
-  hcrc.Init.DefaultInitValueUse     = DEFAULT_INIT_VALUE_ENABLE;
-  hcrc.Init.InputDataInversionMode  = CRC_INPUTDATA_INVERSION_NONE;
-  hcrc.Init.OutputDataInversionMode = CRC_OUTPUTDATA_INVERSION_DISABLE;
-  hcrc.InputDataFormat              = CRC_INPUTDATA_FORMAT_WORDS;
-
-  GPIO_InitTypeDef GPIO_InitStruct;
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOA_CLK_ENABLE();
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_GPIOB | LL_AHB1_GRP1_PERIPH_GPIOC | LL_AHB1_GRP1_PERIPH_GPIOF);
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_DMA1 | LL_AHB1_GRP1_PERIPH_DMA2);
+  RCC->BDCR |= RCC_BDCR_RTCEN;
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+  LL_GPIO_ResetOutputPin(LED_PORT, LED_PIN);
+  LL_GPIO_Init(LED_PORT, &(LL_GPIO_InitTypeDef){.Pin = LED_PIN, .Mode = LL_GPIO_MODE_OUTPUT, .Speed = LL_GPIO_SPEED_FREQ_LOW, .OutputType = LL_GPIO_OUTPUT_PUSHPULL, .Pull = LL_GPIO_PULL_NO});
 
-  /*Configure GPIO pin : LED_PIN */
-  GPIO_InitStruct.Pin   = LED_PIN;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_PORT, &GPIO_InitStruct);
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_CRC);  // reset config: CRC-32, init 0xFFFFFFFF, no reversal
 
-  __HAL_RCC_CRC_CLK_ENABLE();
-
-  if(HAL_CRC_Init(&hcrc) != HAL_OK) {
-    Error_Handler();
-  }
-
-  MX_RTC_Init();
-
+  rtc_init();
 
   if(app_ok() && RTC->BKP0R == 0x00000000) {
-    // SCB->VTOR = APP_START;
     /* Jump to user application */
     void (*JumpToApplication)(void);
     uint32_t JumpAddress = *(__IO uint32_t *)(APP_START + 4);
@@ -314,111 +401,91 @@ int main(void) {
     DMA1_Channel3->CNDTR = sizeof(packet_bootloader_t);
     DMA1_Channel3->CCR |= DMA_CCR_EN;
 
-    MX_TIM8_Init();
-    if(HAL_TIM_Base_Start_IT(&htim8) != HAL_OK) {
-      Error_Handler();
-    }
+    tim8_init();
+    TIM8->DIER |= TIM_DIER_UIE;
+    TIM8->CR1 |= TIM_CR1_CEN;
   }
   RTC->BKP0R = 0x00000000;
-  /* USER CODE END 2 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
   while(1) {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
-    HAL_Delay(50);
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
-    HAL_Delay(50);
+    LL_GPIO_SetOutputPin(LED_PORT, LED_PIN);
+    delay_ms(50);
+    LL_GPIO_ResetOutputPin(LED_PORT, LED_PIN);
+    delay_ms(50);
   }
 }
 
-/** System Clock Configuration
-*/
+// HSE 8 MHz * 9 = 72 MHz, APB1 36 MHz, APB2 72 MHz, TIM8 from the PLL,
+// USART3 from SYSCLK, RTC from LSI, SysTick 1 kHz at priority 0.
+// Replaces HAL_Init() + the CubeMX SystemClock_Config().
 void SystemClock_Config(void) {
-  RCC_OscInitTypeDef RCC_OscInitStruct;
-  RCC_ClkInitTypeDef RCC_ClkInitStruct;
-  RCC_PeriphCLKInitTypeDef PeriphClkInit;
+  FLASH->ACR |= FLASH_ACR_PRFTBE;
+  NVIC_SetPriorityGrouping(3);  // NVIC_PRIORITYGROUP_4
+  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
+  NVIC_SetPriority(MemoryManagement_IRQn, 0);
+  NVIC_SetPriority(BusFault_IRQn, 0);
+  NVIC_SetPriority(UsageFault_IRQn, 0);
+  NVIC_SetPriority(SVCall_IRQn, 0);
+  NVIC_SetPriority(DebugMonitor_IRQn, 0);
+  NVIC_SetPriority(PendSV_IRQn, 0);
 
-  /**Initializes the CPU, AHB and APB busses clocks 
-    */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState       = RCC_HSE_ON;
-  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
-  RCC_OscInitStruct.HSIState       = RCC_HSI_ON;
-  RCC_OscInitStruct.LSIState       = RCC_LSI_ON;
-  RCC_OscInitStruct.PLL.PLLState   = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL     = RCC_PLL_MUL9;
-  if(HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
-    Error_Handler();
+  RCC->CR |= RCC_CR_HSEON;
+  while(!(RCC->CR & RCC_CR_HSERDY)) {
+  }
+  MODIFY_REG(RCC->CFGR2, RCC_CFGR2_PREDIV, 0);  // HSE / 1
+  RCC->CSR |= RCC_CSR_LSION;
+  while(!(RCC->CSR & RCC_CSR_LSIRDY)) {
+  }
+  RCC->CR &= ~RCC_CR_PLLON;
+  while(RCC->CR & RCC_CR_PLLRDY) {
+  }
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_PLLMUL | RCC_CFGR_PLLSRC, RCC_CFGR_PLLMUL9 | RCC_CFGR_PLLSRC_HSE_PREDIV);
+  RCC->CR |= RCC_CR_PLLON;
+  while(!(RCC->CR & RCC_CR_PLLRDY)) {
   }
 
-  /**Initializes the CPU, AHB and APB busses clocks 
-    */
-  RCC_ClkInitStruct.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider  = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-  if(HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
-    Error_Handler();
+  MODIFY_REG(FLASH->ACR, FLASH_ACR_LATENCY, FLASH_ACR_LATENCY_1);  // 2 wait states
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_CFGR_PPRE1_DIV16);
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, RCC_CFGR_PPRE2_DIV16);
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_HPRE, RCC_CFGR_HPRE_DIV1);
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_SW, RCC_CFGR_SW_PLL);
+  while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {
   }
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE1, RCC_CFGR_PPRE1_DIV2);
+  MODIFY_REG(RCC->CFGR, RCC_CFGR_PPRE2, RCC_CFGR_PPRE2_DIV1);
+  SystemCoreClockUpdate();
 
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART3 | RCC_PERIPHCLK_TIM8 | RCC_PERIPHCLK_RTC;
-  PeriphClkInit.Usart3ClockSelection = RCC_USART3CLKSOURCE_SYSCLK;
-  PeriphClkInit.Tim8ClockSelection   = RCC_TIM8CLK_PLLCLK;
-  PeriphClkInit.RTCClockSelection    = RCC_RTCCLKSOURCE_LSI;
-  if(HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
-    Error_Handler();
+  // RTC clock from LSI; the backup domain stays writable for RTC->BKP0R
+  uint32_t pwr_was_off = !(RCC->APB1ENR & RCC_APB1ENR_PWREN);
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
+  PWR->CR |= PWR_CR_DBP;
+  while(!(PWR->CR & PWR_CR_DBP)) {
   }
+  uint32_t rtcsel = RCC->BDCR & RCC_BDCR_RTCSEL;
+  if(rtcsel != 0 && rtcsel != RCC_BDCR_RTCSEL_LSI) {
+    uint32_t bdcr = RCC->BDCR & ~RCC_BDCR_RTCSEL;
+    RCC->BDCR |= RCC_BDCR_BDRST;
+    RCC->BDCR &= ~RCC_BDCR_BDRST;
+    RCC->BDCR = bdcr;
+  }
+  MODIFY_REG(RCC->BDCR, RCC_BDCR_RTCSEL, RCC_BDCR_RTCSEL_LSI);
+  if(pwr_was_off) {
+    LL_APB1_GRP1_DisableClock(LL_APB1_GRP1_PERIPH_PWR);
+  }
+  MODIFY_REG(RCC->CFGR3, RCC_CFGR3_USART3SW, RCC_CFGR3_USART3SW_SYSCLK);
+  RCC->CFGR3 |= RCC_CFGR3_TIM8SW;  // PLL clock
 
-  /**Configure the Systick interrupt time 
-    */
-  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq() / 1000);
-
-  /**Configure the Systick 
-    */
-  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
-
-  /* SysTick_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+  SysTick_Config(SystemCoreClock / 1000);
+  NVIC_SetPriority(SysTick_IRQn, 0);
 }
 
 //Delay implementation for hal_term.c
 void Wait(uint32_t ms) {
-  HAL_Delay(ms);
+  delay_ms(ms);
 }
 
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @param  None
-  * @retval None
-  */
 void Error_Handler(void) {
-  /* User can add his own implementation to report the HAL error return state */
   while(1) {
-    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+    LL_GPIO_SetOutputPin(GPIOA, LL_GPIO_PIN_8);
   }
 }
-
-#ifdef USE_FULL_ASSERT
-
-/**
-   * @brief Reports the name of the source file and the source line number
-   * where the assert_param error has occurred.
-   * @param file: pointer to the source file name
-   * @param line: assert_param error line source number
-   * @retval None
-   */
-void assert_failed(uint8_t *file, uint32_t line) {
-  /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-    ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-  /* USER CODE END 6 */
-}
-
-#endif
