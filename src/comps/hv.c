@@ -156,7 +156,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   LL_USART_Enable(UART_DRV);
 
   // DMA-Disable
-  dma_disable(UART_DRV_TX_DMA);
+  LL_DMA_DisableStream(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM);
+  while(LL_DMA_IsEnabledStream(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM)) {
+  }
   LL_DMA_DeInit(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM);
 
   // DMA2-Config
@@ -184,7 +186,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
 
   // DMA-Disable
-  dma_disable(UART_DRV_RX_DMA);
+  LL_DMA_DisableStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
+  while(LL_DMA_IsEnabledStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM)) {
+  }
   LL_DMA_DeInit(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
 
   // DMA2-Config
@@ -198,9 +202,11 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
 
   LL_USART_EnableDMAReq_RX(UART_DRV);
-  dma_disable(UART_DRV_RX_DMA);
-  dma_clear_flags(UART_DRV_RX_DMA, DMA_STREAM_FLAG_TC);
-  dma_enable(UART_DRV_RX_DMA);
+  LL_DMA_DisableStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
+  while(LL_DMA_IsEnabledStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM)) {
+  }
+  UART_DRV_RX_DMA_CLEAR_TC();
+  LL_DMA_EnableStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
 
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_CRC);
   ctx->timeout          = 0;
@@ -236,7 +242,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->config.pins.drop_k  = PIN(drop_k);
   ctx->config.pins.lq      = PIN(lq);
 
-  uint32_t dma_count = MAX(sizeof(packet_from_hv_t), sizeof(packet_bootloader_t)) - UART_DRV_RX_DMA->NDTR;
+  uint32_t dma_count = MAX(sizeof(packet_from_hv_t), sizeof(packet_bootloader_t)) - LL_DMA_GetDataLength(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
 
   PIN(value) = 0.0;
 
@@ -521,19 +527,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->to_hv.packet_to_hv.header.crc = crc_calc_block((uint32_t *)&(ctx->to_hv.packet_to_hv.header.slave_addr), tx_size / 4 - 1);
 
     //start DMA TX transfer
-    UART_DRV_TX_DMA->CR &= ~DMA_SxCR_EN;
-    dma_clear_flags(UART_DRV_TX_DMA, DMA_STREAM_FLAG_TC);
-    UART_DRV_TX_DMA->NDTR = tx_size;
-    dma_enable(UART_DRV_TX_DMA);
+    LL_DMA_DisableStream(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM);
+    UART_DRV_TX_DMA_CLEAR_TC();
+    LL_DMA_SetDataLength(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM, tx_size);
+    LL_DMA_EnableStream(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM);
 
     // clear uart faults
     PIN(uart_sr) = UART_DRV->SR;
     PIN(uart_dr) = UART_DRV->DR;
 
     //start DMA RX transfer
-    UART_DRV_RX_DMA->CR &= ~DMA_SxCR_EN;
-    dma_clear_flags(UART_DRV_RX_DMA, DMA_STREAM_FLAG_TC);
-    dma_enable(UART_DRV_RX_DMA);
+    LL_DMA_DisableStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
+    UART_DRV_RX_DMA_CLEAR_TC();
+    LL_DMA_EnableStream(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
   }
 
 

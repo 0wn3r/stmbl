@@ -120,25 +120,25 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       return;
   }
   GPIO_InitStruct.Pin = ctx->a_pin;
-  gpio_init(ctx->a_port, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = ctx->tim_af;
+  LL_GPIO_Init(ctx->a_port, &GPIO_InitStruct);
 
   GPIO_InitStruct.Pin = ctx->b_pin;
-  gpio_init(ctx->b_port, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = ctx->tim_af;
+  LL_GPIO_Init(ctx->b_port, &GPIO_InitStruct);
 
   GPIO_InitStruct.Mode  = LL_GPIO_MODE_OUTPUT;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
   GPIO_InitStruct.Pin   = ctx->c_pin;
-  gpio_init(ctx->c_port, &GPIO_InitStruct);
+  LL_GPIO_Init(ctx->c_port, &GPIO_InitStruct);
   GPIO_InitStruct.Pin = ctx->c_en_pin;
-  gpio_init(ctx->c_en_port, &GPIO_InitStruct);
+  LL_GPIO_Init(ctx->c_en_port, &GPIO_InitStruct);
 
   LL_GPIO_SetOutputPin(ctx->c_en_port, ctx->c_en_pin);
 
   //Bind pins to Timer
-  gpio_set_af(ctx->a_port, ctx->a_pin_source, ctx->tim_af);
-  gpio_set_af(ctx->b_port, ctx->b_pin_source, ctx->tim_af);
 
   LL_TIM_SetAutoReload(ctx->tim, ctx->e_res * 2 - 1);
   // quad

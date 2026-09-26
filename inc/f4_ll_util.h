@@ -1,53 +1,8 @@
 #pragma once
 
-// Small helpers for things STM32CubeF4 LL does not cover the way the old
-// StdPeriph code used them, like DMA streams addressed by pointer.
+// Small helpers for things STM32CubeF4 LL does not cover.
 
 #include "stm32f4xx.h"
-#include "stm32f4xx_ll_gpio.h"
-
-// DMA streams are 0x18 apart, starting at DMAx_BASE + 0x10.
-static inline DMA_TypeDef *dma_of_stream(DMA_Stream_TypeDef *s) {
-  return ((uint32_t)s >= DMA2_Stream0_BASE) ? DMA2 : DMA1;
-}
-
-static inline uint32_t dma_stream_idx(DMA_Stream_TypeDef *s) {
-  return (((uint32_t)s & 0xFFU) - 0x10U) / 0x18U;
-}
-
-static inline uint32_t dma_stream_shift(DMA_Stream_TypeDef *s) {
-  static const uint8_t shift[4] = {0, 6, 16, 22};
-  return shift[dma_stream_idx(s) & 3];
-}
-
-// Flag bits relative to the stream's shift: FEIF=0x01 DMEIF=0x04 TEIF=0x08 HTIF=0x10 TCIF=0x20
-#define DMA_STREAM_FLAG_TC 0x20U
-#define DMA_STREAM_FLAG_ALL 0x3DU
-
-static inline void dma_clear_flags(DMA_Stream_TypeDef *s, uint32_t flags) {
-  DMA_TypeDef *d = dma_of_stream(s);
-  if(dma_stream_idx(s) < 4) {
-    d->LIFCR = flags << dma_stream_shift(s);
-  } else {
-    d->HIFCR = flags << dma_stream_shift(s);
-  }
-}
-
-static inline uint32_t dma_get_flags(DMA_Stream_TypeDef *s, uint32_t flags) {
-  DMA_TypeDef *d = dma_of_stream(s);
-  uint32_t isr   = (dma_stream_idx(s) < 4) ? d->LISR : d->HISR;
-  return (isr >> dma_stream_shift(s)) & flags;
-}
-
-static inline void dma_disable(DMA_Stream_TypeDef *s) {
-  s->CR &= ~DMA_SxCR_EN;
-  while(s->CR & DMA_SxCR_EN) {
-  }
-}
-
-static inline void dma_enable(DMA_Stream_TypeDef *s) {
-  s->CR |= DMA_SxCR_EN;
-}
 
 // CRC over 32-bit words (replaces CRC_CalcBlockCRC, does not reset)
 static inline uint32_t crc_calc_block(const uint32_t *buf, uint32_t len) {
@@ -55,17 +10,6 @@ static inline uint32_t crc_calc_block(const uint32_t *buf, uint32_t len) {
     CRC->DR = buf[i];
   }
   return CRC->DR;
-}
-
-// Alternate function by pin number (replaces GPIO_PinAFConfig)
-static inline void gpio_set_af(GPIO_TypeDef *port, uint32_t pin_source, uint32_t af) {
-  uint32_t shift = (pin_source & 7U) * 4U;
-  MODIFY_REG(port->AFR[pin_source >> 3], 0xFU << shift, af << shift);
-}
-
-// Clear EN without waiting for the stream to stop (old DMA_Cmd(s, DISABLE))
-static inline void dma_stop(DMA_Stream_TypeDef *s) {
-  s->CR &= ~DMA_SxCR_EN;
 }
 
 // Register sequence of the old StdPeriph TIM_EncoderInterfaceConfig().
@@ -88,21 +32,4 @@ static inline void tim_ic_init(TIM_TypeDef *tim, int ch, uint32_t pol, uint32_t 
   *ccmr = (*ccmr & ~((TIM_CCMR1_CC1S | TIM_CCMR1_IC1F) << ccm)) | ((sel | (filter << 4)) << ccm);
   tim->CCER = (tim->CCER & ~((TIM_CCER_CC1P | TIM_CCER_CC1NP) << ccer)) | ((pol | TIM_CCER_CC1E) << ccer);
   *ccmr = (*ccmr & ~(TIM_CCMR1_IC1PSC << ccm)) | (psc << ccm);
-}
-
-// Pin setup like the old StdPeriph GPIO_Init(): leaves the alternate function
-// register alone, so gpio_set_af() may be called before or after it.
-static inline void gpio_init(GPIO_TypeDef *port, const LL_GPIO_InitTypeDef *init) {
-  for(uint32_t pos = 0; pos < 16; pos++) {
-    uint32_t pin = init->Pin & (1U << pos);
-    if(!pin) {
-      continue;
-    }
-    if(init->Mode == LL_GPIO_MODE_OUTPUT || init->Mode == LL_GPIO_MODE_ALTERNATE) {
-      LL_GPIO_SetPinSpeed(port, pin, init->Speed);
-      LL_GPIO_SetPinOutputType(port, pin, init->OutputType);
-    }
-    LL_GPIO_SetPinMode(port, pin, init->Mode);
-    LL_GPIO_SetPinPull(port, pin, init->Pull);
-  }
 }

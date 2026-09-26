@@ -107,8 +107,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStructure.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStructure.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStructure.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_RES_REF_PORT, &GPIO_InitStructure);
-  gpio_set_af(FB0_RES_REF_PORT, FB0_RES_REF_PIN_SOURCE, FB0_RES_REF_TIM_AF);
+  GPIO_InitStructure.Alternate = FB0_RES_REF_TIM_AF;
+  LL_GPIO_Init(FB0_RES_REF_PORT, &GPIO_InitStructure);
 
   //txen
   GPIO_InitStructure.Pin   = FB0_Z_TXEN_PIN;
@@ -116,7 +116,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStructure.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStructure.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStructure.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_Z_TXEN_PORT, &GPIO_InitStructure);
+  LL_GPIO_Init(FB0_Z_TXEN_PORT, &GPIO_InitStructure);
   LL_GPIO_SetOutputPin(FB0_Z_TXEN_PORT, FB0_Z_TXEN_PIN);
 }
 

@@ -174,7 +174,9 @@ void setup_res() {
   LL_ADC_Enable(FB0_COS_ADC);
 
   // DMA-Disable
-  dma_disable(DMA2_Stream0);
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_0);
+  while(LL_DMA_IsEnabledStream(DMA2, LL_DMA_STREAM_0)) {
+  }
   LL_DMA_DeInit(DMA2, LL_DMA_STREAM_0);
 
   // DMA2-Config

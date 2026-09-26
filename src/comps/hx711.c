@@ -70,7 +70,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB1_Z_TXEN_PORT, &GPIO_InitStruct);
+  LL_GPIO_Init(FB1_Z_TXEN_PORT, &GPIO_InitStruct);
   LL_GPIO_SetOutputPin(FB1_Z_TXEN_PORT, FB1_Z_TXEN_PIN);
 
   // output Z
@@ -79,7 +79,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB1_Z_PORT, &GPIO_InitStruct);
+  LL_GPIO_Init(FB1_Z_PORT, &GPIO_InitStruct);
 }
 
 //TODO: plausibility, saturation, channel/gain config, 2 chips

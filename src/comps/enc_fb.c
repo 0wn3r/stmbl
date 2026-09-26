@@ -71,18 +71,18 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStructure.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
   GPIO_InitStructure.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStructure.Pull  = LL_GPIO_PULL_UP;
-  gpio_init(FB0_A_PORT, &GPIO_InitStructure);
+  GPIO_InitStructure.Alternate = FB0_ENC_TIM_AF;
+  LL_GPIO_Init(FB0_A_PORT, &GPIO_InitStructure);
 
   GPIO_InitStructure.Pin = FB0_B_PIN;
-  gpio_init(FB0_B_PORT, &GPIO_InitStructure);
+  GPIO_InitStructure.Alternate = FB0_ENC_TIM_AF;
+  LL_GPIO_Init(FB0_B_PORT, &GPIO_InitStructure);
 
   GPIO_InitStructure.Pin = FB0_Z_PIN;
-  gpio_init(FB0_Z_PORT, &GPIO_InitStructure);
+  GPIO_InitStructure.Alternate = FB0_ENC_TIM_AF;
+  LL_GPIO_Init(FB0_Z_PORT, &GPIO_InitStructure);
 
   // pin af -> tim
-  gpio_set_af(FB0_A_PORT, FB0_A_PIN_SOURCE, FB0_ENC_TIM_AF);
-  gpio_set_af(FB0_B_PORT, FB0_B_PIN_SOURCE, FB0_ENC_TIM_AF);
-  gpio_set_af(FB0_Z_PORT, FB0_Z_PIN_SOURCE, FB0_ENC_TIM_AF);
 
   // enc res / turn
   LL_TIM_SetAutoReload(FB0_ENC_TIM, ctx->e_res - 1);

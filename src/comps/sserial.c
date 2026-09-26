@@ -573,13 +573,13 @@ static void send(uint8_t len, uint8_t docrc) {
   timeout = 0;
   if(docrc) {
     txbuf[len] = crc8((uint8_t *)txbuf, len);
-    (DMA1_Stream4)->NDTR = len + 1;
+    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len + 1);
   } else {
-    (DMA1_Stream4)->NDTR = len;
+    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len);
   }
-  dma_stop(DMA1_Stream4);
-  dma_clear_flags(DMA1_Stream4, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA1_Stream4);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_4);
+  LL_DMA_ClearFlag_TC4(DMA1);
+  LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
 }
 
 //v3
@@ -611,18 +611,18 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_USART1);
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_UART4);
   //USART TX
-  gpio_set_af(GPIOA, 0, LL_GPIO_AF_8);
   GPIO_InitStruct.Pin   = LL_GPIO_PIN_0;
   GPIO_InitStruct.Mode  = LL_GPIO_MODE_ALTERNATE;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_UP;
-  gpio_init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_8;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   //USART RX
-  gpio_set_af(GPIOA, 10, LL_GPIO_AF_7);
   GPIO_InitStruct.Pin = LL_GPIO_PIN_10;
-  gpio_init(GPIOA, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_7;
+  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   USART_InitStruct.BaudRate            = 2500000;
   USART_InitStruct.DataWidth          = LL_USART_DATAWIDTH_8B;
@@ -639,8 +639,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   //RX DMA
 
-  dma_stop(DMA2_Stream5);
-  LL_DMA_DeInit(dma_of_stream(DMA2_Stream5), dma_stream_idx(DMA2_Stream5));
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_5);
+  LL_DMA_DeInit(DMA2, LL_DMA_STREAM_5);
 
   // DMA2-Config
   DMA_InitStructure.Channel            = LL_DMA_CHANNEL_4;
@@ -658,16 +658,16 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_InitStructure.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
   DMA_InitStructure.MemBurst        = LL_DMA_MBURST_SINGLE;
   DMA_InitStructure.PeriphBurst    = LL_DMA_PBURST_SINGLE;
-  LL_DMA_Init(dma_of_stream(DMA2_Stream5), dma_stream_idx(DMA2_Stream5), &DMA_InitStructure);
+  LL_DMA_Init(DMA2, LL_DMA_STREAM_5, &DMA_InitStructure);
 
-  dma_enable(DMA2_Stream5);
+  LL_DMA_EnableStream(DMA2, LL_DMA_STREAM_5);
 
   LL_USART_EnableDMAReq_RX(USART1);
 
   //TX DMA
 
-  dma_stop(DMA1_Stream4);
-  LL_DMA_DeInit(dma_of_stream(DMA1_Stream4), dma_stream_idx(DMA1_Stream4));
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_4);
+  LL_DMA_DeInit(DMA1, LL_DMA_STREAM_4);
 
   // DMA2-Config
   DMA_InitStructure.Channel            = LL_DMA_CHANNEL_4;
@@ -685,7 +685,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_InitStructure.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
   DMA_InitStructure.MemBurst        = LL_DMA_MBURST_SINGLE;
   DMA_InitStructure.PeriphBurst    = LL_DMA_PBURST_SINGLE;
-  LL_DMA_Init(dma_of_stream(DMA1_Stream4), dma_stream_idx(DMA1_Stream4), &DMA_InitStructure);
+  LL_DMA_Init(DMA1, LL_DMA_STREAM_4, &DMA_InitStructure);
 
   LL_USART_EnableDMAReq_TX(UART4);
 
@@ -695,7 +695,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(GPIOB, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   LL_GPIO_SetOutputPin(GPIOB, LL_GPIO_PIN_7);
 
@@ -724,7 +724,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
   //struct sserial_ctx_t *mem = (struct sserial_ctx_t *)ctx_ptr;
   //next received packet will be written to bufferpos
-  uint32_t bufferpos = sizeof(rxbuf) - ((DMA2_Stream5)->NDTR);
+  uint32_t bufferpos = sizeof(rxbuf) - LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_5);
   //how many packets we have the the rx buffer for processing
   uint32_t available = (bufferpos - rxpos + sizeof(rxbuf)) % sizeof(rxbuf);
 
@@ -803,7 +803,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           }
           wait_ticks = t1 - t2;
           //next received packet will be written to bufferpos
-          bufferpos = sizeof(rxbuf) - ((DMA2_Stream5)->NDTR);
+          bufferpos = sizeof(rxbuf) - LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_5);
           //how many packets we have the the rx buffer for processing
           available = (bufferpos - rxpos + sizeof(rxbuf)) % sizeof(rxbuf);
         } while(available < discovery.output + 2 && wait_ticks <= max_waste_ticks);
@@ -834,10 +834,10 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
         if(crc_reuest(discovery.output + 1)) {
           //send buffer
-          (DMA1_Stream4)->NDTR = discovery.input + 1;
-          dma_stop(DMA1_Stream4);
-          dma_clear_flags(DMA1_Stream4, DMA_STREAM_FLAG_TC);
-          dma_enable(DMA1_Stream4);
+          LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, discovery.input + 1);
+          LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_4);
+          LL_DMA_ClearFlag_TC4(DMA1);
+          LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
           txbuf[discovery.input] = crc8((uint8_t *)txbuf, discovery.input);
           //send(discovery.input, 1);
           timeout = 0;

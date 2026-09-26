@@ -70,7 +70,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_Z_TXEN_PORT, &GPIO_InitStruct);
+  LL_GPIO_Init(FB0_Z_TXEN_PORT, &GPIO_InitStruct);
   LL_GPIO_ResetOutputPin(FB0_Z_TXEN_PORT, FB0_Z_TXEN_PIN);
 
   //TX
@@ -79,8 +79,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_Z_PORT, &GPIO_InitStruct);
-  gpio_set_af(FB0_Z_PORT, FB0_Z_PIN_SOURCE, FB0_ENC_TIM_AF);
+  LL_GPIO_Init(FB0_Z_PORT, &GPIO_InitStruct);
+  LL_GPIO_SetAFPin_8_15(FB0_Z_PORT, FB0_Z_PIN, FB0_ENC_TIM_AF);  // TX pin is switched to AF later, PD14
 
   LL_APB1_GRP1_EnableClock(FB0_ENC_TIM_RCC);
 
@@ -173,13 +173,13 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   FB0_ENC_TIM->CNT = 3300;
   FB0_ENC_TIM->CR1 |= TIM_CR1_CEN;  // enable tim
 
-  dma_stop(DMA1_Stream7);
-  LL_DMA_DeInit(dma_of_stream(DMA1_Stream7), dma_stream_idx(DMA1_Stream7));
-  LL_DMA_Init(dma_of_stream(DMA1_Stream7), dma_stream_idx(DMA1_Stream7), &DMA_InitStructurerx);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_DeInit(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_Init(DMA1, LL_DMA_STREAM_7, &DMA_InitStructurerx);
 
-  dma_stop(DMA2_Stream1);
-  LL_DMA_DeInit(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1));
-  LL_DMA_Init(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1), &DMA_InitStructuretx);
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_DeInit(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_Init(DMA2, LL_DMA_STREAM_1, &DMA_InitStructuretx);
   dfdf = 0;
 }
 
@@ -190,8 +190,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   while(FB0_ENC_TIM->CNT < 3300) {
   }
 
-  int count = ARRAY_SIZE(tim_data) - DMA1_Stream7->NDTR;
-  dma_stop(DMA1_Stream7);
+  int count = ARRAY_SIZE(tim_data) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
 
   uint16_t bit_time = 15;
 
@@ -302,11 +302,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   FB0_Z_PORT->MODER &= ~GPIO_MODER_MODER14_1;
   FB0_Z_PORT->MODER |= GPIO_MODER_MODER14_0;  //set tx pin to output
 
-  dma_stop(DMA2_Stream1);
-  LL_DMA_DeInit(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1));
-  LL_DMA_Init(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1), &DMA_InitStructuretx);
-  dma_clear_flags(DMA2_Stream1, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA2_Stream1);  //transmit request
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_DeInit(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_Init(DMA2, LL_DMA_STREAM_1, &DMA_InitStructuretx);
+  LL_DMA_ClearFlag_TC1(DMA2);
+  LL_DMA_EnableStream(DMA2, LL_DMA_STREAM_1);  //transmit request
 
   TIM8->CR1 &= ~TIM_CR1_CEN;  // disable tim
   TIM8->ARR  = 20;            // 168 / 2 / (9 + 1) = 8.4MHz
@@ -316,9 +316,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   TIM8->CNT = 0;
   TIM8->CR1 |= TIM_CR1_CEN;
 
-  dma_stop(DMA1_Stream7);
-  dma_clear_flags(DMA1_Stream7, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA1_Stream7);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_ClearFlag_TC7(DMA1);
+  LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_7);
 
   FB0_ENC_TIM->CR1 &= ~TIM_CR1_CEN;
   FB0_ENC_TIM->CCMR2 = TIM_CCMR2_CC3S_0;                                // cc3 input ti3

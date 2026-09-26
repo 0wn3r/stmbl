@@ -118,9 +118,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStructure.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStructure.Pull  = LL_GPIO_PULL_NO;
   GPIO_InitStructure.Speed = LL_GPIO_SPEED_FREQ_HIGH;
+  GPIO_InitStructure.Alternate = LL_GPIO_AF_3;
   LL_GPIO_Init(GPIOE, &GPIO_InitStructure);
-  gpio_set_af(GPIOE, 5, LL_GPIO_AF_3);
-  gpio_set_af(GPIOE, 6, LL_GPIO_AF_3);
 
   if(PIN(swd_remap) > 0) {
     GPIO_InitStructure.Pin   = LL_GPIO_PIN_13 | LL_GPIO_PIN_14;

@@ -51,7 +51,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(GPIOD, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   //tx enable for clock
   GPIO_InitStruct.Pin   = LL_GPIO_PIN_10;
@@ -59,7 +59,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(GPIOD, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   //SPI3
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_SPI3);
@@ -68,21 +68,21 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   //PC12 spi3 mosi
   //PC10 spi3 clock
-  gpio_set_af(GPIOC, 12, LL_GPIO_AF_6);
   GPIO_InitStruct.Pin   = LL_GPIO_PIN_12;
   GPIO_InitStruct.Mode  = LL_GPIO_MODE_ALTERNATE;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_UP;
-  gpio_init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_6;
+  LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  gpio_set_af(GPIOC, 10, LL_GPIO_AF_6);
   GPIO_InitStruct.Pin   = LL_GPIO_PIN_10;
   GPIO_InitStruct.Mode  = LL_GPIO_MODE_ALTERNATE;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_UP;
-  gpio_init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_6;
+  LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   LL_GPIO_SetOutputPin(GPIOD, LL_GPIO_PIN_10);  //clock tx enable
 
@@ -103,9 +103,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // dma_rx_config.MemBurst        = LL_DMA_MBURST_SINGLE;
   // dma_rx_config.PeriphBurst    = LL_DMA_PBURST_SINGLE;
 
-  // dma_stop(DMA1_Stream2);
-  // LL_DMA_DeInit(dma_of_stream(DMA1_Stream2), dma_stream_idx(DMA1_Stream2));
-  // LL_DMA_Init(dma_of_stream(DMA1_Stream2), dma_stream_idx(DMA1_Stream2), &dma_rx_config);
+  // LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_2);
+  // LL_DMA_DeInit(DMA1, LL_DMA_STREAM_2);
+  // LL_DMA_Init(DMA1, LL_DMA_STREAM_2, &dma_rx_config);
 
   PIN(pos_len)     = 18;  // 17
   PIN(mpos_len)    = 12;  // 15

@@ -25,19 +25,19 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStructure.Pull  = LL_GPIO_PULL_NO;
 
   GPIO_InitStructure.Pin = FB0_A_EN_PIN;
-  gpio_init(FB0_A_EN_PORT, &GPIO_InitStructure);
+  LL_GPIO_Init(FB0_A_EN_PORT, &GPIO_InitStructure);
 
   GPIO_InitStructure.Pin = FB0_B_EN_PIN;
-  gpio_init(FB0_B_EN_PORT, &GPIO_InitStructure);
+  LL_GPIO_Init(FB0_B_EN_PORT, &GPIO_InitStructure);
 
   LL_GPIO_SetOutputPin(FB0_A_EN_PORT, FB0_A_EN_PIN);
   LL_GPIO_SetOutputPin(FB0_B_EN_PORT, FB0_B_EN_PIN);
 
   GPIO_InitStructure.Pin = FB0_A_PIN;
-  gpio_init(FB0_A_PORT, &GPIO_InitStructure);
+  LL_GPIO_Init(FB0_A_PORT, &GPIO_InitStructure);
 
   GPIO_InitStructure.Pin = FB0_B_PIN;
-  gpio_init(FB0_B_PORT, &GPIO_InitStructure);
+  LL_GPIO_Init(FB0_B_PORT, &GPIO_InitStructure);
 }
 
 

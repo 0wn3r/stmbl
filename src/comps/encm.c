@@ -46,18 +46,18 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(GPIOD, &GPIO_InitStruct);
+  LL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_USART6);
 
   //USART TX
-  gpio_set_af(GPIOC, 6, LL_GPIO_AF_8);
   GPIO_InitStruct.Pin   = LL_GPIO_PIN_6;
   GPIO_InitStruct.Mode  = LL_GPIO_MODE_ALTERNATE;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_UP;
-  gpio_init(GPIOC, &GPIO_InitStruct);
+  GPIO_InitStruct.Alternate = LL_GPIO_AF_8;
+  LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   USART_InitStruct.BaudRate            = 2500000;
   USART_InitStruct.DataWidth          = LL_USART_DATAWIDTH_8B;
@@ -72,20 +72,20 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   if(PIN(full_duplex) > 0.0) {
     //USART RX
-    gpio_set_af(GPIOC, 7, LL_GPIO_AF_8);
     GPIO_InitStruct.Pin   = LL_GPIO_PIN_7;
     GPIO_InitStruct.Mode  = LL_GPIO_MODE_ALTERNATE;
     GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
     GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
     GPIO_InitStruct.Pull  = LL_GPIO_PULL_UP;
-    gpio_init(GPIOC, &GPIO_InitStruct);
+    GPIO_InitStruct.Alternate = LL_GPIO_AF_8;
+    LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
   } else {
     SET_BIT(USART6->CR3, USART_CR3_HDSEL);  // half duplex
   }
 
   // DMA-Disable
-  dma_stop(DMA2_Stream1);
-  LL_DMA_DeInit(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1));
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_DeInit(DMA2, LL_DMA_STREAM_1);
 
   // DMA2-Config
   DMA_InitStructure.Channel            = LL_DMA_CHANNEL_5;
@@ -103,7 +103,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_InitStructure.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
   DMA_InitStructure.MemBurst        = LL_DMA_MBURST_SINGLE;
   DMA_InitStructure.PeriphBurst    = LL_DMA_PBURST_SINGLE;
-  LL_DMA_Init(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1), &DMA_InitStructure);
+  LL_DMA_Init(DMA2, LL_DMA_STREAM_1, &DMA_InitStructure);
 
   LL_USART_EnableDMAReq_RX(USART6);
 }
@@ -179,7 +179,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(state)     = 0;
 
   // number of received bytes
-  uint8_t bytes = sizeof(ctx->rxbuf) - ((DMA2_Stream1)->NDTR);
+  uint8_t bytes = sizeof(ctx->rxbuf) - LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_1);
   PIN(bytes)    = bytes;
 
   // check crc (xor all == 0)
@@ -232,9 +232,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ;
   LL_GPIO_ResetOutputPin(GPIOD, LL_GPIO_PIN_15);  //tx disable
   //start rx dma
-  dma_stop(DMA2_Stream1);
-  dma_clear_flags(DMA2_Stream1, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA2_Stream1);
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_ClearFlag_TC1(DMA2);
+  LL_DMA_EnableStream(DMA2, LL_DMA_STREAM_1);
 }
 
 hal_comp_t encm_comp_struct = {

@@ -89,7 +89,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_MEDIUM;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_Z_TXEN_PORT, &GPIO_InitStruct);
+  LL_GPIO_Init(FB0_Z_TXEN_PORT, &GPIO_InitStruct);
   LL_GPIO_ResetOutputPin(FB0_Z_TXEN_PORT, FB0_Z_TXEN_PIN);
 
   //TX
@@ -98,8 +98,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
   GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
   GPIO_InitStruct.Pull  = LL_GPIO_PULL_NO;
-  gpio_init(FB0_Z_PORT, &GPIO_InitStruct);
-  gpio_set_af(FB0_Z_PORT, FB0_Z_PIN_SOURCE, FB0_ENC_TIM_AF);
+  LL_GPIO_Init(FB0_Z_PORT, &GPIO_InitStruct);
+  LL_GPIO_SetAFPin_8_15(FB0_Z_PORT, FB0_Z_PIN, FB0_ENC_TIM_AF);  // TX pin is switched to AF later, PD14
 
   //RX DMA
   LL_DMA_InitTypeDef dma_rx_config;
@@ -120,9 +120,9 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   dma_rx_config.MemBurst        = LL_DMA_MBURST_SINGLE;
   dma_rx_config.PeriphBurst    = LL_DMA_PBURST_SINGLE;
 
-  dma_stop(DMA1_Stream7);
-  LL_DMA_DeInit(dma_of_stream(DMA1_Stream7), dma_stream_idx(DMA1_Stream7));
-  LL_DMA_Init(dma_of_stream(DMA1_Stream7), dma_stream_idx(DMA1_Stream7), &dma_rx_config);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_DeInit(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_Init(DMA1, LL_DMA_STREAM_7, &dma_rx_config);
 
   //timer setup
   LL_APB1_GRP1_EnableClock(FB0_ENC_TIM_RCC);
@@ -187,8 +187,8 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   dma_tx_config.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
   dma_tx_config.MemBurst        = LL_DMA_MBURST_SINGLE;
   dma_tx_config.PeriphBurst    = LL_DMA_PBURST_SINGLE;
-  LL_DMA_DeInit(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1));
-  LL_DMA_Init(dma_of_stream(DMA2_Stream1), dma_stream_idx(DMA2_Stream1), &dma_tx_config);
+  LL_DMA_DeInit(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_Init(DMA2, LL_DMA_STREAM_1, &dma_tx_config);
 
   //TIM8 tx bitbang timer
   LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_TIM8);
@@ -209,8 +209,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encs_ctx_t *ctx      = (struct encs_ctx_t *)ctx_ptr;
   struct encs_pin_ctx_t *pins = (struct encs_pin_ctx_t *)pin_ptr;
 
-  int count = ARRAY_SIZE(tim_data) - DMA1_Stream7->NDTR;
-  dma_stop(DMA1_Stream7);
+  int count = ARRAY_SIZE(tim_data) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
 
   for(int i = 0; i < 10; i++) {
     data.enc_data[i] = 0;
@@ -249,11 +249,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   FB0_Z_PORT->MODER &= ~GPIO_MODER_MODER14_1;
   FB0_Z_PORT->MODER |= GPIO_MODER_MODER14_0;  //set tx pin to output
   TIM8->ARR = 32;                             //2.545 Mhz
-  dma_stop(DMA2_Stream1);
-  dma_clear_flags(DMA2_Stream1, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA2_Stream1);
+  LL_DMA_DisableStream(DMA2, LL_DMA_STREAM_1);
+  LL_DMA_ClearFlag_TC1(DMA2);
+  LL_DMA_EnableStream(DMA2, LL_DMA_STREAM_1);
   //wait for DMA transfer complete
-  while((dma_get_flags(DMA2_Stream1, DMA_STREAM_FLAG_TC) != 0) == RESET)
+  while(LL_DMA_IsActiveFlag_TC1(DMA2) == RESET)
     ;
   FB0_Z_TXEN_PORT->BSRR = (uint32_t)(FB0_Z_TXEN_PIN) << 16;     //TX disable
   FB0_Z_PORT->MODER &= ~GPIO_MODER_MODER14_0;  //set tx pin to af
@@ -267,9 +267,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   FB0_ENC_TIM->CR1 |= TIM_CR1_CEN;  // enable tim
 
   //start rx DMA
-  dma_stop(DMA1_Stream7);
-  dma_clear_flags(DMA1_Stream7, DMA_STREAM_FLAG_TC);
-  dma_enable(DMA1_Stream7);
+  LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_7);
+  LL_DMA_ClearFlag_TC7(DMA1);
+  LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_7);
 }
 
 hal_comp_t encs_comp_struct = {
