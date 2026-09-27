@@ -9,28 +9,62 @@
 #include "hw/hw.h"
 #include <string.h>
 
+/**
+* ## Brief
+* `encf` reads Fanuc serial absolute encoders (tested with the Aa64 type, A860-360) on the FB0 connector of the F4 board. It is loaded by `conf/template/fanuc_fb0.txt` (used e.g. by `conf/fanuc_a6-2000.txt`), which links `encf0.pos`/`abs_pos`/`state` to `fb_switch0.mot_*` and `encf0.com_pos` to `fb_switch0.com_pos`/`com_abs_pos`.
+*
+* ## Component Explanation
+*
+* 1. **Hardware (nrt_init)**:
+* - The request pulse is generated with SPI3 (MOSI on PC12, prescaler 32, 16 bit word): every rt cycle the word `req_len` (default 2046) is written to SPI3, which gives a request pulse of about 8.4 us. The FB0 line driver enable PD15 is switched on.
+* - The encoder answer is received on FB0 A (PD12): TIM4 channel 1 captures every edge (both polarities) and DMA1 stream 0 (channel 2) stores up to 160 capture times.
+*
+* 2. **Bit decoding (rt)**:
+* - `dma` = number of captured edges of the last frame.
+* - `bit_ticks = 82e6 / freq` (timer ticks per bit, default `freq` = 1.024 MHz -> 80 ticks).
+* - The time between two edges is divided by `bit_ticks` and rounded to get the number of equal bits; every even-numbered interval is written as 1s. Bits after the last edge up to bit 76 are set to 1 (idle line).
+* - If fewer than 51 bits were decoded: `error = 1`, `state = 1` and the index state machine is reset.
+*
+* 3. **Frame content and CRC (rt)**:
+* - A 5 bit CRC (ITU CRC-5, from the Mesa `fabsread` notes) over bits 76..1 must be 0. On success `crc_ok` is incremented, otherwise `crc_er` is incremented and `error = 1`, `state = 1` (the position pins keep their last value).
+* - Fields: battery fail bit -> `batt`, un-indexed bit -> `index` (1 = not yet indexed), 22 bit single-turn position (6 low bits + 16 high bits), 16 bit turn counter -> `turns` (converted to signed, -32768..32767), 10 bit commutation track -> `com_pos`.
+* - `abs_pos = mod(pos22 * 2 * pi / 2^22)` (rad, +-pi); `com_pos = mod(com * 2 * pi / 1024)` (rad). According to the Mesa notes the commutation track has four 0..1023 cycles per turn and is always absolute.
+*
+* 4. **Index handling / pos output (rt)**:
+* - While the encoder reports un-indexed: `pos = abs_pos`, `state = 1`.
+* - On the first valid frame after the index is found the raw position is stored as internal offset, `pos = abs_pos`.
+* - Afterwards `state = 3` and `pos = mod((pos22 + offset + (pos_offset << 6)) * 2 * pi / 2^22)`, so the `pos_offset` pin shifts the position in steps of 64 counts (1/65536 turn). If the encoder is already indexed at power up, the internal offset is 0.
+*
+* 5. **Debug output (nrt)**:
+* - If `send_step >= 50`, every `send_step` nrt calls the raw 76 bit frame is printed as a string of 0/1.
+*
+* {{% hint warning %}}
+* The internal index offset is added, not subtracted, to the raw position, so `pos` jumps when the encoder becomes indexed while running; this looks unfinished. `bit_ticks` uses 82 MHz although TIM4 runs at 84 MHz, adjust `freq` if bits are decoded wrong. The TX enable (PD15), SPI3 and TIM4 pins are hard coded for the V4 board. The frame layout was only verified for Aa64 encoders; for Aa1000 (A860-370) the extra low resolution bits are not used.
+* {{% /hint %}}
+*/
+
 HAL_COMP(encf);
 
-HAL_PIN(error);
-HAL_PIN(dma);  //dma transfers
+HAL_PIN(error);       // *output*, 1 = no valid frame (too short or CRC error)
+HAL_PIN(dma);         // *output*, Number of captured edges in the last frame
 
-HAL_PIN(pos);
-HAL_PIN(abs_pos);
-HAL_PIN(state);
-HAL_PIN(turns);
-HAL_PIN(com_pos);
-HAL_PIN(index);
-HAL_PIN(batt);
-HAL_PIN(req_len);
+HAL_PIN(pos);         // *output*, Position after index handling (rad, +-pi)
+HAL_PIN(abs_pos);     // *output*, Raw single-turn position from the encoder (rad, +-pi)
+HAL_PIN(state);       // *output*, 1 = not indexed or error, 3 = indexed and valid
+HAL_PIN(turns);       // *output*, Multiturn counter (signed, -32768..32767)
+HAL_PIN(com_pos);     // *output*, Commutation track position (rad, +-pi per 1024 counts)
+HAL_PIN(index);       // *output*, Un-indexed bit, 1 = encoder not yet indexed
+HAL_PIN(batt);        // *output*, Battery fail bit
+HAL_PIN(req_len);     // *parameter*, 16 bit SPI word used as request pulse (default 2046)
 
-HAL_PIN(pos_offset);
+HAL_PIN(pos_offset);  // *parameter*, Position offset in units of 64 counts (1/65536 turn)
 
-HAL_PIN(send_step);
-HAL_PIN(crc_ok);
-HAL_PIN(crc_er);
+HAL_PIN(send_step);   // *parameter*, Print the raw frame every send_step nrt calls (off below 50)
+HAL_PIN(crc_ok);      // *output*, Counter of frames with correct CRC
+HAL_PIN(crc_er);      // *output*, Counter of frames with CRC error
 
-HAL_PIN(freq);
-HAL_PIN(bit_ticks);
+HAL_PIN(freq);        // *parameter*, Encoder bit rate (Hz, default 1024000)
+HAL_PIN(bit_ticks);   // *output*, Timer ticks per bit (82e6 / freq)
 
 static volatile uint32_t sendf;
 static uint32_t send_counterf;

@@ -9,76 +9,122 @@
 #include "main.h"
 #include "common.h"
 
+/**
+* ## Brief
+* `io` (file src/comps/hw/io4.c) is the board I/O driver of the F4 logic board, hardware version 4: status LEDs, fan, digital output `out0`, PWM outputs `out1`/`out2`, the two 24 V inputs, analog reads of the feedback connectors, the raw logic levels of the command and feedback connector lines and the RJ45 LEDs. Templates load it as `io0` and typically wire `io0.state = fault0.state`, `io0.fault = fault0.fault`, `io0.fan = fault0.hv_fan`, `io0.out0 = fault0.mot_brake` (brake) and the feedback templates drive `io0.fb0g`/`io0.fb0y`.
+*
+* ## Component Explanation
+*
+* 1. **Status LEDs (rt)**:
+* - `state` (the fault component's `state_t`) selects the red/yellow/green LEDs:
+* - 0 DISABLED: yellow.
+* - 1 ENABLED: green.
+* - 2 PHASING: green + yellow.
+* - 3 SOFT_FAULT: red blinks the fault code given in `fault` (N blinks, then a pause).
+* - 4 HARD_FAULT: all three LEDs blink the fault code.
+* - 5 LED_TEST: all on.
+* - The other states (DELAYED_ENABLED, DELAYED_DISABLED) turn all LEDs off.
+* - `fb0g`, `fb0y`, `fb1g`, `fb1y`, `cmdg`, `cmdy` switch the green/yellow LEDs of the three RJ45 jacks (> 0 = on).
+*
+* 2. **Outputs (rt)**:
+* - `out0` (> 0 = on) is a plain digital output (PE4), usually the motor brake.
+* - `out1` and `out2` are PWM outputs on TIM9 CH1/CH2 (PE5/PE6); their value is the duty cycle, clamped to 0..1. `out_freq` sets the PWM frequency (Hz, default 15000, min 10) for both. `out_arr`, `out_cnt`, `out_ccr1` show the timer registers for debugging.
+* - `fan` (> 0 = on) switches the fan output.
+* - `fbsd` > 0 switches off the 5 V supply of the feedback connectors (on by default).
+*
+* 3. **24 V inputs (rt)**:
+* - ADC3 reads both inputs by software triggered injected conversions; the conversion started at the end of one rt period is read in the next.
+* - `in0`, `in1` are the input voltages (V), recalculated from the resistor network of the input stage.
+* - `ind0`/`ind1` are 1 above `th0`/`th1` + 0.1 V and 0 below `th0`/`th1` - 0.1 V (0.2 V hysteresis, default threshold 12 V); `ind0n`/`ind1n` are the inverse. The in0/in1 LEDs follow `ind0`/`ind1`.
+*
+* 4. **Feedback connector analog (rt)**:
+* - `fb0`, `fb1` are the voltages (V) on the analog pin of the fb0/fb1 connectors (10k/1k divider), e.g. for a motor temperature sensor. `fbd0`/`fbd1` and `fbd0n`/`fbd1n` are thresholded at `fbth0`/`fbth1` (default 2.5 V) with the same 0.2 V hysteresis.
+*
+* 5. **Raw connector levels (rt)**:
+* - `fb0a`, `fb0b`, `fb0z`, `fb1a`, `fb1b`, `fb1z` are the logic levels of the A/B/Z lines of both feedback connectors, `C12`, `C36`, `C54`, `C78` those of the four command connector pairs (named after the RJ45 pins), `CRX`/`CTX` those of PD0/PD1. They are only meaningful when no other component uses these pins.
+*
+* 6. **Pin remapping (hw_init)**:
+* - `cmd_remap` > 0 (must be set in the config before the drive starts) switches the command connector transceivers A, B and C to transmit (EN lines high), used by conf/template/fanuc_io.txt.
+* - `swd_remap` > 0 turns PA13/PA14 into inputs readable on `DIO`/`CK`. This disables the SWD debug port.
+*
+* 7. **Master clock trim (frt)**:
+* - `master_arr` holds the reload value of the master timer TIM3 read in `nrt_init`. `clock_scale` > 1.01 sets TIM3 ARR to `master_arr + 1` (slightly slower rt/frt), < 0.99 to `master_arr - 1` (slightly faster), otherwise to `master_arr`. `sserial` uses this to lock the drive's control loop to the host (`io0.clock_scale = sserial0.clock_scale`).
+*
+* {{% hint warning %}}
+* The TIM9 frequency is calculated with a 186 MHz timer clock (`186000000 / 300 / out_freq`), while the F4 timer clock is 168 MHz, so the real PWM frequency of `out1`/`out2` is about 10 % lower than `out_freq`. conf/template/psi.txt sets `io0.brake`, which does not exist in this version (the brake output is `out0`).
+* {{% /hint %}}
+*/
+
 HAL_COMP(io);
 
-HAL_PIN(fan);
+HAL_PIN(fan);        // *input*, fan output, > 0 = on
 
-HAL_PIN(state);
-HAL_PIN(fault);
+HAL_PIN(state);      // *input*, drive state (fault0.state), selects the status LED pattern
+HAL_PIN(fault);      // *input*, fault code (fault0.fault), blinked on the LEDs in fault states
 
 //outputs
-HAL_PIN(out0);
-HAL_PIN(out1);
-HAL_PIN(out2);
+HAL_PIN(out0);       // *input*, digital output, > 0 = on, usually the motor brake
+HAL_PIN(out1);       // *input*, PWM output 1 duty cycle (0..1)
+HAL_PIN(out2);       // *input*, PWM output 2 duty cycle (0..1)
 
-HAL_PIN(out_freq);
-HAL_PIN(out_arr);
-HAL_PIN(out_cnt);
-HAL_PIN(out_ccr1);
+HAL_PIN(out_freq);   // *parameter*, PWM frequency of out1/out2 (Hz), default 15000, min 10
+HAL_PIN(out_arr);    // *output*, debug, TIM9 auto reload value
+HAL_PIN(out_cnt);    // *output*, debug, TIM9 counter
+HAL_PIN(out_ccr1);   // *output*, debug, TIM9 compare value of out1
 
-HAL_PIN(in0);    //input 0, analog
-HAL_PIN(in1);    //input 1, analog
-HAL_PIN(ind0);   //input 0, digital
-HAL_PIN(ind1);   //input 1, digital
-HAL_PIN(ind0n);  //input 0 inverted
-HAL_PIN(ind1n);  //input 0 inverted
-HAL_PIN(th0);    //voltage threshold in0
-HAL_PIN(th1);    //voltage threshold in1
+HAL_PIN(in0);        // *output*, input 0 voltage (V)
+HAL_PIN(in1);        // *output*, input 1 voltage (V)
+HAL_PIN(ind0);       // *output*, input 0 digital, 1 above th0
+HAL_PIN(ind1);       // *output*, input 1 digital, 1 above th1
+HAL_PIN(ind0n);      // *output*, input 0 digital, inverted
+HAL_PIN(ind1n);      // *output*, input 1 digital, inverted
+HAL_PIN(th0);        // *parameter*, switching threshold of in0 (V), default 12, 0.2 V hysteresis
+HAL_PIN(th1);        // *parameter*, switching threshold of in1 (V), default 12, 0.2 V hysteresis
 
-HAL_PIN(CTX);
-HAL_PIN(CRX);
-HAL_PIN(C12);
-HAL_PIN(C36);
-HAL_PIN(C54);
-HAL_PIN(C78);
-HAL_PIN(cmd_remap);
+HAL_PIN(CTX);        // *output*, logic level of PD1
+HAL_PIN(CRX);        // *output*, logic level of PD0
+HAL_PIN(C12);        // *output*, logic level of command connector pair A (RJ45 pins 1/2)
+HAL_PIN(C36);        // *output*, logic level of command connector pair B (RJ45 pins 3/6)
+HAL_PIN(C54);        // *output*, logic level of command connector pair C (RJ45 pins 5/4)
+HAL_PIN(C78);        // *output*, logic level of command connector pair D (RJ45 pins 7/8)
+HAL_PIN(cmd_remap);  // *parameter*, > 0 enables the transmitters of command pairs A, B, C at startup
 
-HAL_PIN(swd_remap);
-HAL_PIN(DIO);
-HAL_PIN(CK);
+HAL_PIN(swd_remap);  // *parameter*, > 0 turns the SWD pins into inputs (disables debugging) at startup
+HAL_PIN(DIO);        // *output*, logic level of PA13 (SWDIO) when swd_remap > 0
+HAL_PIN(CK);         // *output*, logic level of PA14 (SWCLK) when swd_remap > 0
 
 //rj45 leds
-HAL_PIN(fb0g);
-HAL_PIN(fb0y);
+HAL_PIN(fb0g);       // *input*, fb0 RJ45 green LED, > 0 = on
+HAL_PIN(fb0y);       // *input*, fb0 RJ45 yellow LED, > 0 = on
 
-HAL_PIN(fb1g);
-HAL_PIN(fb1y);
+HAL_PIN(fb1g);       // *input*, fb1 RJ45 green LED, > 0 = on
+HAL_PIN(fb1y);       // *input*, fb1 RJ45 yellow LED, > 0 = on
 
-HAL_PIN(cmdg);
-HAL_PIN(cmdy);
+HAL_PIN(cmdg);       // *input*, cmd RJ45 green LED, > 0 = on
+HAL_PIN(cmdy);       // *input*, cmd RJ45 yellow LED, > 0 = on
 
-HAL_PIN(fb0);
-HAL_PIN(fb1);
-HAL_PIN(fbd0);
-HAL_PIN(fbd1);
-HAL_PIN(fbd0n);
-HAL_PIN(fbd1n);
-HAL_PIN(fbth0);
-HAL_PIN(fbth1);
+HAL_PIN(fb0);        // *output*, analog voltage on the fb0 connector (V)
+HAL_PIN(fb1);        // *output*, analog voltage on the fb1 connector (V)
+HAL_PIN(fbd0);       // *output*, fb0 analog pin as digital, 1 above fbth0
+HAL_PIN(fbd1);       // *output*, fb1 analog pin as digital, 1 above fbth1
+HAL_PIN(fbd0n);      // *output*, fbd0 inverted
+HAL_PIN(fbd1n);      // *output*, fbd1 inverted
+HAL_PIN(fbth0);      // *parameter*, threshold for fbd0 (V), default 2.5
+HAL_PIN(fbth1);      // *parameter*, threshold for fbd1 (V), default 2.5
 
 //a,b,z inputs of fb0 and fb1
-HAL_PIN(fb0a);
-HAL_PIN(fb0b);
-HAL_PIN(fb0z);
+HAL_PIN(fb0a);       // *output*, logic level of fb0 line A
+HAL_PIN(fb0b);       // *output*, logic level of fb0 line B
+HAL_PIN(fb0z);       // *output*, logic level of fb0 line Z
 
-HAL_PIN(fb1a);
-HAL_PIN(fb1b);
-HAL_PIN(fb1z);
+HAL_PIN(fb1a);       // *output*, logic level of fb1 line A
+HAL_PIN(fb1b);       // *output*, logic level of fb1 line B
+HAL_PIN(fb1z);       // *output*, logic level of fb1 line Z
 
-HAL_PIN(fbsd);  //fb shutdown
+HAL_PIN(fbsd);       // *input*, > 0 switches off the 5 V feedback supply
 
-HAL_PIN(master_arr);
-HAL_PIN(clock_scale);
+HAL_PIN(master_arr); // *parameter*, master timer TIM3 reload value, read at load time
+HAL_PIN(clock_scale);// *input*, > 1.01 slows, < 0.99 speeds up the master timer by one count, default 1
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct io_pin_ctx_t *pins = (struct io_pin_ctx_t *)pin_ptr;
@@ -98,7 +144,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   GPIO_InitTypeDef GPIO_InitStructure;
   ADC_InitTypeDef ADC_InitStructure;
 
-  //**** ADC3 for analog input and fb temperature
+  // **** ADC3 for analog input and fb temperature
   //TODO: ADC calibration?
   GPIO_InitStructure.GPIO_Pin   = GPIO_Pin_0 | GPIO_Pin_1 | GPIO_Pin_2 | GPIO_Pin_3;
   GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_AIN;
@@ -147,7 +193,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ADC_InjectedChannelConfig(ADC3, ADC_Channel_13, 4, ADC_SampleTime_144Cycles);
   ADC_Cmd(ADC3, ENABLE);
   ADC_SoftwareStartInjectedConv(ADC3);
-  //**** ADC3 end
+  // **** ADC3 end
 
   GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_OUT;
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;

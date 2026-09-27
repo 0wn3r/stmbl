@@ -5,19 +5,41 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+* ## Brief
+* `vel_int` interpolates a position command that arrives at a lower or irregular rate (e.g. from LinuxCNC via smart serial) by integrating the commanded velocity between updates. F4 component, loaded by `conf/template/sserial.txt`: `vel_int0.pos_in = linrev0.cmd_out`, `vel_int0.vel_in = linrev0.cmd_d_out`, `rev0.in = vel_int0.pos_out`.
+*
+* ## Component Explanation
+* All work is done in `rt`. Defaults: `wd` = 0.002 s, `cmd_freq` = 1000.
+*
+* 1. **Interpolation**:
+* - When `pos_in` changes, the internal position is set to `pos_in` and the watchdog counter is reset.
+* - Otherwise the internal position is advanced by `vel_in * period`. `pos_out` is wrapped with `mod()`, `vel_out` is the (possibly zeroed) `vel_in`.
+*
+* 2. **Watchdog**:
+* - If `pos_in` has not changed for more than `wd` seconds while `vel_in` is not 0, the velocity is forced to 0 (no more extrapolation) and `error` is set to 1. Otherwise `error` is 0.
+*
+* 3. **Command rate**:
+* - `real_cmd_freq` estimates how often `pos_in` changes (Hz): every change adds 1 to a counter that decays with a 1 s time constant; the result is additionally low pass filtered (factor 0.001 per period).
+*
+* {{% hint warning %}}
+* Change detection uses the `EDGE()` macro, which keeps its state in a static variable, so all instances of `vel_int` share it. The `cmd_freq` pin only seeds the internal counter at init and is otherwise unused.
+* {{% /hint %}}
+*/
+
 HAL_COMP(vel_int);
 
-HAL_PIN(pos_in);
-HAL_PIN(pos_out);
+HAL_PIN(pos_in);   // *input*, Position command, sampled at the command rate (rad)
+HAL_PIN(pos_out);  // *output*, Interpolated position command (rad, +-pi)
 
-HAL_PIN(vel_in);
-HAL_PIN(vel_out);
+HAL_PIN(vel_in);   // *input*, Velocity command used for interpolation (rad/s)
+HAL_PIN(vel_out);  // *output*, Velocity command, 0 after watchdog timeout (rad/s)
 
-HAL_PIN(cmd_freq);
-HAL_PIN(real_cmd_freq);
+HAL_PIN(cmd_freq);       // *parameter*, Initial value of the command rate estimate (Hz), default 1000
+HAL_PIN(real_cmd_freq);  // *output*, Measured rate of pos_in updates (Hz)
 
-HAL_PIN(wd);
-HAL_PIN(error);
+HAL_PIN(wd);     // *parameter*, Watchdog time without pos_in change (s), default 0.002
+HAL_PIN(error);  // *output*, 1 = watchdog timed out while vel_in != 0
 
 struct vel_int_ctx_t {
   float pos;

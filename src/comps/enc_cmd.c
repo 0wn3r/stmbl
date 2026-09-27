@@ -7,16 +7,52 @@
 #include "stm32f4xx_conf.h"
 #include "hw/hw.h"
 
+/**
+* ## Brief
+* `enc_cmd` reads an incremental position command (quadrature or step/dir style A/B signals) with an STM32 hardware timer on the F4 board and outputs it as an angle. It is loaded by `conf/template/enc_cmd.txt` (`enc_cmd0.res = conf0.cmd_res`, `rev0.in = enc_cmd0.pos`), so the command position goes through `rev0` to build a multiturn command. It can also drive a fault/ready line back to the controller.
+*
+* ## Component Explanation
+*
+* 1. **Connector and timer selection (`remap`, read once in hw_init)**:
+* - `remap = 0` (default): CMD connector, A = PA15, B = PB3 on TIM2 (32 bit). Fault line = CMD C (PB5), its line driver enable PB9 is switched on.
+* - `remap = 1`: FB0 connector, A = PD12, B = PD13 on TIM4. Fault line = FB0 Z (PD14), enable PD15.
+* - `remap = 2`: FB1 connector, A = PE9, B = PE11 on TIM1. Fault line = FB1 Z (PE13), enable PE14.
+* - `remap = 3` ("bene style", used by `conf/bene_sanyo.txt` and `conf/spindle_slip_uf.txt`): A = PA8, B = PA9 on TIM1. Fault line = CMD D (PB8), enable PB2.
+* - Any other value returns from hw_init without configuring anything, `pos` then reads a timer that was never set up.
+* - A and B get the timer alternate function with pull-ups, the fault pin and its enable are push-pull outputs.
+*
+* 2. **Timer setup (hw_init)**:
+* - The timer is put into encoder mode (TI1 and TI2 edges), auto-reload = `2 * res - 1`.
+* - The two input channels are then re-initialised: CH1 on both edges (commented as the step clock), CH2 on rising edges (commented as direction). The digital input filter of both channels is `input_filter`, clamped to 0..15 (default 3).
+* - `res` is copied at init and clamped to >= 1 (default 4096).
+*
+* 3. **Position output (rt)**:
+* - Each rt cycle the counter is read and converted:
+* ```c
+* pos = mod(counter * 2 * pi / res);   // rad, wrapped to +-pi
+* ```
+* - Because the counter range is `2 * res` counts, `pos` wraps twice per counter period; the multiturn tracking is done downstream (e.g. `rev0`). The bene config comments `cmd_res` as "cmd counts / rev * 2".
+* - If `res` changes at runtime the auto-reload register is updated.
+* - `a` and `b` show the raw logic levels of the A and B inputs.
+*
+* 4. **Fault output (rt)**:
+* - `fault > 0` drives the fault line high, otherwise it is driven low (e.g. `enc_cmd0.fault = fault0.fault` or an inverted enable signal).
+*
+* {{% hint warning %}}
+* The `mode` pin (documented as 0 = quad, 1 = step/dir, 2 = dir/step, 3 = up/down, and set by several configs) is never read: the timer mode is fixed by the setup in hw_init. That setup mixes encoder mode with input-capture settings that look copied from a step/dir experiment (CH1 mapped to the other input, `TIM_ICPrescaler = 1` instead of `TIM_ICPSC_DIV1`), so check the counting behaviour on real hardware. With TIM1/TIM4 (`remap` 1..3) the counter is 16 bit, so `res` must stay <= 32768. The pin/timer definitions exist only for the V4 board.
+* {{% /hint %}}
+*/
+
 HAL_COMP(enc_cmd);
 
-HAL_PIN(res);
-HAL_PIN(pos);
-HAL_PIN(a);
-HAL_PIN(b);
-HAL_PIN(fault);
-HAL_PIN(mode);   // 0 = quad, 1 = step/dir, 2 = dir/step, 3 = up/down
-HAL_PIN(remap);  // 0 = cmd, 1 = fb0, 2 = fb1, 3 = cmd bene style
-HAL_PIN(input_filter);
+HAL_PIN(res);           // *parameter*, Counts per revolution, auto-reload = 2 * res - 1 (default 4096)
+HAL_PIN(pos);           // *output*, Command position (rad, +-pi)
+HAL_PIN(a);             // *output*, Raw level of the A input (0/1)
+HAL_PIN(b);             // *output*, Raw level of the B input (0/1)
+HAL_PIN(fault);         // *input*, > 0 drives the fault/ready line high
+HAL_PIN(mode);          // *parameter*, Intended 0 = quad, 1 = step/dir, 2 = dir/step, 3 = up/down; currently not used by the code
+HAL_PIN(remap);         // *parameter*, Input connector: 0 = CMD (TIM2), 1 = FB0 (TIM4), 2 = FB1 (TIM1), 3 = PA8/PA9 bene style (TIM1)
+HAL_PIN(input_filter);  // *parameter*, Timer input filter setting 0..15 (default 3)
 
 struct enc_cmd_ctx_t {
   int e_res;

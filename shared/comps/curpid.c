@@ -6,51 +6,97 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+* ## Brief
+* `curpid` is the d/q current controller. From a d/q current command and the measured d/q currents it computes the d/q voltages with a PI controller plus resistance, back EMF and cross coupling feed forward and a predictor for the PWM delay. It also limits the current command to `max_cur`. In voltage mode it passes the command through as a voltage. It runs on the F3 (HV board) as `curpid0`, loaded by `stm32f303/src/main.c` (rt_prio 3). There all its inputs come from `ls0` (the F4's command and motor config) and `dq0` (measured currents), and `ud`/`uq` go to `idq0`. On the F4 it is only used by the old `conf/template/linkv3.txt`.
+*
+* ## Component Explanation
+*
+* 1. **Command limit** (rt):
+* - Current mode (`cmd_mode` = 1): `scale = sqrt(max_cur^2 / |i_cmd|^2)`, clamped to 0..1, so the command vector (`id_cmd`, `iq_cmd`) is scaled down to at most `max_cur` (A peak).
+* - Voltage mode (`cmd_mode` = 0): `id_cmd`/`iq_cmd` are voltages. `scale` is multiplied by `sqrt(pwm_volt^2 / |u_cmd|^2)` (clamped to 1) every tick, and integrated up by `(max_cur^2 - |i_fb|^2) * kci * period`, so it drops when the measured current goes above `max_cur`. It is clamped to 0..1.
+* - The command is multiplied by `scale`.
+*
+* 2. **Predictor** (rt):
+* - To cancel one tick of PWM delay, the measured current is moved one period ahead with the motor model, using the voltage output last tick:
+* ```c
+* id += (ud - r * id + vel * lq * iq) / ld * period * ksp;
+* iq += (uq - r * iq - vel * (ld * id + psi)) / lq * period * ksp;
+* ```
+* - `ksp` = 0 turns it off.
+*
+* 3. **PI controller** (rt):
+* - Proportional part plus feed forward, each axis limited to +-`pwm_volt`:
+* ```c
+* ud = ff * r * id_cmd - kind * vel * lq * iq + cur_bw * ld * id_error;
+* uq = ff * r * iq_cmd + kind * vel * (ld * id + psi) + cur_bw * lq * iq_error;
+* ```
+* - Integral part: `sum += cur_bw * r * error * period`, limited to +-(`pwm_volt` - proportional part), and added to the output. So the zero of the PI sits at `r / l`, and `cur_bw` is the closed loop bandwidth (rad/s).
+* - `ff` (resistance) and `kind` (back EMF and cross coupling) are feed forward factors, 0 = off, 1 = full.
+* - `id_error`/`iq_error` show the error against the predicted current.
+*
+* 4. **Modes and enable** (rt):
+* - In voltage mode `ud`/`uq` are the scaled command, and the integrators and errors are 0.
+* - With `en` <= 0, `ud`/`uq` are 0 and the integrators are reset.
+*
+* 5. **Parameters**:
+* - nrt_init defaults: `r` 0.5 Ohm, `ld`/`lq` 10 mH, `psi` 0.05, `cur_bw` 250 rad/s, `kci` 500, `ksp` 1, `scale` 1. `ff` and `kind` default to 0.
+* - Floors used in rt: `r` 0.1 Ohm, `ld`/`lq` 1 mH, `max_cur` 0.01 A.
+* - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage and phase mode).
+*
+* {{% hint warning %}}
+* - The d and q voltages are limited one by one, not as a vector, so `|u|` can reach sqrt(2) * `pwm_volt`. The integral limit is symmetric around the proportional part, so the sum can also leave +-`pwm_volt`. The PWM stage clamps what is left.
+* - In voltage mode with a command above `pwm_volt`, `scale` is multiplied down again every tick instead of being set to the ratio, so it keeps shrinking until the `kci` term balances it.
+* - Both limits compare a squared value with `0.1 * max` (not squared). This only matters for very small commands and has no effect after the clamp to 1.
+* - `conf/template/linkv3.txt` links `curpid0.dc_volt` and `curpid0.ac_volt`, which no longer exist.
+* {{% /hint %}}
+*/
+
 HAL_COMP(curpid);
 
 // enable
-HAL_PIN(en);
-HAL_PIN(cmd_mode);
+HAL_PIN(en);        // *input*, Enable, outputs 0 and integrators reset when <= 0
+HAL_PIN(cmd_mode);  // *input*, Command mode, 0 = voltage (commands are V), 1 = current (commands are A)
 
 // current command
-HAL_PIN(id_cmd);
-HAL_PIN(iq_cmd);
+HAL_PIN(id_cmd);  // *input*, D-axis command, current (A) or voltage (V) depending on cmd_mode
+HAL_PIN(iq_cmd);  // *input*, Q-axis command, current (A) or voltage (V) depending on cmd_mode
 
 // current feedback
-HAL_PIN(id_fb);
-HAL_PIN(iq_fb);
+HAL_PIN(id_fb);  // *input*, Measured d-axis current (A)
+HAL_PIN(iq_fb);  // *input*, Measured q-axis current (A)
 
 // HAL_PIN(ac_current);
 
 // voltage output
-HAL_PIN(ud);
-HAL_PIN(uq);
+HAL_PIN(ud);  // *output*, D-axis voltage (V), also read back by the predictor
+HAL_PIN(uq);  // *output*, Q-axis voltage (V), also read back by the predictor
 
 // maximum output current and voltage
-HAL_PIN(max_cur);
-HAL_PIN(pwm_volt);
+HAL_PIN(max_cur);   // *input*, Maximum current (A), limits the command, min 0.01
+HAL_PIN(pwm_volt);  // *input*, Maximum output voltage per axis (V)
 
 // d, q resistance and inductance
-HAL_PIN(r);
-HAL_PIN(ld);
-HAL_PIN(lq);
+HAL_PIN(r);   // *parameter*, Winding resistance (Ohm), min 0.1, default 0.5
+HAL_PIN(ld);  // *parameter*, D-axis inductance (H), min 0.001, default 0.01
+HAL_PIN(lq);  // *parameter*, Q-axis inductance (H), min 0.001, default 0.01
 
 // torque constant
-HAL_PIN(psi);
+HAL_PIN(psi);  // *parameter*, Magnet flux linkage (Vs/rad), default 0.05
 
-HAL_PIN(ff);  // r feed forward
-HAL_PIN(cur_bw);
-HAL_PIN(ksp);   // predictor
-HAL_PIN(kind);  // bemf feed forward
-HAL_PIN(kci);
+HAL_PIN(ff);      // *parameter*, Resistance feed forward factor, 0 = off, 1 = full
+HAL_PIN(cur_bw);  // *parameter*, Current loop bandwidth (rad/s), default 250
+HAL_PIN(ksp);     // *parameter*, Predictor gain for the PWM delay, 0 = off, default 1
+HAL_PIN(kind);    // *parameter*, Back EMF and cross coupling feed forward factor, 0 = off, 1 = full
+HAL_PIN(kci);     // *parameter*, Current limit integrator gain in voltage mode, default 500
 
-HAL_PIN(scale);
+HAL_PIN(scale);  // *output*, Factor applied to the command by the current or voltage limit (0..1)
 
-HAL_PIN(vel);  // velocity input
+HAL_PIN(vel);  // *input*, Electrical velocity (rad/s)
 
 // current error outputs
-HAL_PIN(id_error);
-HAL_PIN(iq_error);
+HAL_PIN(id_error);  // *output*, D-axis current error (A), 0 in voltage mode
+HAL_PIN(iq_error);  // *output*, Q-axis current error (A), 0 in voltage mode
 
 struct curpid_ctx_t {
   float id_error_sum;

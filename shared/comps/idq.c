@@ -6,17 +6,39 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+* ## Brief
+* `idq` is the inverse of `dq`: it turns d/q values (normally the voltages from the current controller) at the rotor angle `pos` into the alpha/beta frame (inverse Park) and then into three phase values (inverse Clarke). It runs on the F3 (HV board) as `idq0`, loaded by `stm32f303/src/main.c` (rt_prio 4): `idq0.d/q = curpid0.ud/uq`, `idq0.pos = ls0.pos`, `idq0.mode = ls0.phase_mode`, and `u`/`v`/`w` go to `svm0`.
+*
+* ## Component Explanation
+*
+* 1. **Inverse Park transform** (rt):
+* - The electrical angle is `pos * polecount` (`polecount` is truncated to an integer, min 1).
+* ```c
+* a = d * cos - q * sin;
+* b = d * sin + q * cos;
+* ```
+*
+* 2. **Inverse Clarke transform** (rt), selected by `mode`:
+* - 0 (90 deg 3 phase): `u = a`, `v = 0`, `w = b`.
+* - 2 (120 deg 3 phase): `u = a`, `v = -a/2 + b * sqrt(3)/2`, `w = -a/2 - b * sqrt(3)/2`. The phase amplitude equals the vector length.
+* - 3 (180 deg 2 phase): `u = b/2`, `v = 0`, `w = -b/2`.
+* - 4 (180 deg 3 phase): `u = b/2`, `v = a`, `w = -b/2`.
+* - Any other mode (including 1, 90 deg 4 phase) gives 0.
+* - The outputs are centred on 0. `svm` adds the offset that puts them into 0..udc.
+*/
+
 HAL_COMP(idq);
 
-HAL_PIN(mode);
+HAL_PIN(mode);  // *input*, Phase mode, 0 = 90 deg 3ph, 2 = 120 deg 3ph, 3 = 180 deg 2ph, 4 = 180 deg 3ph, others give 0
 
 //d,q inputs
-HAL_PIN(d);
-HAL_PIN(q);
+HAL_PIN(d);  // *input*, D-axis value, e.g. voltage (V)
+HAL_PIN(q);  // *input*, Q-axis value, e.g. voltage (V)
 
 //rotor position
-HAL_PIN(pos);
-HAL_PIN(polecount);
+HAL_PIN(pos);        // *input*, Rotor angle (rad)
+HAL_PIN(polecount);  // *parameter*, Pole pairs, pos is multiplied by it, min 1, default 0 (used as 1)
 
 // sin/cos of the same angle from elsewhere (dq0 on the f3, which transforms
 // the currents with it a moment earlier), used instead of a second
@@ -29,13 +51,13 @@ HAL_PIN(si_out);
 HAL_PIN(co_out);
 
 //a,b output
-HAL_PIN(a);
-HAL_PIN(b);
+HAL_PIN(a);  // *output*, Alpha component
+HAL_PIN(b);  // *output*, Beta component
 
 //U V W output
-HAL_PIN(u);
-HAL_PIN(v);
-HAL_PIN(w);
+HAL_PIN(u);  // *output*, U phase value
+HAL_PIN(v);  // *output*, V phase value
+HAL_PIN(w);  // *output*, W phase value
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct idq_ctx_t * ctx = (struct idq_ctx_t *)ctx_ptr;
