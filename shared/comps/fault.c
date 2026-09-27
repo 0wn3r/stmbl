@@ -70,6 +70,13 @@ HAL_PIN(warn_timer);
 HAL_PIN(error_timer);
 HAL_PIN(brake_timer);
 
+// Short-circuit braking (f3 io.c) after a stop that leaves the bridge
+// healthy: a disable, or a command, feedback, following, saturation or link
+// fault. sbrake_en also arms the f3 to brake on its own on a link loss.
+HAL_PIN(sbrake_en);
+HAL_PIN(sbrake_time);  // [s], default 1
+HAL_PIN(sbrake);       // request to hv0.sbrake, out
+
 //fault strings for fault_t form common.h
 static const char *fault_string[] = {
     "no error",
@@ -101,7 +108,31 @@ struct fault_ctx_t {
   float hv_temp_error;
   float dc_volt_error;
   float mot_temp_error;
+  float sbrake_timer;
 };
+
+// stops after which the bridge may still be used to brake the motor
+static int sbrake_safe(fault_t fault) {
+  switch(fault) {
+    case NO_ERROR:
+    case CMD_ERROR:
+    case MOT_FB_ERROR:
+    case COM_FB_ERROR:
+    case JOINT_FB_ERROR:
+    case POS_ERROR:
+    case SAT_ERROR:
+    case HV_CRC_ERROR:
+    case HV_TIMEOUT_ERROR:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+// states in which the bridge is driving the motor
+static int powered(state_t state) {
+  return state == ENABLED || state == DELAYED_ENABLED || state == DELAYED_DISABLED || state == PHASING;
+}
 
 void enable(char *ptr) {
   hal_parse("fault0.en = 1");
@@ -132,11 +163,15 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(high_mot_temp) = 80.0;
   PIN(fan_hv_temp)   = 60.0;
   PIN(fan_mot_temp)  = 60.0;
+  PIN(sbrake_time)   = 1.0;
+  ctx->sbrake_timer  = 0.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct fault_ctx_t *ctx      = (struct fault_ctx_t *)ctx_ptr;
   struct fault_pin_ctx_t *pins = (struct fault_pin_ctx_t *)pin_ptr;
+
+  state_t last_state = ctx->state;
 
   switch(ctx->state) {
     case DISABLED:
@@ -283,6 +318,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   if(PIN(mot_temp) < PIN(fan_mot_temp) * 0.9) {
     PIN(mot_fan) = 0.0;
   }
+
+  int stop_edge = powered(last_state) && !powered(ctx->state) && ctx->state != HARD_FAULT && ctx->state != LED_TEST;
+  if(PIN(sbrake_en) > 0.0 && stop_edge) {
+    ctx->sbrake_timer = PIN(sbrake_time);
+  }
+  if(PIN(sbrake_en) <= 0.0 || powered(ctx->state) || !sbrake_safe(ctx->fault)) {
+    ctx->sbrake_timer = 0.0;
+  }
+  PIN(sbrake)       = ctx->sbrake_timer > 0.0;
+  ctx->sbrake_timer = MAX(ctx->sbrake_timer - period, 0.0);
 
   switch(ctx->state) {
     case DISABLED:

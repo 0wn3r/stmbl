@@ -84,6 +84,10 @@ typedef struct {
         PHASE_180_3PH,
       } phase_type : 3;
       uint32_t ignore_fault_pin : 1;
+      // short-circuit braking (f3 io.c): sbrake asks for it now, sbrake_arm
+      // lets the f3 brake on its own when packets stop
+      uint32_t sbrake : 1;
+      uint32_t sbrake_arm : 1;
     } flags;
     uint32_t padding;
   };
