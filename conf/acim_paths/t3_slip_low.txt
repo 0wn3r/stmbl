@@ -1,0 +1,76 @@
+# T3 acim_ttc mode 0, encoder, below base
+# plan: conf/acim_paths/README.md
+link pid
+link acim
+link enc_fb0
+link misc
+# spindle encoder, as in the live config
+conf0.mot_fb_res = 512
+enc_fb0.ires = 32
+fb_switch0.mot_pos = enc_fb0.ipos
+adc0.sin_gain = 1.5
+adc0.cos_gain = 1.5
+fault0.mot_fb_error = 0
+# Fanuc a2 ACIM, delta, 4 poles, equiv-Y peak
+conf0.polecount = 2
+conf0.out_rev = 1
+conf0.r = 0.18
+# live was 0.615 (dead time bias), DC is 0.18
+conf0.l = 0.003539
+# keep until curpid has the flux term
+conf0.psi = 0
+conf0.j = 0.0078
+conf0.j_sys = 0.011542
+conf0.o = 0.008531
+conf0.d = 0.001991
+conf0.f = 0.162908
+conf0.max_force = 14
+conf0.max_sat = 1
+conf0.max_dc_cur = 27
+hv0.dac = 3400
+# bench limits, raise only on Eduard's word
+conf0.max_ac_cur = 13.8
+conf0.max_vel = 200
+conf0.max_acc = 100
+# bench enable: ramp0.en = 1 runs, 0 stops
+# speed: ramp0.vel_ext_cmd = <rad/s mech>
+load ramp
+ramp0.rt_prio = 5.1
+ramp0.en = 0
+ramp0.vel_ext_cmd = 0
+ramp0.max_vel = conf0.max_vel
+ramp0.max_acc = conf0.max_acc
+ramp0.en_delay = 0.01
+fault0.en = ramp0.en_out
+pid0.pos_en = 0
+pid0.vel_ext_cmd = ramp0.vel_cmd
+# acim_ttc, torque_n = 14*(cur_n/19)^2
+acim_ttc0.mode = 0
+acim_ttc0.cur_n = 16
+acim_ttc0.torque_n = 9.9
+acim_ttc0.freq_n = 78.4
+acim_ttc0.vel_n = 238
+acim_ttc0.s_boost = 2
+# acim.txt links pid0.min_torque (no such pin)
+pid0.neg_min_torque = acim_ttc0.t_max
+# F3 decoupling wants synchronous speed
+hv0.vel = acim_ttc0.vel_e
+# no field weakening in this test
+acim_ttc0.duty = 0
+acim_ttc0.duty_setpoint = 0.8
+term0.wave0 = hv0.id_fb
+term0.wave1 = hv0.iq_fb
+term0.wave2 = hv0.ud_fb
+term0.wave3 = hv0.uq_fb
+term0.wave4 = vel1.vel
+term0.wave5 = acim_ttc0.vel_e
+term0.wave6 = hv0.duty
+term0.wave7 = hv0.abs_cur
+term0.gain0 = 5
+term0.gain1 = 5
+term0.gain2 = 1
+term0.gain3 = 1
+term0.gain4 = 0.1
+term0.gain5 = 0.05
+term0.gain6 = 20
+term0.gain7 = 5
