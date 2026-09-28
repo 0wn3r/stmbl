@@ -13,7 +13,7 @@
 * ## Component Explanation
 *
 * 1. **Command limit** (rt):
-* - Current mode (`cmd_mode` = 1): `scale = sqrt(max_cur^2 / |i_cmd|^2)`, clamped to 0..1, so the command vector (`id_cmd`, `iq_cmd`) is scaled down to at most `max_cur` (A peak).
+* - Current mode (`cmd_mode` = 1): `scale = max_cur / |i_cmd|` when the command vector (`id_cmd`, `iq_cmd`) is longer than `max_cur`, else 1, so the command is scaled down to at most `max_cur` (A peak). The square root is `__builtin_sqrtf` (the FPU instruction, as the F3 builds with -fno-builtin) and is only taken above the limit.
 * - Voltage mode (`cmd_mode` = 0): `id_cmd`/`iq_cmd` are voltages. `scale` is multiplied by `sqrt(pwm_volt^2 / |u_cmd|^2)` (clamped to 1) every tick, and integrated up by `(max_cur^2 - |i_fb|^2) * kci * period`, so it drops when the measured current goes above `max_cur`. It is clamped to 0..1.
 * - The command is multiplied by `scale`.
 *
@@ -47,7 +47,7 @@
 * {{% hint warning %}}
 * - The d and q voltages are limited one by one, not as a vector, so `|u|` can reach sqrt(2) * `pwm_volt`. The integral limit is symmetric around the proportional part, so the sum can also leave +-`pwm_volt`. The PWM stage clamps what is left.
 * - In voltage mode with a command above `pwm_volt`, `scale` is multiplied down again every tick instead of being set to the ratio, so it keeps shrinking until the `kci` term balances it.
-* - Both limits compare a squared value with `0.1 * max` (not squared). This only matters for very small commands and has no effect after the clamp to 1.
+* - The voltage mode limit compares the squared command with `0.1 * pwm_volt` (not squared). This only matters for very small commands and has no effect after the clamp to 1.
 * - `conf/template/linkv3.txt` links `curpid0.dc_volt` and `curpid0.ac_volt`, which no longer exist.
 * {{% /hint %}}
 */

@@ -22,10 +22,11 @@
 * ## Component Explanation
 *
 * 1. **Sampling** (rt):
-* - Every `send_step` rt ticks the 8 `wave` pins are stored into a ring buffer (64 entries on the F4, 8 on the F3 because of its small HAL memory). When the buffer is full, new samples are dropped.
+* - Every `send_step` rt ticks the 8 `wave` pins are stored into a ring buffer (`TERM_BUF_SIZE`: 64 entries on the F4, which covers 12.8 ms of main loop at `send_step` 1; 8 on the F3, set in its Makefile, because all F3 components share 1024 bytes of HAL memory). One entry is kept free, so 63 (or 7) samples fit. When the buffer is full, new samples are dropped instead of overwriting unsent ones.
 *
 * 2. **Sending** (nrt):
 * - Each buffered sample is sent as 9 bytes: a 255 sync byte, then for each wave `CLAMP((wave + offset) * gain + 128, 1, 254)`. So a wave value of 0 is the middle of the scope, and with the default `gain` of 10 the visible range is about +-12.6.
+* - On the F4 a sample goes into the USB transmit ring whole or not at all: if there is no room for all 9 bytes it is dropped, so the host never sees a torn sample.
 * - Nothing is sent while `send_step` is 0 or no terminal is connected; the samples are still taken from the buffer and dropped.
 *
 * 3. **Receiving** (nrt):

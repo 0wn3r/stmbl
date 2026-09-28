@@ -4,52 +4,95 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+* ## Brief
+* `idacim` identifies an AC induction motor: stator resistance `r` (with the inverter dead time voltage `drop` separated from it), inductance `l` from the current time constant, pole pairs and direction. It runs on the F4 board, drives `hv0` directly and is loaded by the `id_acim` template. Slip, rated values and the other `acim_ttc` parameters are not measured.
+*
+* ## Component Explanation
+*
+* 1. **Before you start**:
+* - `test_cur` (peak A, default 3) must be under `conf0.max_ac_cur`; the chord r fit wants at least about 5 A (below that the dead time bias is understated). `test_vel` (electrical rad/s, default 50) sets the field speed of the pole pair test.
+* - If you have a four wire measurement of the winding resistance, set `idacim0.r_known` to it: r is then taken as given and only the dead time drop is read.
+* - The template does not touch `hv0.drop_k`; keep it at its default 0 (no dead time compensation) while identifying.
+* - While the state is 0 the nrt function resets `r` 0.1 ohm, `l` 1 mH, `l_half` 0.1 s, `drop` 0, `out_rev` 0, `cur_bw` 1, so set `l_half` only after enabling. `test_cur`, `test_vel`, `r_known` and `drop_slope` keep their values.
+*
+* 2. **How to run it**:
+* - At the console, `link id_acim`. The template loads `idacim` and wires `idacim0.en = fault0.en_out`, sets `fault0.pos_error = 0` and `pid0.en = 0`, connects `hv0.en`, `cur_bw`, `cmd_mode`, `d_cmd`, `q_cmd`, `pos`, `rev`, `r`, `l` to this component (`hv0.lq = 0`) and `hv0.ud_fb`, `id_fb`, `pwm_volt`, `dc_volt` and `vel1.vel` back into it. `hv0.r` / `hv0.l` are this component's `r` / `l`, so they are the current loop's plant model during the tests.
+* - Block the rotor and enable the drive. The state goes `0` -> `1.0` -> `1.1` and the console asks for `idacim0.state = 1.2`. `en` low returns to `0` from any state.
+* - The r and l tests run (6 s) and state `1.4` prints `conf0.r` and `conf0.l` (or why l failed) and goes to `2.0`, which asks to unblock the rotor. Set `idacim0.state = 2.2`; the rotor turns for 3 s and state `2.4` prints `conf0.polecount` and, if reversed, `conf0.out_rev = 1`. Append the printed lines to the config and save.
+*
+* 3. **Resistance (`state` 1.2), rotor blocked**:
+* - Current mode, `cur_bw` 1, current on the d axis at `com_pos = 0`: 2 s at `test_cur`, then 2 s at `test_cur / 2`. `id_fb` / `ud_fb` of each dwell are low-passed (0.001 per tick) into `tmp2` / `tmp3` (top) and `tmp0` / `tmp1` (half). Meanwhile `r` tracks `ud_fb / id_fb` so the current loop can build up voltage at all.
+* - `ud_fb` contains `r * id + 4/3 * drop` (dead time; at angle 0 the phase currents are id, -id/2, -id/2). After 4 s `fit_di = tmp2 - tmp0` and the chord `r_2p = (tmp3 - tmp1) / fit_di` (only if `fit_di > 0.01` A) are computed, and `r` is taken from one of two modes:
+* - `r_known > 0`: `r = r_known`, `drop = 0.75 * (tmp3 - r * tmp2)`. Needs the top dwell to reach half of `test_cur`.
+* - default: `r = r_2p - r_bias` with `r_bias = drop_slope * dc_volt / test_cur` (0 if `dc_volt` is not wired), `drop` as above. The dead time drop rises roughly as ln(i), which biases the chord; `drop_slope` (0.0039 ohm A per volt) was fitted on one bridge.
+* - `r_ok` is set if the chosen mode produced a value. Then `avg_test_volt = r * test_cur + 4/3 * drop` (limited to `pwm_volt / 2`) and the state goes to `1.3`, or straight to `1.4` if `r_ok` is 0.
+*
+* 4. **Inductance (`state` 1.3)**:
+* - Voltage mode, `cur_bw` 1: `d_cmd` is a square wave between `avg_test_volt` and `avg_test_volt - r * test_cur / 2` with half period `l_half`, for 2 s. Both levels keep the current on the same side of zero, so the dead time drop cancels.
+* - Edges are detected on the returned `ud_fb` (same packet delay as `id_fb`). For each high half the current is integrated (trapezoid) and the time constant is obtained by the area method:
+* ```c
+* tau = (i_b * T - integral(i dt)) / (i_b - i_a);
+* ```
+* - `i_a` / `i_b` are the settled currents of the last quarter of the previous low and this high half; the step must move the current by more than 5 % of `test_cur`. The first cycle is discarded.
+* - With at least 3 cycles and `10 * period <= tau <= l_half / 8`: `l = tau * r`, `l_ok = 1`; otherwise `l = 0`.
+* - `1.4` (nrt): if `r_ok`, prints `conf0.r`, `conf0.l` (or why l failed: no transient, check that `idacim0.ud_fb` is wired; too slow, raise `l_half` above `8 * tau`; too fast, use an LCR meter) and the measured `drop` for information only, then goes to `2.0`. If not, prints why the r test failed and returns to state 0 (with `en` still high, straight back to the 1.1 prompt).
+*
+* 5. **Pole pairs and direction (`state` 2.2), rotor free**:
+* - For 3 s: current mode, `cur_bw` 100, `d_cmd = test_cur`, and `com_pos` advances open loop at `test_vel` electrical rad/s, dragging the rotor along. While `|vel_fb| > 0.1` rad/s, `pp` is low-passed (0.005 per tick) from `test_vel / vel_fb`. At the end a negative `pp` sets `out_rev = 1`, and `pp` is rounded to an integer.
+* - `2.4` (nrt) prints the result and goes to `3.0` (done).
+*
+* {{% hint warning %}}
+* `drop` is a voltage per phase for information only; it is not a value for `hv0.drop_k` (a fraction). The induction rotor slips behind the rotating field in the pole pair test, so `test_vel / vel_fb` reads slightly high before rounding, and `pp` is not reset between runs, so its filter starts from the previous result. The l test's detector state (cycle count, tau sum) is only cleared by `rt_start`, not when state 1.3 is entered, so a second r/l run without restarting the rt system averages in the previous run's cycles.
+* {{% /hint %}}
+*/
+
 HAL_COMP(idacim);
 
-HAL_PIN(d_cmd);
-HAL_PIN(q_cmd);
-HAL_PIN(com_pos);
-HAL_PIN(cmd_mode);
-HAL_PIN(en);
-HAL_PIN(en_out);
+HAL_PIN(d_cmd);     // *output*, d axis command to hv0.d_cmd, current (A) or voltage (V) depending on cmd_mode
+HAL_PIN(q_cmd);     // *output*, q axis command to hv0.q_cmd, always 0
+HAL_PIN(com_pos);   // *output*, commutation angle to hv0.pos (rad), 0 except in the pole pair test
+HAL_PIN(cmd_mode);  // *output*, to hv0.cmd_mode, 0 = voltage, 1 = current
+HAL_PIN(en);        // *input*, enable, from fault0.en_out; low aborts (state -> 0)
+HAL_PIN(en_out);    // *output*, enables hv0 while a test runs
 
-HAL_PIN(id_fb);
-HAL_PIN(ud_fb);
+HAL_PIN(id_fb);  // *input*, d axis current from hv0.id_fb (A)
+HAL_PIN(ud_fb);  // *input*, d axis voltage from hv0.ud_fb (V)
 
-HAL_PIN(state);
-HAL_PIN(timer);
+HAL_PIN(state);  // *input/output*, 0 off, 1.1 wait, 1.2 r test, 1.3 l test, 1.4 print, 2.1 wait, 2.2 pp test, 2.4 print, 3 done
+HAL_PIN(timer);  // *output*, time in the current test (s)
 
-HAL_PIN(r);
-HAL_PIN(l);
-HAL_PIN(l_half);  // *parameter*, l test half period [s]
-HAL_PIN(tau);     // measured current time constant l/r [s]
-HAL_PIN(l_ok);    // 1 = l is a measurement, 0 = it is not
-HAL_PIN(drop);          // dead time volts per phase at the top dwell [V]
-HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = fit it
-HAL_PIN(fit_di);        // dwell current separation, 0 = r/drop fit did not run
-HAL_PIN(r_2p);          // two dwell chord slope, 0 = the fit did not run
-HAL_PIN(drop_slope);    // *parameter*, the chord's dead time bias, ohm A per volt
-HAL_PIN(r_bias);        // what was subtracted from the chord to get r
-HAL_PIN(r_ok);          // this run produced a resistance
+HAL_PIN(r);           // *output*, measured resistance (ohm), to hv0.r, result for conf0.r
+HAL_PIN(l);           // *output*, measured inductance tau * r (H), to hv0.l, 0 = not measured, result for conf0.l
+HAL_PIN(l_half);      // *parameter*, l test half period (s), reset to 0.1 while disabled
+HAL_PIN(tau);         // *output*, measured current time constant l/r (s)
+HAL_PIN(l_ok);        // *output*, 1 = l is a measurement, 0 = it is not
+HAL_PIN(drop);        // *output*, measured dead time voltage per phase at the top dwell (V), information only
+HAL_PIN(r_known);     // *parameter*, known winding resistance (ohm), 0 = fit it, default 0
+HAL_PIN(fit_di);      // *output*, current difference of the two dwells (A)
+HAL_PIN(r_2p);        // *output*, two dwell chord slope (ohm), 0 = the fit did not run
+HAL_PIN(drop_slope);  // *parameter*, chord dead time bias (ohm A per volt of dc link), default 0.0039
+HAL_PIN(r_bias);      // *output*, bias subtracted from the chord to get r (ohm)
+HAL_PIN(r_ok);        // *output*, 1 = this run produced a resistance
 
-HAL_PIN(pp);
-HAL_PIN(out_rev);
+HAL_PIN(pp);       // *output*, measured pole pairs, result for conf0.polecount
+HAL_PIN(out_rev);  // *output*, 1 = motor turns backwards, to hv0.rev, result for conf0.out_rev
 
-HAL_PIN(test_cur);
-HAL_PIN(test_vel);
+HAL_PIN(test_cur);  // *parameter*, test current (A peak), default 3
+HAL_PIN(test_vel);  // *parameter*, field speed of the pole pair test (electrical rad/s), default 50
 
-HAL_PIN(vel_fb);
+HAL_PIN(vel_fb);  // *input*, mechanical velocity from vel1.vel (rad/s)
 
-HAL_PIN(pwm_volt);
-HAL_PIN(dc_volt);
+HAL_PIN(pwm_volt);  // *input*, usable voltage from hv0.pwm_volt (V), limits avg_test_volt
+HAL_PIN(dc_volt);   // *input*, dc link voltage from hv0.dc_volt (V), scales r_bias
 
-HAL_PIN(cur_bw);
+HAL_PIN(cur_bw);  // *output*, current loop bandwidth to hv0.cur_bw
 
-HAL_PIN(tmp0);
-HAL_PIN(tmp1);
-HAL_PIN(tmp2);
-HAL_PIN(tmp3);
-HAL_PIN(avg_test_volt);
+HAL_PIN(tmp0);           // *output*, filtered id_fb of the half current dwell (A)
+HAL_PIN(tmp1);           // *output*, filtered ud_fb of the half current dwell (V)
+HAL_PIN(tmp2);           // *output*, filtered id_fb of the full current dwell (A)
+HAL_PIN(tmp3);           // *output*, filtered ud_fb of the full current dwell (V)
+HAL_PIN(avg_test_volt);  // *output*, voltage that holds test_cur incl. dead time, high level of the l test (V)
 
 // l test state
 struct idacim_ctx_t {

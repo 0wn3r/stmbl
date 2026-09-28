@@ -18,11 +18,11 @@
 * 2. **Groups**:
 * - Motor model: `r`, `l`, `lq`, `psi`, `polecount`, `j`, `d`, `f`, `o`, `j_sys`, `j_lpf`, `out_rev`.
 * - Feedback: `mot_fb_*`, `com_fb_*`, `joint_fb_*` (pole count, commutation offset, direction, resolution) and `cmd_rev`, `cmd_res` for the command input; `phase_time`/`phase_cur` for autophasing.
-* - Limits and faults: `max_vel`, `max_acc`, `max_force`, `max_dc_cur`, `max_ac_cur`, `max_sat`, `max_pos_error`, the DC link voltage limits and the temperature and fan thresholds, all used by `fault0` and `pid0`.
+* - Limits and faults: `max_vel`, `max_acc`, `max_force`, `max_dc_cur`, `max_ac_cur`, `max_sat`, `max_pos_error`, the DC link voltage limits and the temperature and fan thresholds, all used by `fault0` and `pid0`. `high_ipm_temp`/`max_ipm_temp` (bridge junction derate start and trip, conf.txt sets 125/140 deg C) are linked to `fault0` only by conf/template/ipm.txt.
 * - Loop tuning: `pos_bw`, `vel_bw`, `vel_d`, `vel_g`, `torque_g` for `pid0`, and `cur_bw`, `cur_ff`, `cur_ind` for the F3 current loop via `hv0`.
 *
 * {{% hint warning %}}
-* conf/template/pid.txt and mpid.txt link `conf0.min_dc_volt` and `conf0.max_vel_error`, which this component does not have, so those links fail and the fault component keeps its own defaults. `low_dc_volt`, `g`, `com_fb_res` and `joint_fb_res` exist here but no template links them, so setting them has no effect.
+* conf/template/pid.txt, mpid.txt and uf.txt link `conf0.min_dc_volt` and `conf0.max_vel_error`, which this component does not have, so those links fail and the fault component keeps its own defaults. `low_dc_volt`, `g`, `com_fb_res` and `joint_fb_res` exist here but no template links them, so setting them has no effect.
 * {{% /hint %}}
 */
 
@@ -89,8 +89,8 @@ HAL_PIN(cur_ff);         // *parameter*, current loop resistance feed forward ga
 HAL_PIN(cur_ind);        // *parameter*, current loop BEMF feed forward gain
 HAL_PIN(max_sat);        // *parameter*, max. velocity, acceleration and torque saturation time (s)
 
-HAL_PIN(high_ipm_temp);  // lower ipm junction overtemperature limit [°C]
-HAL_PIN(max_ipm_temp);   // upper ipm junction overtemperature limit [°C]
+HAL_PIN(high_ipm_temp);  // *parameter*, lower IPM junction overtemperature limit (deg C), current is derated above
+HAL_PIN(max_ipm_temp);   // *parameter*, upper IPM junction overtemperature limit (deg C), fault
 
 hal_comp_t conf_comp_struct = {
     .name      = "conf",

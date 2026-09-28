@@ -3,53 +3,87 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+* ## Brief
+* `ids` tunes the gains of the `pid` position/velocity loop (`pos_bw`, `vel_bw`, `vel_d`) by moving the axis back and forth between two positions and searching, one gain at a time, for the lowest tracking-error cost. It runs on the F4 board and is loaded by the `id_pid` template, normally as the last identification step after `id_mot` (and `id_sys` if a load is coupled).
+*
+* ## Component Explanation
+*
+* 1. **Before you start**:
+* - `id_mot` (and `id_sys`) should be done and their results (`conf0.j`, `conf0.j_sys`, `conf0.d`, `conf0.f`, `conf0.o`) in the config, since the pid feedforward and gain scaling use them. `conf0.cur_bw` must be set: it limits the velocity bandwidth.
+* - The axis travels between `min_pos` and `max_pos` (default -10 and +10 rad around feedback position 0) at up to `max_vel` (100 rad/s) and `max_acc` (1000 rad/s^2). These defaults are aggressive; reduce them if the machine cannot do that.
+*
+* 2. **How to run it**:
+* - At the console, `link id_pid`. The template loads `ids` and wires `ids0.en = fault0.en_out`, the trajectory into `pid0.pos_ext_cmd` / `vel_ext_cmd` / `acc_ext_cmd`, `pid0.pos_bw` / `vel_bw` / `vel_d` from this component, `pid0.pos_error` / `vel_error` back into it and `ids0.cur_bw = conf0.cur_bw`. It sets `conf0.max_pos_error = 0`, `conf0.max_sat = 10` and `conf0.vel_g = 1`, and puts `pos_cmd`, `vel_cmd`, `min_cost` and the three gains on the scope waves.
+* - Enable the drive. With `auto_step >= 1` (default) the search starts at once; with `auto_step = 0` the console asks for `ids0.state = 1.2` first.
+* - Watch `min_cost` and the gains on the scope. When it is done the console prints `conf0.pos_bw`, `conf0.vel_bw` and `conf0.vel_d`: append them to the config and save.
+*
+* 3. **Gain search (`state`)**:
+* - `0`: idle. While here the rt function resets `pos_bw` 10, `vel_bw` 100, `vel_d` 10, `param` 0, `step` 0.1, `rep` 1, the limits `max_params[0] = cur_bw / 2`, `max_params[1] = 1`, and seeds `min_cost` and `cost` with `(max_pos - min_pos)^2 / max_vel * 100`. When `en` goes high it goes to `1.0`; `en` low returns to `0` from any state.
+* - `1.0` -> `1.1` (nrt): sets `target = max_pos`; with `auto_step >= 1` it goes straight to `1.2`, otherwise it waits in `1.1`.
+* - `1.2` (rt): a trapezoidal trajectory (`pos`, `vel`, `acc`) moves to `max_pos` and back to `min_pos` in cycles of `2 * (|max_pos - min_pos| / max_vel + 2 * max_vel / max_acc)` (0.8 s with the defaults). `pos_cmd` is `pos` wrapped to +-pi, `vel_cmd` / `acc_cmd` are scaled by `ff`. Over each cycle a cost is integrated:
+* ```c
+* cost += (kp * |pos_error| + ks * pos_error^2 + kv * vel_error^2) * period;
+* ```
+* - At the end of each cycle `min_cost = min(cost, min_cost)` and one gain, selected by `param`, is changed (coordinate search). `params[0]` is `vel_bw`, `params[1]` is `1 / vel_d`, `params[2]` is `pos_bw`:
+* - if the gain is above its limit it is clamped and the search moves to the next gain. Limits: `vel_bw <= cur_bw / 2`, `1 / vel_d <= 1` (so `vel_d >= 1`), `pos_bw <= 2 * vel_bw`.
+* - else if `cost > min_cost * kt` (kt default 1.2) the gain is multiplied by `kd` (0.7) and the search moves to the next gain.
+* - else the gain is multiplied by `1 + step` and the cycle repeats.
+* - Moving to the next gain sets `min_cost` to 10 times the last cost, so the next gain's first step is always accepted.
+* - When all three gains are done the feedforward outputs are zeroed and the state goes to `1.3`; the nrt function prints the results and goes to `1.4` (done). The trajectory stays where it stopped until `en` goes low.
+*
+* {{% hint warning %}}
+* The rt function overwrites `step` (to 0.1, nrt_init sets 0.25) and `rep` while the state is 0, so `step` can only be changed after enabling. `rep`, `freq` and `amp` are unused. The search starts `pos` from wherever the previous run left it (0 after boot) rather than from the actual position, so the first move may start with a position step. The first cycle's cost starts at the seed value instead of 0.
+* {{% /hint %}}
+*/
+
 HAL_COMP(ids);
 
-HAL_PIN(en);
+HAL_PIN(en);  // *input*, enable; high starts the gain search, low aborts (state -> 0)
 
-HAL_PIN(state);
-HAL_PIN(param);
-HAL_PIN(step);
-HAL_PIN(rep);
+HAL_PIN(state);  // *input/output*, 0 off, 1.0/1.1 start/wait, 1.2 gain search, 1.3 print, 1.4 done
+HAL_PIN(param);  // *output*, gain currently searched: 0 vel_bw, 1 1/vel_d, 2 pos_bw
+HAL_PIN(step);   // *parameter*, relative gain increase per cycle, reset to 0.1 while disabled
+HAL_PIN(rep);    // *output*, unused, reset to 1 while disabled
 
-HAL_PIN(freq);
-HAL_PIN(amp);
-HAL_PIN(min_pos);
-HAL_PIN(max_pos);
-HAL_PIN(max_vel);
-HAL_PIN(max_acc);
+HAL_PIN(freq);     // *parameter*, unused
+HAL_PIN(amp);      // *parameter*, unused
+HAL_PIN(min_pos);  // *parameter*, lower end of the travel (rad), default -10
+HAL_PIN(max_pos);  // *parameter*, upper end of the travel (rad), default 10
+HAL_PIN(max_vel);  // *parameter*, test velocity (rad/s), default 100
+HAL_PIN(max_acc);  // *parameter*, test acceleration (rad/s^2), default 1000
 
-HAL_PIN(pos);
-HAL_PIN(vel);
-HAL_PIN(acc);
-HAL_PIN(pos_cmd);
-HAL_PIN(vel_cmd);
-HAL_PIN(acc_cmd);
+HAL_PIN(pos);      // *output*, unwrapped trajectory position (rad)
+HAL_PIN(vel);      // *output*, trajectory velocity (rad/s)
+HAL_PIN(acc);      // *output*, trajectory acceleration (rad/s^2)
+HAL_PIN(pos_cmd);  // *output*, position command, pos wrapped to +-pi (rad), to pid0.pos_ext_cmd
+HAL_PIN(vel_cmd);  // *output*, velocity feedforward vel * ff (rad/s), to pid0.vel_ext_cmd
+HAL_PIN(acc_cmd);  // *output*, acceleration feedforward acc * ff (rad/s^2), to pid0.acc_ext_cmd
 
-HAL_PIN(pos_error);
-HAL_PIN(vel_error);
+HAL_PIN(pos_error);  // *input*, position error from pid0.pos_error (rad)
+HAL_PIN(vel_error);  // *input*, velocity error from pid0.vel_error (rad/s)
 
-HAL_PIN(pos_bw);
-HAL_PIN(vel_bw);
-HAL_PIN(vel_d);
-HAL_PIN(cur_bw);
+HAL_PIN(pos_bw);  // *output*, position bandwidth under test, to pid0.pos_bw, result for conf0.pos_bw
+HAL_PIN(vel_bw);  // *output*, velocity bandwidth under test, to pid0.vel_bw, result for conf0.vel_bw
+HAL_PIN(vel_d);   // *output*, velocity loop damping under test, to pid0.vel_d, result for conf0.vel_d
+HAL_PIN(cur_bw);  // *input*, current loop bandwidth, conf0.cur_bw, limits vel_bw to cur_bw / 2
 
-HAL_PIN(ff);
-HAL_PIN(kp);
-HAL_PIN(ks);
-HAL_PIN(kv);
-HAL_PIN(kt);
-HAL_PIN(kd);
+HAL_PIN(ff);  // *parameter*, feedforward scale for vel_cmd and acc_cmd, default 1
+HAL_PIN(kp);  // *parameter*, cost weight of abs(pos_error), default 1
+HAL_PIN(ks);  // *parameter*, cost weight of pos_error^2, default 0
+HAL_PIN(kv);  // *parameter*, cost weight of vel_error^2, default 1
+HAL_PIN(kt);  // *parameter*, cost ratio above which a gain step is rejected, default 1.2
+HAL_PIN(kd);  // *parameter*, factor applied to a rejected gain, default 0.7
 
-HAL_PINA(params, 3);
-HAL_PINA(max_params, 3);
+HAL_PINA(params, 3);      // *output*, gains searched: 0 vel_bw, 1 1/vel_d, 2 pos_bw
+HAL_PINA(max_params, 3);  // *output*, limits: cur_bw/2, 1.0, 2 * vel_bw
 
-HAL_PIN(target);
-HAL_PIN(cost);
-HAL_PIN(min_cost);
-HAL_PIN(auto_step);
+HAL_PIN(target);     // *output*, end point the trajectory is moving to (rad)
+HAL_PIN(cost);       // *output*, cost of the current cycle
+HAL_PIN(min_cost);   // *output*, lowest cost of the current gain
+HAL_PIN(auto_step);  // *parameter*, >= 1 starts the search without waiting for state = 1.2, default 1
 
-HAL_PIN(timer);
+HAL_PIN(timer);  // *output*, time in the current cycle (s)
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct ids_ctx_t * ctx = (struct ids_ctx_t *)ctx_ptr;

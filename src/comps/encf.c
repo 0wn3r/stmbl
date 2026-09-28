@@ -22,18 +22,18 @@
 * 2. **Bit decoding (rt)**:
 * - `dma` = number of captured edges of the last frame.
 * - `bit_ticks = 82e6 / freq` (timer ticks per bit, default `freq` = 1.024 MHz -> 80 ticks).
-* - The time between two edges is divided by `bit_ticks` and rounded to get the number of equal bits; every even-numbered interval is written as 1s. Bits after the last edge up to bit 76 are set to 1 (idle line).
+* - The time between two edges is multiplied by `1 / bit_ticks` and rounded to get the number of equal bits; every even-numbered interval is written as 1s. The frame is built in three 32 bit words and the write is bounded to the 80 bit frame buffer, so a noisy frame with too many bits is cut off instead of overrunning memory. Bits after the last edge up to bit 76 are set to 1 (idle line).
 * - If fewer than 51 bits were decoded: `error = 1`, `state = 1` and the index state machine is reset.
 *
 * 3. **Frame content and CRC (rt)**:
-* - A 5 bit CRC (ITU CRC-5, from the Mesa `fabsread` notes) over bits 76..1 must be 0. On success `crc_ok` is incremented, otherwise `crc_er` is incremented and `error = 1`, `state = 1` (the position pins keep their last value).
+* - A 5 bit CRC (ITU CRC-5, from the Mesa `fabsread` notes) over bits 76..1, MSB first and computed four bits at a time with a nibble table, must be 0. On success `crc_ok` is incremented, otherwise `crc_er` is incremented and `error = 1`, `state = 1` (the position pins keep their last value).
 * - Fields: battery fail bit -> `batt`, un-indexed bit -> `index` (1 = not yet indexed), 22 bit single-turn position (6 low bits + 16 high bits), 16 bit turn counter -> `turns` (converted to signed, -32768..32767), 10 bit commutation track -> `com_pos`.
-* - `abs_pos = mod(pos22 * 2 * pi / 2^22)` (rad, +-pi); `com_pos = mod(com * 2 * pi / 1024)` (rad). According to the Mesa notes the commutation track has four 0..1023 cycles per turn and is always absolute.
+* - `abs_pos = pos22 * 2 * pi / 2^22` and `com_pos = com * 2 * pi / 1024` (rad), wrapped to [-pi, pi) by sign-extending the integer count (same result as `mod()` without the `fmodf`). According to the Mesa notes the commutation track has four 0..1023 cycles per turn and is always absolute.
 *
 * 4. **Index handling / pos output (rt)**:
 * - While the encoder reports un-indexed: `pos = abs_pos`, `state = 1`.
 * - On the first valid frame after the index is found the raw position is stored as internal offset, `pos = abs_pos`.
-* - Afterwards `state = 3` and `pos = mod((pos22 + offset + (pos_offset << 6)) * 2 * pi / 2^22)`, so the `pos_offset` pin shifts the position in steps of 64 counts (1/65536 turn). If the encoder is already indexed at power up, the internal offset is 0.
+* - Afterwards `state = 3` and `pos = (pos22 + offset + (pos_offset << 6)) * 2 * pi / 2^22`, wrapped as a 22 bit count to [-pi, pi), so the `pos_offset` pin shifts the position in steps of 64 counts (1/65536 turn). If the encoder is already indexed at power up, the internal offset is 0.
 *
 * 5. **Debug output (nrt)**:
 * - If `send_step >= 50`, every `send_step` nrt calls the raw 76 bit frame is printed as a string of 0/1.
