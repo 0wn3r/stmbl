@@ -1,0 +1,9 @@
+# induction motor sensorless: link pid, link acim_foc, link sl_acim.
+# obs uses conf0.l = sigma*Ls for both axes (conf0.lq 0). chk_err is not
+# meaningful here: the encoder angle is the rotor's, not the flux's.
+# Set in the config: sl_seq0.i_f (about acim_foc0.id_n),
+# sl_seq0.align_time (about 3 * acim_flux0.tr), sl_seq0.w_hand, obs0.bw.
+link sensorless
+sl_seq0.d_in = acim_foc0.d_cmd
+sl_seq0.q_in = acim_foc0.q_cmd
+obs0.slip = acim_flux0.slip
