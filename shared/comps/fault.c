@@ -82,6 +82,18 @@ HAL_PIN(sbrake_en);
 HAL_PIN(sbrake_time);  // [s], default 1
 HAL_PIN(sbrake);       // request to hv0.sbrake, out
 
+// Regenerative stop: on the same edge, if the feedback and the f3 link still
+// work, keep the bridge, feedback and pid on for up to rstop_time while
+// pid0.stop (rstop) commands zero speed, so the energy goes back into the
+// link. Done below rstop_vel; out of time, or a fault it cannot ride through,
+// hands over to the short brake. mot_brake stays released while decelerating,
+// then the bridge holds zero speed for brake_dis_delay with it engaged.
+HAL_PIN(rstop_en);    // *parameter*, 1 = regenerative stop first
+HAL_PIN(rstop_time);  // *parameter*, longest regenerative stop [s], default 1
+HAL_PIN(rstop_vel);   // *parameter*, done below this speed [rad/s], default 2
+HAL_PIN(vel_fb);      // motor speed [rad/s], in
+HAL_PIN(rstop);       // regenerative stop running, out, to pid0.stop
+
 //fault strings for fault_t form common.h
 static const char *fault_string[] = {
     "no error",
@@ -115,6 +127,8 @@ struct fault_ctx_t {
   float dc_volt_error;
   float mot_temp_error;
   float sbrake_timer;
+  float rstop_timer;
+  float rhold_timer;  // after the stop: brake engaging, bridge still holding
   float ipm_temp_error;
 };
 
@@ -130,6 +144,21 @@ static int sbrake_safe(fault_t fault) {
     case SAT_ERROR:
     case HV_CRC_ERROR:
     case HV_TIMEOUT_ERROR:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+// stops after which the drive may keep running to decelerate the motor:
+// the feedback, the f3 link and the link voltage have to be good
+static int rstop_safe(fault_t fault) {
+  switch(fault) {
+    case NO_ERROR:
+    case CMD_ERROR:
+    case JOINT_FB_ERROR:
+    case POS_ERROR:
+    case SAT_ERROR:
       return 1;
     default:
       return 0;
@@ -172,6 +201,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(fan_mot_temp)  = 60.0;
   PIN(sbrake_time)   = 1.0;
   ctx->sbrake_timer  = 0.0;
+  PIN(rstop_time)    = 1.0;
+  PIN(rstop_vel)     = 2.0;
+  ctx->rstop_timer   = 0.0;
+  ctx->rhold_timer   = 0.0;
   PIN(max_ipm_temp)  = 140.0;
   PIN(high_ipm_temp) = 125.0;
 }
@@ -197,7 +230,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     case ENABLED:
       if(PIN(en) <= 0.0) {
-        if (PIN(brake_dis_delay) > 0.0) {
+        // with rstop the brake delay runs after the motor has stopped
+        if(PIN(brake_dis_delay) > 0.0 && PIN(rstop_en) <= 0.0) {
           ctx->state = DELAYED_DISABLED;
           PIN(brake_timer) = PIN(brake_dis_delay);
         } else {
@@ -336,10 +370,40 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   int stop_edge = powered(last_state) && !powered(ctx->state) && ctx->state != HARD_FAULT && ctx->state != LED_TEST;
-  if(PIN(sbrake_en) > 0.0 && stop_edge) {
+  int fallback  = 0;  // regenerative stop given up: short brake instead
+  if(stop_edge) {
+    if(PIN(rstop_en) > 0.0 && rstop_safe(ctx->fault) && PIN(rstop_time) > 0.0) {
+      ctx->rstop_timer = PIN(rstop_time);
+    } else {
+      fallback = 1;
+    }
+  }
+  if(ctx->rstop_timer > 0.0) {
+    if(powered(ctx->state)) {  // enabled again: nothing to stop
+      ctx->rstop_timer = 0.0;
+    } else if(ABS(PIN(vel_fb)) < PIN(rstop_vel)) {  // stopped: hold while the brake closes
+      ctx->rstop_timer = 0.0;
+      ctx->rhold_timer = MAX(PIN(brake_dis_delay), 0.0);
+    } else if(PIN(rstop_en) <= 0.0 || !rstop_safe(ctx->fault) || ctx->rstop_timer <= period) {
+      ctx->rstop_timer = 0.0;  // cannot or did not finish
+      fallback         = 1;
+    } else {
+      ctx->rstop_timer -= period;
+    }
+  }
+  if(ctx->rhold_timer > 0.0) {
+    if(powered(ctx->state) || PIN(rstop_en) <= 0.0 || !rstop_safe(ctx->fault)) {
+      ctx->rhold_timer = 0.0;
+    } else {
+      ctx->rhold_timer = MAX(ctx->rhold_timer - period, 0.0);
+    }
+  }
+  PIN(rstop) = ctx->rstop_timer > 0.0 || ctx->rhold_timer > 0.0;
+
+  if(PIN(sbrake_en) > 0.0 && fallback) {
     ctx->sbrake_timer = PIN(sbrake_time);
   }
-  if(PIN(sbrake_en) <= 0.0 || powered(ctx->state) || !sbrake_safe(ctx->fault)) {
+  if(PIN(sbrake_en) <= 0.0 || powered(ctx->state) || !sbrake_safe(ctx->fault) || PIN(rstop) > 0.0) {
     ctx->sbrake_timer = 0.0;
   }
   PIN(sbrake)       = ctx->sbrake_timer > 0.0;
@@ -383,6 +447,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(en_fb)     = 1.0;
       PIN(en_out)    = 1.0;
       break;
+  }
+
+  if(PIN(rstop) > 0.0) {  // keep driving until stopped and the brake has closed
+    PIN(mot_brake) = ctx->rstop_timer > 0.0;  // released while decelerating, engaging in the hold
+    PIN(en_out)    = 1.0;
+    PIN(en_fb)     = 1.0;
+    PIN(en_pid)    = 1.0;
   }
 
   PIN(fault) = ctx->fault;
