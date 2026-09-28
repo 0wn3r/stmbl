@@ -21,9 +21,28 @@ HAL_PIN(timer);
 
 HAL_PIN(r);
 HAL_PIN(l);
-HAL_PIN(l_half);  // *parameter*, l test half period [s]
-HAL_PIN(tau);     // measured current time constant l/r [s]
 HAL_PIN(l_ok);    // 1 = l is a measurement, 0 = it is not
+HAL_PIN(l_freq_a);  // *parameter*, leakage test, lower injection frequency [Hz]
+HAL_PIN(l_freq_b);  // *parameter*, leakage test, upper injection frequency [Hz]
+HAL_PIN(l_ripple);  // *parameter*, injected current, fraction of test_cur
+HAL_PIN(l_za);      // |Z| at l_freq_a [ohm]
+HAL_PIN(l_zb);      // |Z| at l_freq_b [ohm]
+HAL_PIN(l_ia);      // injected current amplitude reached at l_freq_a [A]
+HAL_PIN(l_ib);      // injected current amplitude reached at l_freq_b [A]
+HAL_PIN(l_res);     // resistance the two frequencies imply, stator plus cage [ohm]
+
+HAL_PIN(rot_half);    // *parameter*, rotor test, time at each current level [s]
+HAL_PIN(rot_cycles);  // *parameter*, rotor test, measured cycles (two edges each)
+HAL_PIN(rot_bw);      // *parameter*, rotor test, current loop bandwidth [rad/s]
+HAL_PIN(rot_t0);      // *parameter*, rotor test, skip this long after each edge [s]
+HAL_PIN(tr);          // rotor time constant Lr/Rr [s]
+HAL_PIN(slip_n);      // 1/tr, acim_ttc's slip constant [rad/s electrical]
+HAL_PIN(lmr);         // rotor side magnetizing inductance Lm^2/Lr [H]
+HAL_PIN(ls);          // stator inductance l + lmr [H]
+HAL_PIN(rot_n);       // edges that went into tr and lmr
+HAL_PIN(rot_dip);     // largest current error at rot_t0, fraction of the step
+HAL_PIN(tr_ok);       // 1 = tr, slip_n and lmr are measurements
+HAL_PIN(tr_spread);   // (max - min) / mean of tr across edges
 HAL_PIN(drop);          // dead time volts per phase at the top dwell [V]
 HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = fit it
 HAL_PIN(fit_di);        // dwell current separation, 0 = r/drop fit did not run
@@ -51,30 +70,72 @@ HAL_PIN(tmp2);
 HAL_PIN(tmp3);
 HAL_PIN(avg_test_volt);
 
-// l test state
+// State of the leakage and rotor tests. They integrate over thousands of
+// ticks, so none of this can be pins without making the state machine's
+// scratch pins mean two different things at once.
 struct idacim_ctx_t {
-  uint8_t was_high;  // last observed level of ud_fb
-  uint8_t have_a;    // a settled low value has been captured
-  uint16_t end_n;    // samples in the settled tail of this half
-  uint16_t cyc;      // observed cycles, the first is discarded
-  uint16_t tau_n;    // cycles that yielded a time constant
-  float t_cmd;       // phase of the commanded square wave
-  float t_in;        // time since the last observed edge
-  float t_hi;        // measured length of the high half
-  float area;        // integral of id_fb across the high half
-  float prev;        // previous id_fb, for the trapezoid
-  float end_sum;     // settled tail accumulator
-  float i_a;         // settled low current
-  float tau_sum;
+  // leakage injection
+  uint8_t l_fi;     // 0 = l_freq_a, 1 = l_freq_b
+  uint8_t l_stage;  // 0 settle, 1 size the amplitude, 2 measure
+  uint16_t l_block; // sizing blocks done
+  uint32_t l_n;     // samples in this block or window
+  float l_t;        // time in this stage or block
+  float l_th;       // injection phase
+  float l_amp;      // injection voltage amplitude
+  float v_re, v_im, i_re, i_im;
+  // rotor step
+  uint16_t r_edge;      // edges seen, the first magnetizes from zero
+  uint16_t r_n;         // edges that produced a fit
+  uint8_t have_lvl[2];  // a settled value is known for level 0 (test_cur), 1 (half)
+  uint8_t act;          // this edge is being fitted
+  uint8_t have_t0;      // i_t0 captured
+  uint32_t e_n;         // samples in this level's settled tail
+  float lvl_u[2];       // settled ud_fb at each level
+  float lvl_i[2];       // settled id_fb at each level
+  float r_t;            // time since the last commanded edge
+  float eu, ei;         // settled tail sums
+  float uinf, iinf;     // where this edge settles, from the last visit to its level
+  float di;             // the step, settled to settled
+  float i0;             // settled current before the step
+  float i_t0;           // id_fb at rot_t0
+  float lam_raw;        // integral of ud - uinf - R (id - iinf) since the edge
+  float ii;             // integral of id - iinf since the edge
+  float jj;             // integral of lam since the edge
+  float aa, ab, bb, ay, by;  // normal equations of this edge's fit
+  float tr_sum, lm_sum, tr_min, tr_max;
+  float dip;            // largest |current error at rot_t0| / step
 };
+
+#define L_BIAS_SETTLE 1.0  // leakage test: first settle, the dc bias rides the slow rotor pole [s]
+#define L_SETTLE 0.2       // leakage test: settle after changing frequency [s]
+#define L_BLOCK 0.05       // leakage test: one amplitude sizing block [s]
+#define L_BLOCKS 4         // leakage test: sizing blocks per frequency
+#define L_MEASURE 0.4      // leakage test: demodulation window per frequency [s]
+#define ROT_TAIL 0.75      // rotor test: the settled tail starts here, fraction of rot_half
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
   PIN(r_known)                  = 0.0;
   PIN(drop_slope)               = 0.0039;
-  PIN(test_cur)                 = 3.0;
+  // The r chord's dead time correction needs every phase above about 2 A in
+  // its lower dwell (test_cur/2 on d is -test_cur/4 on v and w), and the
+  // rotor test reuses the same two levels.
+  PIN(test_cur)                 = 8.0;
   PIN(test_vel)                 = 50.0;
+  // A pair either side of the current loop's crossover (cur_bw / 2 pi, about
+  // 160 Hz). The leakage has no plateau on a cage rotor, so this is the band
+  // conf0.l has to describe, not the kHz an LCR meter defaults to.
+  PIN(l_freq_a)                 = 120.0;
+  PIN(l_freq_b)                 = 240.0;
+  PIN(l_ripple)                 = 0.15;
+  // tr is 50 to 150 ms on a few kW motor. Each level's settled value is
+  // read over its last quarter, so 1.5 s puts that 7.6 tr out even at
+  // 150 ms; at 1.0 s the leftover tail reads tr 2% short there (simulated).
+  PIN(rot_half)                 = 1.5;
+  PIN(rot_cycles)               = 4.0;
+  PIN(rot_bw)                   = 1500.0;
+  PIN(rot_t0)                   = 0.015;
   PIN(cur_bw)                   = 1.0;
 }
 
@@ -92,7 +153,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 0:
       PIN(r)       = 0.1;
       PIN(l)       = 0.001;
-      PIN(l_half)  = 0.1;
       PIN(drop)    = 0.0;
       PIN(out_rev) = 0.0;
       PIN(cur_bw)  = 1.0;
@@ -110,26 +170,43 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(tmp2)     = 0.0;
       PIN(tmp3)     = 0.0;
 
-      printf("Measure r, l\n");
-      printf("<font color='green'>block the rotor</font>\n");
+      printf("Measure r, leakage l, rotor time constant\n");
+      printf("<font color='green'>the rotor may stay free: a dc field makes no torque on a cage</font>\n");
       printf("idacim0.state = 1.2 <font color='green'>to start</font>\n");
       break;
 
-    case 14:
+    case 15:
       if(PIN(r_ok) > 0.0) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         if(PIN(l_ok) > 0.0) {
-          printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(l));
-          printf("<font color='green'># from tau = %f ms against the r above.</font>\n", PIN(tau) * 1000.0);
-        } else if(PIN(tau) <= 0.0) {
-          printf("<font color='red'>l not measured</font>: no usable transient\n");
-          printf("check that the bridge is enabled and idacim0.ud_fb is wired\n");
-        } else if(PIN(tau) > PIN(l_half) / 8.0) {
-          printf("<font color='red'>l not measured</font>: tau = %f ms needs a longer half period\n", PIN(tau) * 1000.0);
-          printf("raise idacim0.l_half above %f s and rerun\n", PIN(tau) * 8.0);
+          printf("conf0.l = %f <font color='green'># leakage, sigma*Ls</font>\n", PIN(l));
+          printf("<font color='green'># from |Z| %f / %f ohm at %f / %f Hz, which\n", PIN(l_za), PIN(l_zb), PIN(l_freq_a), PIN(l_freq_b));
+          printf("# also imply %f ohm of stator plus cage resistance there.\n", PIN(l_res));
+          printf("# right for acim_foc (hv0.psi carries the rotor flux); acim_ttc\n");
+          printf("# has no flux term, so there it makes iq fall short at speed.</font>\n");
         } else {
-          printf("<font color='red'>l not measured</font>: tau = %f ms is too fast to time here\n", PIN(tau) * 1000.0);
-          printf("use an LCR meter: line to line at 1 kHz, halved\n");
+          printf("<font color='red'>l not measured</font>: injected %f / %f A of %f A asked\n", PIN(l_ia), PIN(l_ib), PIN(l_ripple) * PIN(test_cur));
+          printf("use an LCR meter: line to line near 150 Hz, halved\n");
+        }
+        if(PIN(tr_ok) > 0.0) {
+          printf("acim_flux0.tr = %f <font color='green'># append to config</font>\n", PIN(tr));
+          printf("acim_flux0.lmr = %f <font color='green'># append to config</font>\n", PIN(lmr));
+          printf("<font color='green'># rotor time constant tr = %f ms from %f edges\n", PIN(tr) * 1000.0, PIN(rot_n));
+          printf("# slip_n = 1/tr = %f rad/s. for acim_ttc, which derives it from vel_n:\n", PIN(slip_n));
+          printf("# acim_ttc0.vel_n = (2 pi acim_ttc0.freq_n - %f) / conf0.polecount\n", PIN(slip_n));
+          printf("# edges agree within %f of tr.\n", PIN(tr_spread));
+          printf("# lmr = Lm^2/Lr = %f mH, ls = %f mH, at %f..%f A on d.\n", PIN(lmr) * 1000.0, PIN(ls) * 1000.0, PIN(test_cur) * 0.5, PIN(test_cur));
+          printf("# tr is the rotor's at this temperature and flux: a hot cage\n");
+          printf("# reads shorter, and rated flux saturates it a little shorter.</font>\n");
+          if(PIN(rot_dip) > 0.1) {
+            printf("<font color='red'># the current was %f of the step off at rot_t0:\n", PIN(rot_dip));
+            printf("# the loop is slow. the fit uses the current that flowed, but\n");
+            printf("# raise idacim0.rot_bw and rerun to confirm.</font>\n");
+          }
+        } else if(PIN(rot_n) >= 2.0) {
+          printf("<font color='red'>tr not measured</font>: the fit gave %f ms, outside what this test can see\n", PIN(tr) * 1000.0);
+        } else {
+          printf("<font color='red'>tr not measured</font>: fewer than two edges fitted\n");
         }
         printf("<font color='green'># dead time %f V per phase at the %f A dwell, %f V link\n", PIN(drop), PIN(test_cur), PIN(dc_volt));
         if(PIN(r_known) > 0.0) {
@@ -264,8 +341,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(avg_test_volt) = 0.0;
         }
 
+        memset(ctx, 0, sizeof(struct idacim_ctx_t));
+        ctx->l_amp  = 1.0;
         PIN(timer)  = 0.0;
-        PIN(state)  = r_ok > 0.0 ? 1.3 : 1.4;
+        PIN(state)  = r_ok > 0.0 ? 1.3 : 1.5;
         PIN(d_cmd)  = 0.0;
         PIN(en_out) = 0.0;
         PIN(tmp0)   = 0.0;
@@ -275,103 +354,268 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
       break;
 
-    case 13: {  // l, from the current's relaxation time constant
+    case 13: {  // leakage l, by injection at two frequencies
+      // The time constant test that was here read l = tau * r. On an induction
+      // motor a voltage step's current has two poles, about 2 ms and 100-250 ms,
+      // and the area method returns the slow one's Ls / r: the full stator
+      // inductance, some twenty times the leakage the current loop wants,
+      // printed as a conf0.l to append. So inject instead, as idpmsm does, but
+      // on d only (a cage rotor is round) and at two frequencies:
+      //
+      //   |Z|^2 = R^2 + w^2 l^2   at both  =>  l^2 = (|Zb|^2 - |Za|^2) / (wb^2 - wa^2)
+      //
+      // so no resistance goes in. That matters here: the cage adds a
+      // frequency dependent resistance on top of the stator's (0.2 ohm at
+      // 100 Hz on the spindle, 0.8 at 1 kHz), and subtracting the dc r from
+      // one |Z| gets l 10-13% wrong near the loop's crossover. The pair
+      // assumes R and l are equal at both frequencies; the cage's rise between
+      // 120 and 240 Hz costs a few percent of l, not more.
+      //
+      // The dc bias holds test_cur on d, so every phase current stays on one
+      // side of zero and the dead time is an offset, not a nonlinearity. In
+      // volt mode that bias settles on the slow rotor pole, hence the longer
+      // first settle. A single pulsating axis makes no torque at standstill.
       PIN(en_out)   = 1.0;
       PIN(cmd_mode) = 0.0;  // volt cmd
-      PIN(q_cmd)    = 0.0;
       PIN(cur_bw)   = 1.0;
+      PIN(com_pos)  = 0.0;
+      PIN(q_cmd)    = 0.0;
 
-      // Step between two currents of the same sign and take the relaxation
-      // time constant by the area method:
-      //
-      //   i(t) = i_f + (i_a - i_f) exp(-t/tau),  tau = l/r
-      //   => tau = (i_b * T - integral i dt) / (i_b - i_a)     for T >> tau
-      //
-      // The dead time drop is a constant offset while the current keeps its
-      // sign, so it cancels out of a time constant.
-      float half = MAX(PIN(l_half), 0.01);
-      float v_hi = PIN(avg_test_volt);
-      float v_lo = PIN(avg_test_volt) - PIN(r) * PIN(test_cur) * 0.5;
-      float mid  = (v_hi + v_lo) * 0.5;
+      float fa = CLAMP(PIN(l_freq_a), 20.0, 0.2 / period);
+      float fb = CLAMP(PIN(l_freq_b), 20.0, 0.2 / period);
+      float f  = ctx->l_fi == 0 ? fa : fb;
+      float w  = 2.0 * M_PI * f;
+      ctx->l_th += w * period;
+      if(ctx->l_th > 2.0 * M_PI) {
+        ctx->l_th -= 2.0 * M_PI;
+      }
+      float sn, cs;
+      sincos_fast(ctx->l_th, &sn, &cs);
+      PIN(d_cmd) = PIN(avg_test_volt) + ctx->l_amp * sn;
 
-      // time the window off the step as it comes back in ud_fb: it shares
-      // id_fb's packet, so the pipeline delay cancels
-      uint8_t hi = PIN(ud_fb) > mid;
+      float v = PIN(ud_fb);
+      float i = PIN(id_fb);
+      ctx->l_t += period;
+      float target = PIN(l_ripple) * PIN(test_cur);
 
-      if(hi && !ctx->was_high) {  // observed rising edge
-        if(ctx->end_n > 0) {
-          ctx->i_a    = ctx->end_sum / (float)ctx->end_n;
-          ctx->have_a = 1;
+      if(ctx->l_stage == 0) {
+        if(ctx->l_t >= (ctx->l_fi == 0 ? L_BIAS_SETTLE : L_SETTLE)) {
+          ctx->l_stage = 1;
+          ctx->l_t     = 0.0;
+          ctx->l_n     = 0;
+          ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
         }
-        ctx->end_sum = 0.0;
-        ctx->end_n   = 0;
-        ctx->area    = 0.0;
-        ctx->t_hi    = 0.0;
-        ctx->t_in    = 0.0;
-        ctx->prev    = PIN(id_fb);
-      } else if(!hi && ctx->was_high) {  // observed falling edge
-        if(ctx->end_n > 0 && ctx->have_a) {
-          float i_b = ctx->end_sum / (float)ctx->end_n;
-          float di  = i_b - ctx->i_a;
-          // the step has to have moved the current, and one whole cycle has to
-          // have gone by, before any of it means anything
-          if(di > PIN(test_cur) * 0.05 && ctx->t_hi > 0.0 && ctx->cyc > 0) {
-            float tau = (i_b * ctx->t_hi - ctx->area) / di;
-            if(tau > 0.0) {
-              ctx->tau_sum += tau;
-              ctx->tau_n++;
+      } else {
+        ctx->v_re += v * sn;
+        ctx->v_im += v * cs;
+        ctx->i_re += i * sn;
+        ctx->i_im += i * cs;
+        ctx->l_n++;
+        float n = MAX((float)ctx->l_n, 1.0);
+        if(ctx->l_stage == 1 && ctx->l_t >= L_BLOCK) {
+          // size the amplitude to the ripple asked for: enough signal, and
+          // never so much that a phase current crosses zero
+          float i1 = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float k  = i1 > 0.001 ? target / i1 : 4.0;
+          ctx->l_amp *= CLAMP(k, 0.25, 4.0);
+          ctx->l_amp = CLAMP(ctx->l_amp, 0.2, PIN(pwm_volt) / 4.0);
+          ctx->l_block++;
+          ctx->l_t = 0.0;
+          ctx->l_n = 0;
+          ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
+          if(ctx->l_block >= L_BLOCKS) {
+            ctx->l_stage = 2;
+          }
+        } else if(ctx->l_stage == 2 && ctx->l_t >= L_MEASURE) {
+          // the f3 holds each 5 kHz command for a whole tick, which scales the
+          // applied fundamental by sin(pi f T) / (pi f T); take it back out
+          float v1  = 2.0 / n * sqrtf(ctx->v_re * ctx->v_re + ctx->v_im * ctx->v_im);
+          float i1  = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float x   = M_PI * f * period;
+          float zoh = sinf(x) / x;
+          float z   = i1 > 0.001 ? v1 * zoh / i1 : 0.0;
+          if(ctx->l_fi == 0) {  // on to the upper frequency, from this amplitude
+            PIN(l_za)    = z;
+            PIN(l_ia)    = i1;
+            ctx->l_fi    = 1;
+            ctx->l_stage = 0;
+            ctx->l_block = 0;
+            ctx->l_t     = 0.0;
+            ctx->l_n     = 0;
+          } else {
+            PIN(l_zb)  = z;
+            PIN(l_ib)  = i1;
+            float wa   = 2.0 * M_PI * fa;
+            float wb   = 2.0 * M_PI * fb;
+            float za   = PIN(l_za);
+            float den  = wb * wb - wa * wa;
+            float l2   = den > 0.0 ? (z * z - za * za) / den : 0.0;
+            float r2   = den > 0.0 ? (wb * wb * za * za - wa * wa * z * z) / den : 0.0;
+            int ok     = l2 > 0.0 && PIN(l_ia) > target * 0.5 && PIN(l_ia) < target * 2.0 && i1 > target * 0.5 && i1 < target * 2.0;
+            PIN(l_ok)  = ok ? 1.0 : 0.0;
+            PIN(l_res) = r2 > 0.0 ? sqrtf(r2) : 0.0;
+            // hv0.l = idacim0.l, so the rotor test's current loop runs on this.
+            // A failed read leaves the 1 mH init, a sane leakage for a few kW.
+            PIN(l) = ok ? sqrtf(l2) : 0.001;
+
+            memset(ctx, 0, sizeof(struct idacim_ctx_t));
+            PIN(timer)  = 0.0;
+            PIN(state)  = 1.4;
+            PIN(d_cmd)  = 0.0;
+            PIN(en_out) = 0.0;
+          }
+        }
+      }
+      break;
+    }
+
+    case 14: {  // rotor time constant and magnetizing inductance, by d current steps
+      // Hold com_pos and step the d current between test_cur and test_cur/2
+      // with a fast current loop. The rotor flux follows the stator current
+      // with tr = Lr/Rr, and while it moves the stator sees its emf
+      //
+      //   e = Lmr * d(i_mr)/dt,   tr * d(i_mr)/dt = id - i_mr,   Lmr = Lm^2/Lr
+      //
+      // on top of r*id, the dead time and l*d(id)/dt. The first two settle with
+      // the current; the chord from the r test is their dc slope over exactly
+      // these two levels, so it takes them out of the part that has not.
+      //
+      // The current is not a clean step: the tail pushes against the loop and
+      // id sags for as long as the integrator takes to catch it, and that sag
+      // moves the flux too. Fitting an exponential to ud alone came out 3% short
+      // on tr with a 1500 rad/s loop and 10% at 300 (simulated). So fit the
+      // model to the current that actually flowed. With everything integrated
+      // from the edge, where i_mr still sits at the old level:
+      //
+      //   lam(t) = integral(ud - uinf - R (id - iinf)) - l (id - i0) = Lmr (i_mr - i0)
+      //   integral(lam) = Lmr * (integral(id - iinf) + di * t) - tr * lam
+      //
+      // which is linear in Lmr and tr, fitted by least squares over rot_t0 to
+      // the settled tail. Simulated against a T model with dead time, noise,
+      // a 300 to 1500 rad/s loop and 20% error in R, it lands within 1% on
+      // 49 ms and 147 ms; an l 50% wrong costs 2-4%, and a feedback delay of
+      // two extra ticks between ud_fb and id_fb about 2%.
+      //
+      // uinf and iinf come from the previous visit to the same level, so the
+      // integrals can run from the edge. The first edge magnetizes from zero
+      // and the second has no earlier visit to its level: both are dropped.
+      // slip_n in acim_ttc is 1/tr in electrical rad/s.
+      PIN(en_out)   = 1.0;
+      PIN(cmd_mode) = 1.0;  // cur cmd
+      PIN(cur_bw)   = MAX(PIN(rot_bw), 1.0);
+      PIN(com_pos)  = 0.0;
+      PIN(q_cmd)    = 0.0;
+
+      float half = MAX(PIN(rot_half), 0.1);
+      float t0   = CLAMP(PIN(rot_t0), period, half * 0.25);
+      float t1   = half * ROT_TAIL;
+      int lv     = ctx->r_edge & 1;  // 0 at test_cur, 1 at half of it
+      float rin  = PIN(r_2p) > 0.0 ? PIN(r_2p) : PIN(r);
+
+      PIN(d_cmd) = lv ? PIN(test_cur) * 0.5 : PIN(test_cur);
+
+      float ud = PIN(ud_fb);
+      float id = PIN(id_fb);
+
+      if(ctx->r_t == 0.0) {  // first tick of this level
+        ctx->act = ctx->have_lvl[0] && ctx->have_lvl[1];
+        if(ctx->act) {
+          ctx->uinf    = ctx->lvl_u[lv];
+          ctx->iinf    = ctx->lvl_i[lv];
+          ctx->i0      = ctx->lvl_i[1 - lv];
+          ctx->di      = ctx->iinf - ctx->i0;
+          ctx->act     = ABS(ctx->di) > 0.2 * PIN(test_cur) * 0.5;
+          ctx->have_t0 = 0;
+          ctx->lam_raw = ctx->ii = ctx->jj = 0.0;
+          ctx->aa = ctx->ab = ctx->bb = ctx->ay = ctx->by = 0.0;
+        }
+      }
+      ctx->r_t += period;
+      float t = ctx->r_t;
+
+      if(ctx->act) {
+        ctx->lam_raw += (ud - ctx->uinf - rin * (id - ctx->iinf)) * period;
+        ctx->ii += (id - ctx->iinf) * period;
+        float lam = ctx->lam_raw - PIN(l) * (id - ctx->i0);
+        ctx->jj += lam * period;
+        if(t >= t0 && t < t1) {
+          if(!ctx->have_t0) {
+            ctx->i_t0    = id;
+            ctx->have_t0 = 1;
+          }
+          // scaled by the step, so rising and falling edges fit alike and
+          // the sums stay near unity
+          float xa = ctx->ii / ctx->di + t;
+          float xb = -lam / ctx->di;
+          float y  = ctx->jj / ctx->di;
+          ctx->aa += xa * xa;
+          ctx->ab += xa * xb;
+          ctx->bb += xb * xb;
+          ctx->ay += xa * y;
+          ctx->by += xb * y;
+        }
+      }
+      if(t >= t1) {
+        ctx->eu += ud;
+        ctx->ei += id;
+        ctx->e_n++;
+      }
+
+      if(t >= half) {  // end of this level
+        if(ctx->act) {
+          float det = ctx->aa * ctx->bb - ctx->ab * ctx->ab;
+          if(det > 0.0) {
+            float lm = (ctx->ay * ctx->bb - ctx->by * ctx->ab) / det;
+            float tr = (ctx->by * ctx->aa - ctx->ay * ctx->ab) / det;
+            if(tr > 0.0 && lm > 0.0) {
+              ctx->tr_sum += tr;
+              ctx->lm_sum += lm;
+              ctx->tr_min = ctx->r_n ? MIN(ctx->tr_min, tr) : tr;
+              ctx->tr_max = ctx->r_n ? MAX(ctx->tr_max, tr) : tr;
+              ctx->dip    = MAX(ctx->dip, ABS((ctx->i_t0 - ctx->iinf) / ctx->di));
+              ctx->r_n++;
             }
           }
         }
-        ctx->end_sum = 0.0;
-        ctx->end_n   = 0;
-        ctx->t_in    = 0.0;
-        ctx->cyc++;
-      }
-
-      if(hi) {
-        // trapezoid: a left hand sum is about a percent of tau off
-        ctx->area += (PIN(id_fb) + ctx->prev) * 0.5 * period;
-        ctx->t_hi += period;
-      }
-
-      ctx->t_in += period;
-      if(ctx->t_in > half * 0.75) {  // settled tail of whichever half we are in
-        ctx->end_sum += PIN(id_fb);
-        ctx->end_n++;
-      }
-
-      ctx->prev     = PIN(id_fb);
-      ctx->was_high = hi;
-
-      // the commanded square wave runs on its own clock; what we measure
-      // against is the echo, not this
-      ctx->t_cmd += period;
-      if(ctx->t_cmd >= half * 2.0) {
-        ctx->t_cmd = 0.0;
-      }
-      PIN(d_cmd) = ctx->t_cmd < half ? v_lo : v_hi;
-
-      PIN(timer) += period;
-      if(PIN(timer) >= 2.0) {
-        float tau = ctx->tau_n > 0 ? ctx->tau_sum / (float)ctx->tau_n : 0.0;
-        float l_ok = 0.0;
-
-        PIN(tau) = tau;
-
-        // too slow for the half period truncates the tail, too fast leaves a
-        // handful of samples
-        if(ctx->tau_n >= 3 && tau >= 10.0 * period && tau <= half / 8.0) {
-          PIN(l) = tau * PIN(r);
-          l_ok   = 1.0;
-        } else {
-          PIN(l) = 0.0;
+        if(ctx->e_n > 0) {
+          ctx->lvl_u[lv]    = ctx->eu / (float)ctx->e_n;
+          ctx->lvl_i[lv]    = ctx->ei / (float)ctx->e_n;
+          ctx->have_lvl[lv] = 1;
         }
+        ctx->eu = ctx->ei = 0.0;
+        ctx->e_n = 0;
+        ctx->r_edge++;
+        ctx->r_t = 0.0;
+      }
 
-        PIN(l_ok)   = l_ok;
+      if(ctx->r_edge >= 1 + 2 * (int)MAX(PIN(rot_cycles), 1.0)) {
+        float tr_ok  = 0.0;
+        PIN(rot_n)   = ctx->r_n;
+        PIN(rot_dip) = ctx->dip;
+        PIN(tr)      = 0.0;
+        PIN(slip_n)  = 0.0;
+        PIN(lmr)     = 0.0;
+        PIN(ls)      = 0.0;
+        PIN(tr_spread) = 0.0;
+        if(ctx->r_n >= 2) {
+          float n  = (float)ctx->r_n;
+          float tr = ctx->tr_sum / n;
+          PIN(tr)  = tr;  // reported either way, so a rejected fit still says what it was
+          // a fit that lands outside the window it was taken over is not an
+          // exponential this test can see
+          if(tr > 5.0 * period && tr < t1) {
+            PIN(tr)        = tr;
+            PIN(slip_n)    = 1.0 / tr;
+            PIN(lmr)       = ctx->lm_sum / n;
+            PIN(ls)        = PIN(l) + PIN(lmr);
+            PIN(tr_spread) = (ctx->tr_max - ctx->tr_min) / tr;
+            tr_ok          = 1.0;
+          }
+        }
+        PIN(tr_ok)  = tr_ok;
         PIN(timer)  = 0.0;
-        PIN(state)  = 1.4;
-        PIN(d_cmd)  = PIN(avg_test_volt);
+        PIN(state)  = 1.5;
+        PIN(d_cmd)  = 0.0;
         PIN(en_out) = 0.0;
       }
       break;
