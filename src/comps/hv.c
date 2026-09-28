@@ -375,6 +375,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   if(PIN(rev) > 0.0) {
     q_cmd *= -1.0;
     pos = minus(0, pos);
+    vel *= -1.0;  // the f3 extrapolates pos and decouples with vel
   }
 
 
