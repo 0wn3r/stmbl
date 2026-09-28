@@ -23,6 +23,10 @@
 *    `lock_time`. Back to 2 when obs drops ok or |obs0.vel_m| < w_hand - hyst,
 *    with f seeded from obs0.vel_m.
 *
+* `f3_mode` lets the f3's own observer (15 kHz, no packet delay) take the
+* commutation in state 3: hv0.obs_mode = sl_seq0.f3_mode. It runs free from
+* the start, so it is locked by the handover.
+*
 * Speeds are mechanical rad/s. `vel_e` is f * polecount for angle0.vel_cmd,
 * `src` goes to angle0.src.
 */
@@ -53,6 +57,7 @@ HAL_PIN(track);       // *output*, to obs0.track
 HAL_PIN(pid_en);      // *output*, to pid0.en
 HAL_PIN(d_cmd);       // *output*, to hv0.d_cmd
 HAL_PIN(q_cmd);       // *output*, to hv0.q_cmd
+HAL_PIN(f3_mode);     // *output*, to hv0.obs_mode: f3 obs shadow while on, commutating in state 3
 
 struct sl_seq_ctx_t {
   float time;
@@ -141,6 +146,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(pid_en) = state == 3 ? 1.0 : 0.0;
   PIN(d_cmd)  = state == 3 ? PIN(d_in) + PIN(i_f) * ctx->fade : (state > 0 ? PIN(i_f) : 0.0);
   PIN(q_cmd)  = state == 3 ? PIN(q_in) : 0.0;
+  PIN(f3_mode) = state == 3 ? 2.0 : (state > 0 ? 1.0 : 0.0);
 }
 
 hal_comp_t sl_seq_comp_struct = {

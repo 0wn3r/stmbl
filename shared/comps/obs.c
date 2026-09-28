@@ -44,6 +44,7 @@
 
 HAL_COMP(obs);
 
+HAL_PIN(en);         // *input*, 0 = off and reset (the f3 runs it only when asked)
 HAL_PIN(r);          // *parameter*, winding resistance [ohm]
 HAL_PIN(ld);         // *parameter*, d inductance [H] (induction motor: sigma*Ls)
 HAL_PIN(lq);         // *parameter*, q inductance [H], 0 = ld
@@ -53,6 +54,7 @@ HAL_PIN(kl);         // *parameter*, current derivative low pass, 0..0.99
 HAL_PIN(e_min);      // *parameter*, emf below which the angle is not trusted [V]
 HAL_PIN(max_vel);    // *parameter*, speed clamp [rad/s electrical]
 HAL_PIN(adv);        // *parameter*, feedback frame lead over pos_ref [s], hv0.adv
+HAL_PIN(u_delay);    // *parameter*, voltage lag behind the current frame [s], half an f3 period
 
 HAL_PIN(id);         // *input*, hv0.id_fb
 HAL_PIN(iq);         // *input*, hv0.iq_fb
@@ -84,6 +86,7 @@ struct obs_ctx_t {
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct obs_pin_ctx_t *pins = (struct obs_pin_ctx_t *)pin_ptr;
 
+  PIN(en)        = 1.0;
   PIN(r)         = 0.5;
   PIN(ld)        = 0.003;
   PIN(lq)        = 0.0;
@@ -93,6 +96,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(e_min)     = 3.0;
   PIN(max_vel)   = 3000.0;
   PIN(adv)       = 0.0;
+  PIN(u_delay)   = 0.5 / 15000.0;
 }
 
 static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -106,6 +110,19 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct obs_ctx_t *ctx     = (struct obs_ctx_t *)ctx_ptr;
   struct obs_pin_ctx_t *pins = (struct obs_pin_ctx_t *)pin_ptr;
+
+  if(PIN(en) <= 0.0) {
+    ctx->id_old = ctx->iq_old = 0.0;
+    ctx->did = ctx->diq = 0.0;
+    ctx->ok_time        = 0.0;
+    PIN(ok)             = 0.0;
+    PIN(pos)            = PIN(pos_ref);
+    PIN(pos_c)          = PIN(pos_ref);
+    PIN(vel)            = PIN(vel_ref);
+    PIN(err)            = 0.0;
+    PIN(pos_err)        = 0.0;
+    return;
+  }
 
   float r   = MAX(PIN(r), 0.0);
   float ld  = MAX(PIN(ld), 0.00001);
@@ -121,6 +138,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   sincos_fast(delta, &sn, &cs);
   float id = PIN(id) * cs + PIN(iq) * sn;
   float iq = -PIN(id) * sn + PIN(iq) * cs;
+  // the pwm holds the voltage still for a period while the rotor turns on:
+  // on average it acts half a period behind
+  sincos_fast(mod(delta + vel * PIN(u_delay)), &sn, &cs);
   float ud = PIN(ud) * cs + PIN(uq) * sn;
   float uq = -PIN(ud) * sn + PIN(uq) * cs;
 
