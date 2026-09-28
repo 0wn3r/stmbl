@@ -40,6 +40,10 @@ HAL_PIN(wr);
 
 //driver temoerature
 HAL_PIN(hv_temp);
+// The IPM's NTC shares VFO, which the module pulls low while the bridge is
+// disabled. hv_temp is read only while enabled and held otherwise (the IPM
+// only heats while switching). hv_temp_ok: 0 never read, 1 live, 2 held.
+HAL_PIN(hv_temp_ok);
 //motor temperature
 HAL_PIN(mot_temp);
 
@@ -92,6 +96,7 @@ struct io_ctx_t {
   uint32_t mot_temp;
   uint32_t fault;
   uint32_t enabled;
+  uint32_t en_ticks;  // rt ticks since the enable edge, saturating
   uint32_t sbrake_ok;     // no trip since the last enable edge
   uint32_t sbrake_ticks;  // ticks since braking started
 };
@@ -101,6 +106,8 @@ struct io_ctx_t {
 
 #define HV_TEMP_PULLUP 3900
 #define HV_R(a) (HV_TEMP_PULLUP / (AREF / (a)-1))
+#define HV_TEMP_SETTLE 75  // rt ticks after enable before VFO counts as released, 5 ms
+#define HV_TEMP_MIN_V 0.3  // below this the pin is held low, not an NTC reading [V]
 
 #define MOT_TEMP_PULLUP 10000
 #define MOT_TEMP_PULLMID 51000
@@ -192,6 +199,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->hv_temp           = 0;
   ctx->mot_temp          = 0;
   ctx->enabled           = 0;
+  ctx->en_ticks          = 0;
+  PIN(hv_temp_ok)        = 0.0;
   ctx->sbrake_ok         = 0;
   ctx->sbrake_ticks      = 0;
 
@@ -267,6 +276,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(udc)      = (float)(adc_34_buf[5] >> 16) * VOLT_K * 0.05 + PIN(udc) * 0.95;
     PIN(iabs)     = MAX3(ABS(PIN(iu)), ABS(PIN(iv)), ABS(PIN(iw)));
     ctx->hv_temp  = adc_34_buf[0];
+    if(!ctx->enabled) {
+      ctx->en_ticks = 0;
+    } else if(ctx->en_ticks < 0xFFFF) {
+      ctx->en_ticks++;
+    }
     ctx->mot_temp = adc_34_buf[3];
 
     if(err_filter(&(ctx->overtemp_error), 5.0, 0.001, PIN(hv_temp) > ABS_MAX_TEMP)) {
@@ -418,7 +432,15 @@ void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   HAL_GPIO_WritePin(LED_PORT, LED_PIN, BLINK(led) > 0 ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
-  PIN(hv_temp)  = r2temp(HV_R(ADC(ctx->hv_temp >> 16))) * 0.01 + PIN(hv_temp) * 0.99;
+  float hv_v = ADC(ctx->hv_temp >> 16);
+  if(ctx->enabled && ctx->en_ticks > HV_TEMP_SETTLE && hv_v > HV_TEMP_MIN_V) {
+    float t = r2temp(HV_R(hv_v));
+    // first reading since power up: start from it, not from 0
+    PIN(hv_temp)    = PIN(hv_temp_ok) > 0.0 ? t * 0.01 + PIN(hv_temp) * 0.99 : t;
+    PIN(hv_temp_ok) = 1.0;
+  } else if(PIN(hv_temp_ok) > 0.0) {
+    PIN(hv_temp_ok) = 2.0;
+  }
   PIN(mot_temp) = r2temp(MOT_R(MOT_REF(ADC(ctx->mot_temp >> 16)))) * 0.01 + PIN(mot_temp) * 0.99;
 }
 
