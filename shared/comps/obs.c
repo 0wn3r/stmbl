@@ -26,10 +26,12 @@
 * The feedback (hv0.id_fb ...) is in the frame hv0 used, `pos_ref` (angle0.pos)
 * plus `vel_ref * adv` (hv0.adv). obs rotates it into its own frame first, so
 * it can run as a shadow while angle0 follows the encoder (src 0 or 1), and
-* `pos_err` = pos - pos_ref shows how far it is from the encoder's angle. Run
+* `pos_err` = pos - (pos_ref + vel_ref adv) shows how far it is from the
+* frame the f3 used, the encoder's angle in shadow. Run
 * obs before angle0 (lower rt_prio): it then reads the angle the feedback was
 * taken with. A constant pos_err growing with speed is timing, not model, and
-* `adv` trims it.
+* `adv` trims it. hv0 adds vel * adv again, so commutate from `pos_c`, which
+* takes it off: in shadow pos_c is the encoder's angle.
 *
 * ## Loop
 * A PI phase locked loop on the angle error: pos += (vel + kp err) T,
@@ -60,14 +62,17 @@ HAL_PIN(pos_ref);    // *input*, angle the feedback frame was at, angle0.pos
 HAL_PIN(vel_ref);    // *input*, angle0.vel
 HAL_PIN(slip);       // *input*, induction motor slip [rad/s electrical], 0 on a PMSM
 HAL_PIN(track);      // *input*, 1 = follow pos_ref / vel_ref
+HAL_PIN(pos_chk);    // *input*, encoder angle to compare with while commutating from obs
 
-HAL_PIN(pos);        // *output*, flux angle [rad electrical]
+HAL_PIN(pos);        // *output*, flux angle in the feedback frame [rad electrical]
+HAL_PIN(pos_c);      // *output*, pos - vel * adv, the angle to commutate with, angle0.pos_obs
 HAL_PIN(vel);        // *output*, synchronous speed [rad/s electrical]
 HAL_PIN(vel_m);      // *output*, rotor speed [rad/s mechanical], (vel - slip) / polecount
 HAL_PIN(ed);         // *output*, d emf in the observer's frame [V]
 HAL_PIN(eq);         // *output*, q emf [V]
 HAL_PIN(err);        // *output*, angle error the loop sees [rad]
-HAL_PIN(pos_err);    // *output*, pos - pos_ref [rad]
+HAL_PIN(pos_err);    // *output*, pos - (pos_ref + vel_ref * adv) [rad]
+HAL_PIN(chk_err);    // *output*, pos - (pos_chk + vel_ref * adv) [rad]
 HAL_PIN(ok);         // *output*, 1 = emf above e_min for 50 ms
 
 struct obs_ctx_t {
@@ -110,7 +115,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float vel = PIN(vel);
 
   // feedback frame into the observer's frame
-  float delta = minus(pos, mod(PIN(pos_ref) + PIN(vel_ref) * PIN(adv)));
+  float frame = mod(PIN(pos_ref) + PIN(vel_ref) * PIN(adv));
+  float delta = minus(pos, frame);
   float sn, cs;
   sincos_fast(delta, &sn, &cs);
   float id = PIN(id) * cs + PIN(iq) * sn;
@@ -159,10 +165,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(eq)      = eq;
   PIN(err)     = err;
   PIN(ok)      = ok;
-  PIN(pos)     = pos;
   PIN(vel)     = vel;
   PIN(vel_m)   = (vel - PIN(slip)) / MAX(PIN(polecount), 1.0);
-  PIN(pos_err) = minus(pos, PIN(pos_ref));
+  // compare this tick's estimate, before the step to the next tick
+  PIN(pos_err) = delta;
+  PIN(chk_err) = minus(PIN(pos), mod(PIN(pos_chk) + PIN(vel_ref) * PIN(adv)));
+  PIN(pos)     = pos;
+  PIN(pos_c)   = mod(pos - vel * PIN(adv));
 }
 
 hal_comp_t obs_comp_struct = {
