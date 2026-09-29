@@ -408,9 +408,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DAC1->DHR12R1 = CLAMP((uint32_t)PIN(dac), 0, 4095);
 
   //comperator outputs for debugging
-  PIN(cu) = (COMP1->CSR & COMP_CSR_COMPxOUT) > 0;
-  PIN(cv) = (COMP2->CSR & COMP_CSR_COMPxOUT) > 0;
-  PIN(cw) = (COMP4->CSR & COMP_CSR_COMPxOUT) > 0;
+  // COMP2 watches PA7 = U, COMP4 PB0 = V, COMP1 PA1 = W (schematic A_IU/A_IV/A_IW)
+  PIN(cu) = (COMP2->CSR & COMP_CSR_COMPxOUT) > 0;
+  PIN(cv) = (COMP4->CSR & COMP_CSR_COMPxOUT) > 0;
+  PIN(cw) = (COMP1->CSR & COMP_CSR_COMPxOUT) > 0;
 }
 
 void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
