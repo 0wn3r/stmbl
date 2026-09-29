@@ -7,7 +7,7 @@
 
 /**
 * ## Brief
-* `svm` adds a common mode offset to three phase voltages centred on 0, so that they fit into the 0..`udc` range of the half bridges. The choice of offset sets the modulation: sine, space vector (the default), flat bottom or flat top. It runs on the F3 (HV board) as `svm0`, loaded by `stm32f303/src/main.c` (rt_prio 5): `svm0.u/v/w = idq0.u/v/w`, `svm0.udc = io0.udc`, and `su`/`sv`/`sw` go to `hv0.u/v/w`. The component is also built into the F4 firmware.
+* `svm` adds a common mode offset to three phase voltages centred on 0, so that they fit into the 0..`udc` range of the half bridges. The choice of offset sets the modulation: sine, space vector (the default), flat bottom or flat top. It is built into both the F3 (HV board) and the F4 firmware, but `stm32f303/src/main.c` no longer loads it: on the F3, `hv0` now takes `idq0`'s phase voltages directly, adds the dead time compensation and then applies the same space vector (midpoint) offset itself, so the offset sees the compensated phases. No template in `conf/` loads `svm` either, so it is only there to be loaded by hand.
 *
 * ## Component Explanation
 *
@@ -24,7 +24,7 @@
 * - 1, block: the enable of a phase that lies between the other two is set to 0.
 *
 * {{% hint warning %}}
-* Block commutation (`cmode` = 1) is incomplete: it only checks one of the two orders per phase (for example `v < u < w` but not `w < u < v`). The enable outputs are not wired to anything on the F3, and `hv` ignores its own enable inputs.
+* Block commutation (`cmode` = 1) is incomplete: it only checks one of the two orders per phase (for example `v < u < w` but not `w < u < v`). The enable outputs are not used anywhere: the F3's `hv` ignores its own enable inputs.
 * {{% /hint %}}
 */
 

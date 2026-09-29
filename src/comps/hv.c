@@ -24,10 +24,12 @@
 * - F4 to F3 (`packet_to_hv_t`, 32 bytes): `d_cmd`, `q_cmd`, `pos`, `vel`, the flags `enable`, `cmd_type` (from `cmd_mode`), `phase_type` (from `phase_mode`), `ignore_fault_pin`, `sbrake`, `sbrake_arm`, one terminal byte, plus one config word (`conf_addr` + float).
 * - F3 to F4 (`packet_from_hv_t`, 32 bytes): `id_fb`, `iq_fb`, `ud_fb`, `uq_fb`, `fault`, one terminal byte, plus one state word.
 * - The exchange is one request/answer per rt period: the answer to the packet sent in period n is read at the start of period n+1.
+* - Each period both DMA streams are stopped with `dma_stream_stop()` (inc/dma_util.h: waits until EN reads 0 and clears all five stream flags) before they are re-armed. The RX stream is sized for the larger bootloader packet, so it is usually stopped mid-transfer; its NDTR is set again before every re-arm.
 *
 * 2. **Commands sent (rt)**:
-* - `pos` is advanced by `vel * adv` and wrapped with `mod()` before sending: `pos_sent = mod(pos + vel * adv)`. `vel` is sent too; the F3 uses it to extrapolate `pos` between packets and for the BEMF decoupling of its current loop.
+* - `pos` is advanced by `vel * adv` and wrapped with `mod()` before sending: `pos_sent = mod(pos + vel * adv)`. `adv` is meant to cover only the latency from the encoder reading to the F3 current sample: the F3 applies its output voltage at its own angle `ls0.pos_v = pos + vel * v_lead * period` (`v_lead` default 1.5 periods), so re-run id_tune after updating from older firmware, `adv` drops by about 100 us. `vel` is sent too; the F3 uses it to extrapolate `pos` between packets, for that voltage angle and for the BEMF decoupling of its current loop.
 * - If `en > 0`, `d_cmd`/`q_cmd` are sent and the enable flag is set; otherwise both are sent as 0 and the F3 is disabled.
+* - The F3 ignores the enable flag until it has received every config word once since its boot (`ls0.conf_ok`), so after an F3 reset the power stage stays off for at least one full config round (15 periods). This assumes the F4 and F3 images come from the same build (same config layout), which `hv_update` ensures.
 * - `cmd_mode`: 0 = voltage mode (`d_cmd`/`q_cmd` in V), 1 = current mode (`d_cmd`/`q_cmd` in A peak, closed by the F3 current loop).
 * - `phase_mode`: 0 = 90 deg 3 phase, 1 = 90 deg 4 phase, 2 = 120 deg 3 phase (normal 3 phase motor), 3 = 180 deg 2 phase (DC motor), 4 = 180 deg 3 phase.
 * - `rev > 0` negates `q_cmd`, `pos` and `vel` on the way out and `iq_fb`, `uq_fb` on the way in, to reverse the output direction.
@@ -42,11 +44,11 @@
 * - `max_cur` is multiplied by `scale` (the fault component's derating, 0..1) before sending; on the F3 it is the current loop command limit and sets the software overcurrent trip.
 * - `dac` is the raw 12 bit value (0..4095) of the F3 DAC that sets the hardware overcurrent comparator threshold.
 * - `lq = 0` makes the F3 use `l` for both axes.
-* - Dead time compensation (F3 hv, current mode and 120 deg 3 phase only): `drop_k` scales the ideal dead time loss (dead time / pwm period x DC link voltage), 0 = off; the sign per phase comes from the commanded phase currents. With `drop_knee = 0` the sign latches outside a current band; `drop_knee > 0` (A) instead scales each phase by `k(i) = 1 - 1/(1 + |i|/drop_knee)^2`, which fades out at low current and cannot stick.
+* - Dead time compensation (F3 hv, 120 deg 3 phase only): `drop_k` scales the ideal dead time loss (dead time / pwm period x DC link voltage), 0 = off. The F3 adds it to the phase voltages before it takes the SVM offset. In current mode the sign per phase comes from the commanded phase currents; in voltage mode it is off unless the F3's own `hv0.drop_volt > 0` (not sent over the link, off by default), which takes the sign from the measured dq current low passed with `hv0.drop_vlp` (3 ms). With `drop_knee = 0` the sign latches outside a current band; `drop_knee > 0` (A) instead scales each phase by `k(i) = 1 - 1/(1 + |i|/drop_knee)^2`, which fades out at low current and cannot stick.
 * - `emf_run` (1 sum, 0 hold, -1 clear), `emf_sel` and `emf_pp` (pole pairs) drive the F3 `emf0` back EMF map, which sums the unfiltered phase voltages while the bridge is off and the rotor coasts; the result selected by `emf_sel` comes back in `emf_val`. Used by `idpmsm0`.
 *
 * 5. **Feedback (rt)**:
-* - A received packet is only used if it is complete, its CRC matches, `slave_addr` is 0 and its length is that of `packet_from_hv_t`. Then `id_fb`, `iq_fb`, `ud_fb`, `uq_fb`, `fault` are copied, `abs_cur = sqrt(id_fb^2 + iq_fb^2)`, `abs_volt = sqrt(ud_fb^2 + uq_fb^2)` and `duty = abs_volt / pwm_volt` (only while `pwm_volt > 0`).
+* - A received packet is only used if it is complete, its CRC matches, `slave_addr` is 0 and its length is that of `packet_from_hv_t`. Then `id_fb`, `iq_fb`, `ud_fb`, `uq_fb`, `fault` are copied, `abs_cur = sqrt(id_fb^2 + iq_fb^2)`, `abs_volt = sqrt(ud_fb^2 + uq_fb^2)` and `duty = abs_volt / pwm_volt` (only while `pwm_volt > 0`). `ud_fb`/`uq_fb` are the F3 `curpid0` output, which limits the voltage as one vector (d first, q gets what is left of the circle), so `abs_volt` stays at or below `pwm_volt`. The F3 computes `pwm_volt` from the DC link voltage and its usable duty `hv0.duty_max` (what the min on/off times leave, about 0.91), or 0.95 if that is not wired.
 * - One state word per packet fills `u_fb`, `v_fb`, `w_fb`, `hv_temp`, `mot_temp`, `core_temp`, `dc_volt`, `pwm_volt`, `y`, `emf_val` (10 words, so each is refreshed every 10 periods).
 * - `power` and `dc_cur` are not measured, they are estimated from the commanded dq voltages, so they leave out inverter losses and read low:
 * ```c
@@ -84,7 +86,7 @@ HAL_PIN(d_cmd);             // *input*, d axis command: current (A peak) in curr
 HAL_PIN(q_cmd);             // *input*, q axis command: current (A peak) in current mode, voltage (V) in voltage mode
 HAL_PIN(pos);               // *input*, commutation angle (rad)
 HAL_PIN(vel);               // *input*, velocity of pos (rad/s), sent to the F3 and used for the advance
-HAL_PIN(adv);               // *parameter*, commutation advance (s), pos is sent as pos + vel * adv, default 0
+HAL_PIN(adv);               // *parameter*, commutation advance (s), encoder to F3 current sample latency, pos is sent as pos + vel * adv, default 0
 HAL_PIN(en);                // *input*, enable the F3 power stage (> 0), commands are sent as 0 while disabled
 
 // config data from LS

@@ -26,7 +26,7 @@
 * - `ksp` = 0 turns it off.
 *
 * 3. **PI controller** (rt):
-* - Proportional part plus feed forward, each axis limited to +-`pwm_volt`:
+* - Proportional part plus feed forward, each axis first limited to +-`pwm_volt`:
 * ```c
 * ud = ff * r * id_cmd - kind * vel * lq * iq + cur_bw * ld * id_error;
 * uq = ff * r * iq_cmd + kind * vel * (ld * id + psi) + cur_bw * lq * iq_error;
@@ -35,17 +35,22 @@
 * - `ff` (resistance) and `kind` (back EMF and cross coupling) are feed forward factors, 0 = off, 1 = full.
 * - `id_error`/`iq_error` show the error against the predicted current.
 *
-* 4. **Modes and enable** (rt):
-* - In voltage mode `ud`/`uq` are the scaled command, and the integrators and errors are 0.
+* 4. **Voltage vector limit** (rt):
+* - The sum is then limited as one vector of length `pwm_volt`, d first: `ud` is clamped to +-`pwm_volt`, and `uq` to what is left of the circle, `sqrt(pwm_volt^2 - ud^2)`. So d keeps what it needs for the flux (and field weakening), q gets the rest.
+* - Anti-windup by back-calculation: each integrator takes back what the limit cut from its axis, so it holds at the limit instead of winding up.
+* - `ud`/`uq` are the limited vector, which is what the PWM stage can pass, so the predictor, the integrators and the F4 (via `ls0.ud_fb/uq_fb`) all see the voltage actually applied. On the F3 `pwm_volt` is `duty_max * udc / sqrt(3)`, inside the SVM hexagon.
+*
+* 5. **Modes and enable** (rt):
+* - In voltage mode `ud`/`uq` are the scaled command (not passed through the vector limit), and the integrators and errors are 0.
 * - With `en` <= 0, `ud`/`uq` are 0 and the integrators are reset.
 *
-* 5. **Parameters**:
+* 6. **Parameters**:
 * - nrt_init defaults: `r` 0.5 Ohm, `ld`/`lq` 10 mH, `psi` 0.05, `cur_bw` 250 rad/s, `kci` 500, `ksp` 1, `scale` 1. `ff` and `kind` default to 0.
 * - Floors used in rt: `r` 0.1 Ohm, `ld`/`lq` 1 mH, `max_cur` 0.01 A.
-* - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage and phase mode).
+* - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage, phase mode and `hv0.duty_max`).
 *
 * {{% hint warning %}}
-* - The d and q voltages are limited one by one, not as a vector, so `|u|` can reach sqrt(2) * `pwm_volt`. The integral limit is symmetric around the proportional part, so the sum can also leave +-`pwm_volt`. The PWM stage clamps what is left.
+* - The vector limit gives d priority: a large d demand (e.g. a d current step) can leave q with little or no voltage for that time.
 * - In voltage mode with a command above `pwm_volt`, `scale` is multiplied down again every tick instead of being set to the ratio, so it keeps shrinking until the `kci` term balances it.
 * - The voltage mode limit compares the squared command with `0.1 * pwm_volt` (not squared). This only matters for very small commands and has no effect after the clamp to 1.
 * - `conf/template/linkv3.txt` links `curpid0.dc_volt` and `curpid0.ac_volt`, which no longer exist.
@@ -69,12 +74,12 @@ HAL_PIN(iq_fb);  // *input*, Measured q-axis current (A)
 // HAL_PIN(ac_current);
 
 // voltage output
-HAL_PIN(ud);  // *output*, D-axis voltage (V), also read back by the predictor
-HAL_PIN(uq);  // *output*, Q-axis voltage (V), also read back by the predictor
+HAL_PIN(ud);  // *output*, D-axis voltage (V), vector limited, also read back by the predictor
+HAL_PIN(uq);  // *output*, Q-axis voltage (V), vector limited, also read back by the predictor
 
 // maximum output current and voltage
 HAL_PIN(max_cur);   // *input*, Maximum current (A), limits the command, min 0.01
-HAL_PIN(pwm_volt);  // *input*, Maximum output voltage per axis (V)
+HAL_PIN(pwm_volt);  // *input*, Maximum length of the output voltage vector (V)
 
 // d, q resistance and inductance
 HAL_PIN(r);   // *parameter*, Winding resistance (Ohm), min 0.1, default 0.5

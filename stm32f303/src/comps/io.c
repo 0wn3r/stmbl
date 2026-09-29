@@ -8,86 +8,159 @@
 #include "f3hw.h"
 #include "common.h"
 
+/**
+* ## Brief
+* `io` is the hardware I/O of the F3 (HV board). It reads the phase currents, phase voltages, DC link voltage and temperatures from the ADCs, calibrates the current offsets at boot, rebuilds a phase current the ADC could not sample, switches the power stage on and off, raises the HV fault codes (overcurrent, overvoltage, overtemperature, driver fault) and runs the short-circuit brake. It also drives the status LED, the brake output and the DAC reference of the overcurrent comparators. It is loaded by `stm32f303/src/main.c` as `io0` (rt_prio 1, so it runs right after `ls0`).
+*
+* ## Component Explanation
+*
+* 1. **Wiring on the F3** (fixed in main.c):
+* - Inputs: `io0.hv_en = ls0.en`, `io0.sbrake = ls0.sbrake`, `io0.dac = ls0.dac`, `io0.max_cur = ls0.max_cur`, `io0.ignore_fault_pin = ls0.ignore_fault_pin`, `io0.led = ls0.fault`.
+* - Outputs: `iu/iv/iw` go to `dq0`, `u/v/w` to `ls0.u_fb/v_fb/w_fb`, `ur/vr/wr` to `emf0`, `udc_duty` to `hv0.udc`, `udc` to `ls0.dc_volt`, `hv_temp`/`mot_temp` to `ls0`, `fault` to `ls0.fault_in` (sent to the F4), `sbrake_on` to `hv0.sbrake`.
+* - `max_cur` on the F3 is the F4's `hv0.max_cur` times its `scale` (in practice `conf0.max_ac_cur` and `fault0.scale`).
+*
+* 2. **ADC readout** (rt):
+* - ADC1/2 and ADC3/4 run as dual simultaneous pairs, triggered by TIM8 at the counter extreme where the low sides conduct (set up in main.c). Each pair converts three current samples (61.5 cycles each, about 3.1 us together) and one voltage. Each rt tick waits for both DMA transfers; if they have not finished after about 50 us the rt is stopped (`hal_stop`) and the watchdog resets the F3.
+* - The phase currents are the mean of the three samples, converted with the shunt amplifier constants (3 mOhm shunt, gain 16) into amps (folded into one multiply and one subtraction), then the offset is subtracted and the sign inverted.
+* - `ur`, `vr`, `wr` are the phase voltages to ground from one unfiltered ADC sample per PWM period, scaled by the resistor divider. They feed `emf0`.
+* - `u`, `v`, `w` and `udc` are low pass filtered (5 % new value per tick, a time constant of about 1.3 ms at 15 kHz). `udc` is for display, `pwm_volt` and the trips.
+* - `udc_duty` is the same link sample filtered with 50 % new value per tick (about 1.4 ticks), for `hv0`'s duty division, so link sag on acceleration and the rise on regen reach the duty within about 0.1 ms.
+* - `iabs` is the largest of `|iu|`, `|iv|`, `|iw|` (after the reconstruction below).
+*
+* 3. **Phase current reconstruction** (rt, `recon` > 0, the default):
+* - A phase's low side shunt only carries its current while its low side is on. From the TIM8 compare values `io` knows each phase's low side half pulse (`ARR - CCR`, in timer ticks): the half after the counter extreme comes from the compare loaded at this extreme (`io` runs before `hv0` rewrites it), the half before from last tick's.
+* - A phase is flagged when the half after is shorter than the sample window (`ADC_CUR_WINDOW_TICKS`, the three conversions plus 0.5 us ring down, about 3.6 us) or the half before is shorter than the dead time (2.0 us). This happens near full duty: with `min_off` 3 us the low side is on for only part of the window, and the phase would read low, which the current loop answers by pushing harder (a torque reversal at speed).
+* - The flagged phase is rebuilt from the other two, `iu = -(iv + iw)` and so on (no neutral, so the three sum to 0). If more than one is flagged, only the one with the shortest pulse is rebuilt. `recon_phase` shows which one this tick: 0 none, 1 u, 2 v, 3 w.
+*
+* 4. **Offset calibration** (rt, at start):
+* - Ticks 0..99 are skipped. Ticks 100..199 average the current readings into the offsets. At tick 200, an offset above 5 A raises `HV_CURRENT_OFFSET_FAULT`. After that the offsets are output on `uo`, `vo`, `wo`, and normal operation starts. At the 15 kHz rt rate of the F3 this takes about 13 ms. Before that, the bridge cannot be enabled.
+* - The motor must not carry current while this runs (the F4 does not enable the bridge this early after boot).
+*
+* 5. **Faults** (rt):
+* - `HV_TEMP_ERROR`: `hv_temp` > 110 degC (`ABS_MAX_TEMP`) for 5 ticks in a row.
+* - `HV_VOLT_ERROR`: `udc` > 400 V (`ABS_MAX_VOLT`) for 5 ticks in a row.
+* - `HV_OVERCURRENT_RMS`: `iabs` > 0.95 * 30 A for 5 ticks in a row. Despite the name this is a filtered peak value, not an RMS one.
+* - `HV_OVERCURRENT_PEAK`: `iabs` > `oc_lim` in a single tick, or `iabs` > 30 A (`ABS_MAX_CURRENT`). This is the software trip that follows the configured current:
+* ```c
+* oc_lim = max_cur > 0 ? CLAMP(oc_k * max_cur, oc_min, 30) : 30;
+* ```
+* - `oc_k` defaults to 1.3 and `oc_min` to 5 A; `oc_lim` shows the level in force.
+* - `HV_FAULT_ERROR`: the driver's fault pin (PB7, active low) for 5 ticks while enabled, unless `ignore_fault_pin` is set.
+* - `HV_OVERCURRENT_HW`: the bridge is enabled but TIM8's MOE bit has been cleared. The comparators COMP2 (U, PA7), COMP4 (V, PB0) and COMP1 (W, PA1) compare the phase currents with the DAC reference (`dac`, raw 0..4095 on DAC1 channel 1, output buffer off) and trip the TIM8 break inputs in hardware, all three through a digitally filtered input. `cu`, `cv`, `cw` show the comparator outputs.
+* - The "5 ticks" filters use `err_filter`: +1 per tick with the error, -0.001 without (-0.01 for the fault pin), and trip at 4.95, so about 0.33 ms at 15 kHz.
+* - `fault` shows the current fault code (0 = none) every tick.
+*
+* 6. **Enable** (rt):
+* - On the rising edge of `hv_en` TIM8 MOE is set and the driver enable pin (PA15) is pulled low (enabled). `ls0` holds `hv_en` at 0 until the F4 has sent its whole configuration.
+* - When a fault is set while enabled, MOE is cleared (all six outputs go to their idle state at once, as the comparators do in hardware) and the driver enable pin is set high. The fault stays latched until `hv_en` goes to 0. The software trips of item 5 take effect in the tick they are detected; a fault pin trip, detected after the trip checks, one tick later.
+* - With `hv_en` = 0 and no braking, MOE is cleared, the driver enable pin is set high, and the fault is cleared (unless `sbrake` is still requested, see below).
+*
+* 7. **Short-circuit braking** (rt, while `hv_en` = 0):
+* - When `sbrake` > 0 (from the F4's flag, or from `ls0` on a link loss), the offset calibration is done, and no fault has been seen since the last rising edge of `hv_en`, `io` brakes: `sbrake_on` = 1, which makes `hv0` hold all compares at 0, so all three low sides are on and the back EMF drives current round the windings. The driver enable pin is pulled low.
+* - The first 2 ticks keep MOE off, so the zero compares reach the timer first; stale break flags are cleared when braking starts.
+* - After that the current is chopped per tick: `iabs` above the limit clears MOE for the next tick (the current then flows back into the DC link through the diodes), otherwise MOE is set.
+* ```c
+* lim = sbrake_cur > 0 ? sbrake_cur : (max_cur > 0 ? max_cur : 10);
+* lim = MIN(lim, 0.8 * oc_lim);
+* ```
+* - Braking is refused after any fault since the last enable (a failed switch plus three low sides on would be another short), and before the first enable after power up.
+* - While braking, the fault pin (unfiltered), a TIM8 break flag (`HV_OVERCURRENT_HW`) and all the checks of item 5 are watched. A fault stops the braking for good (until the next enable edge), turns MOE and the driver off, and stays reported in `fault` until `sbrake` goes to 0, so the F4 sees it and drops the request instead of retrying.
+*
+* 8. **Temperatures, LED and brake** (nrt):
+* - The thermistor voltages are converted into degC with a beta model (85 kOhm at 25 degC, B = 4092), for `hv_temp` (3.9 kOhm pullup, ADC4 rank 2) and for `mot_temp` (10 kOhm pullup behind a 51k/10k divider, ADC4 rank 3). A resistance below 1 kOhm reads as 0 degC. `mot_temp` is filtered with 1 % new value per nrt call.
+* - The IPM's NTC shares the VFO pin, which the module pulls low while the bridge is disabled. So `hv_temp` is updated only while enabled, more than 75 rt ticks (5 ms) after the enable edge and with the pin above 0.3 V, and held otherwise. The first reading after power up is taken as is, later ones are filtered with 1 % per nrt call. `hv_temp_ok` is 0 before the first reading (`hv_temp` then reads 0), 1 while live and 2 while held. Braking counts as disabled here.
+* - The LED blinks `led` times (it is wired to `ls0.fault`), or 2 times while the HAL is not running normally.
+* - If the brake circuit on PB2 reads high at start, `brk_present` is set to 1 and the pin becomes an output. `brk` > 0 then drives it low, otherwise high.
+*
+* {{% hint warning %}}
+* - `HV_CURRENT_OFFSET_FAULT` is raised only once, at tick 200. As `hv_en` is normally 0 then, it is cleared again right after, so it shows on `fault` for one tick only and can easily be lost before `ls0` sends it to the F4. The same goes for any other fault raised while the bridge is off and not braking.
+* - The reconstruction reads `TIM8->CCR3/CCR2/CCR1` for U/V/W directly, not through `PWM_U/V/W`, so it only matches boards with that mapping (the current HV board does). On the first tick after the calibration the stored previous pulses are 0, so one phase is rebuilt for that tick.
+* - Both thermistors use the same NTC constants. This is specific to the HV board and to the motor sensor it was built for.
+* - `hv_temp_ok` is not sent to the F4, so the F4 cannot tell a held `hv_temp` from a live one.
+* - `brk`, `oc_k`, `oc_min`, `sbrake_cur` and `recon` are not wired in main.c and not carried by the F4 link, so they can only be changed from the F3 terminal.
+* {{% /hint %}}
+*/
+
 HAL_COMP(io);
 
-HAL_PIN(led);
+HAL_PIN(led);  // *input*, Number of LED blinks, from ls0.fault
 
 //phase current
-HAL_PIN(iu);
-HAL_PIN(iv);
-HAL_PIN(iw);
+HAL_PIN(iu);  // *output*, U phase current (A)
+HAL_PIN(iv);  // *output*, V phase current (A)
+HAL_PIN(iw);  // *output*, W phase current (A)
 //total current
-HAL_PIN(iabs);
+HAL_PIN(iabs);  // *output*, Largest absolute phase current (A)
 
 // Rebuild the phase whose low side was not on for the whole sample window
 // from the other two (see rt_func). recon 0 turns it off; recon_phase reports
 // which phase was rebuilt in this tick, 0 none, 1 u, 2 v, 3 w.
-HAL_PIN(recon);
-HAL_PIN(recon_phase);
+HAL_PIN(recon);        // *parameter*, > 0 rebuilds a phase that could not be sampled from the other two, default 1
+HAL_PIN(recon_phase);  // *output*, Phase rebuilt this tick, 0 = none, 1 = u, 2 = v, 3 = w
 
 // software overcurrent trip: iabs above oc_k * max_cur, at least oc_min and
 // at most ABS_MAX_CURRENT, stops the bridge in the same tick
-HAL_PIN(max_cur);
-HAL_PIN(oc_k);    // default 1.3
-HAL_PIN(oc_min);  // default 5 A
-HAL_PIN(oc_lim);  // the limit in force [A], out
+HAL_PIN(max_cur);  // *input*, Configured maximum current (A), from ls0.max_cur, 0 = trip at 30 A only
+HAL_PIN(oc_k);     // *parameter*, Software overcurrent trip as a factor on max_cur, default 1.3
+HAL_PIN(oc_min);   // *parameter*, Lower limit for the software overcurrent trip (A), default 5
+HAL_PIN(oc_lim);   // *output*, Software overcurrent trip level in force (A)
 
 //phase voltage
-HAL_PIN(u);
-HAL_PIN(v);
-HAL_PIN(w);
+HAL_PIN(u);  // *output*, U phase voltage (V), low pass filtered
+HAL_PIN(v);  // *output*, V phase voltage (V), low pass filtered
+HAL_PIN(w);  // *output*, W phase voltage (V), low pass filtered
 //dclink voltage
-HAL_PIN(udc);
-// the link for the duty division (hv0, svm0): 0.5 IIR, about 1.4 ticks, so
+HAL_PIN(udc);  // *output*, DC link voltage (V), low pass filtered (tau about 1.3 ms), for ls0 and the trips
+// the link for the duty division (hv0): 0.5 IIR, about 1.4 ticks, so
 // sag on acceleration and rise on regen reach the duty within ~100 us
 // instead of udc's 1.3 ms (0.05 IIR, kept for display and trips)
-HAL_PIN(udc_duty);
+HAL_PIN(udc_duty);  // *output*, DC link voltage (V), fast filter (50 % per tick), for hv0.udc
 
 // phase voltages to ground, one unfiltered adc sample per pwm period, for emf0
-HAL_PIN(ur);
-HAL_PIN(vr);
-HAL_PIN(wr);
+HAL_PIN(ur);  // *output*, U phase voltage to ground (V), one unfiltered sample per PWM period, for emf0
+HAL_PIN(vr);  // *output*, V phase voltage to ground (V), one unfiltered sample per PWM period, for emf0
+HAL_PIN(wr);  // *output*, W phase voltage to ground (V), one unfiltered sample per PWM period, for emf0
 
 //driver temoerature
-HAL_PIN(hv_temp);
+HAL_PIN(hv_temp);  // *output*, Power stage temperature (degC), held while the bridge is off
 // The IPM's NTC shares VFO, which the module pulls low while the bridge is
 // disabled. hv_temp is read only while enabled and held otherwise (the IPM
 // only heats while switching). hv_temp_ok: 0 never read, 1 live, 2 held.
-HAL_PIN(hv_temp_ok);
+HAL_PIN(hv_temp_ok);  // *output*, hv_temp state, 0 = never read, 1 = live, 2 = held
 //motor temperature
-HAL_PIN(mot_temp);
+HAL_PIN(mot_temp);  // *output*, Motor temperature (degC)
 
 //ADC offset outputs
-HAL_PIN(uo);
-HAL_PIN(vo);
-HAL_PIN(wo);
+HAL_PIN(uo);  // *output*, U current offset from the boot calibration (A)
+HAL_PIN(vo);  // *output*, V current offset from the boot calibration (A)
+HAL_PIN(wo);  // *output*, W current offset from the boot calibration (A)
 
 //DAC value for comperators
-HAL_PIN(dac);
+HAL_PIN(dac);  // *input*, Overcurrent comparator reference, raw DAC value 0..4095, from ls0.dac
 
 //comperator outputs
-HAL_PIN(cu);
-HAL_PIN(cv);
-HAL_PIN(cw);
+HAL_PIN(cu);  // *output*, U overcurrent comparator output (COMP2)
+HAL_PIN(cv);  // *output*, V overcurrent comparator output (COMP4)
+HAL_PIN(cw);  // *output*, W overcurrent comparator output (COMP1)
 
 //enable in
-HAL_PIN(hv_en);
+HAL_PIN(hv_en);  // *input*, Enable the power stage, from ls0.en
 
 //fault output
-HAL_PIN(fault);
-HAL_PIN(ignore_fault_pin);
+HAL_PIN(fault);             // *output*, HV fault code, 0 = none, see Faults
+HAL_PIN(ignore_fault_pin);  // *input*, Ignore the driver fault pin if > 0, from ls0.ignore_fault_pin
 
-HAL_PIN(brk_present);
-HAL_PIN(brk);
+HAL_PIN(brk_present);  // *output*, Brake circuit detected at start
+HAL_PIN(brk);          // *input*, Brake output, > 0 drives the brake pin low, not wired
 
 // Short-circuit braking while disabled: all three low sides on, so the back
 // emf drives current round the windings and the energy stays in the motor.
 // Refused after any trip since the last enable (a failed switch plus three
 // low sides on is another short). Chopped: a tick with iabs above the limit
 // turns the bridge off for the next tick.
-HAL_PIN(sbrake);      // request, in
-HAL_PIN(sbrake_cur);  // chop threshold [A]; 0 = max_cur, or 10 A without it
-HAL_PIN(sbrake_on);   // braking now, out; hv0 holds all compares at 0 on it
+HAL_PIN(sbrake);      // *input*, Short-circuit braking request while hv_en = 0, from ls0.sbrake
+HAL_PIN(sbrake_cur);  // *parameter*, Braking chop threshold (A), 0 = max_cur (10 A if that is 0), at most 0.8 * oc_lim, default 0
+HAL_PIN(sbrake_on);   // *output*, 1 while braking, to hv0.sbrake which holds all compares at 0
 
 
 volatile uint32_t adc_12_buf[ADC_SEQ_LEN];

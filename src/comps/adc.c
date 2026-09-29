@@ -24,6 +24,7 @@ extern volatile uint32_t ADC_DMA_Buffer1[ADC_SAMPLES_IN_RT];
 *
 * 1. **Sampling**:
 * - ADC1 (sin) and ADC2 (cos) sample in dual mode into a DMA double buffer, 240 samples per rt period (1.2 MHz at 5 kHz rt). Each 32 bit sample holds sin in the lower and cos in the upper 16 bits. `rt` reads the half the DMA is not writing, i.e. the previous rt period.
+* - The transfer-complete interrupt of this DMA (DMA2 stream 0) is what runs the hal rt on the F4. An ADC1/ADC2 overrun would stop the DMA, and with it the rt, for good, so the overrun interrupt (src/main.c `ADC_IRQHandler`) stops the hal and sets its state to `MISC_ERROR`.
 * - The 240 samples form 24 groups of 10: 9 samples of fb0 followed by 1 sample of fb1.
 * - Each raw value is converted into the differential input voltage (V) of the analog front end:
 * ```c
