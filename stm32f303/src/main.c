@@ -81,17 +81,28 @@ static void bridge_off(void) {
 #endif
 }
 
-// Independent watchdog on the 40 kHz LSI, kicked by hal.c after every rt,
-// frt and nrt run (HAL_WATCHDOG). It fires only on a hang; after the reset
-// the pwm pins are inputs and HV_EN's pull-up holds the gates off.
+// Independent watchdog on the 40 kHz LSI, kicked by hal.c at the end of every
+// rt run while the nrt loop keeps coming round (HAL_WATCHDOG). It fires on an
+// rt stop (overrun or error), a hang with irqs off, and an nrt stuck for 1 s;
+// after the reset the pwm pins are inputs and HV_EN's pull-up holds the gates
+// off.
 void hal_init_watchdog(float time) {
+  // RM0316 25.3.4: any other KR write between 0x5555 and the RLR write
+  // re-locks PR/RLR, and the IWDG then runs at the 409 ms reset value. So the
+  // reload is computed first and the sequence runs with interrupts off.
+  uint32_t rlr = (uint32_t)CLAMP(time * 10000.0f, 1.0f, 4095.0f);
+  __disable_irq();
   IWDG->KR  = 0xCCCC;  // start; from here only a reset stops it
   IWDG->KR  = 0x5555;  // unlock PR and RLR
   IWDG->PR  = 0;       // LSI / 4: 0.1 ms per count
-  IWDG->RLR = (uint32_t)CLAMP(time * 10000.0, 1.0, 4095.0);
+  IWDG->RLR = rlr;
   while(IWDG->SR) {
   }
   IWDG->KR = 0xAAAA;
+  __enable_irq();
+  if(IWDG->RLR != rlr || IWDG->PR != 0) {
+    Error_Handler();  // not armed as asked: stop here, the IWDG resets us
+  }
 }
 
 void hal_reset_watchdog() {
@@ -427,8 +438,10 @@ int main(void) {
   // hal parse config
   // hal_init_nrt();
   // error foo
-  hal_start();
+  // armed before the rt starts, so a hang in the very first rt tick resets
+  // too, and no rt kick can land inside the key sequence
   hal_init_watchdog(0.005);
+  hal_start();
 
   while(1) {
     hal_run_nrt();

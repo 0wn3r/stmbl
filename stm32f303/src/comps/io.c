@@ -231,9 +231,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct io_ctx_t *ctx      = (struct io_ctx_t *)ctx_ptr;
   struct io_pin_ctx_t *pins = (struct io_pin_ctx_t *)pin_ptr;
 
-  while(!(DMA1->ISR & DMA_ISR_TCIF1)) {
-  }
-  while(!(DMA2->ISR & DMA_ISR_TCIF5)) {
+  // The sequence ends ~6 us after the tick; if the ADC DMA stalls (it only
+  // requests once both ADCs of a pair finish) waiting here forever would hang
+  // the rt with irqs of its priority blocked. Give up after ~50 us and stop
+  // the rt instead: the watchdog then resets the F3.
+  for(uint32_t n = 0; !((DMA1->ISR & DMA_ISR_TCIF1) && (DMA2->ISR & DMA_ISR_TCIF5)); n++) {
+    if(n > 1000) {
+      hal_stop();
+      return;
+    }
   }
 
   DMA1->IFCR = DMA_IFCR_CTCIF1;
