@@ -40,6 +40,10 @@ void MX_TIM8_Init(void) {
   htim8.Init.CounterMode   = TIM_COUNTERMODE_CENTERALIGNED3;
   htim8.Init.Period        = PWM_RES;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  // hv0 rewrites ARR every tick (phase lock). Preloaded, it changes at the
+  // next UEV together with the compares; without it a smaller ARR written
+  // after the counter passed it would miss the overflow (RM0316 20.3.1).
+  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
 #ifdef PWM_INVERT
   htim8.Init.RepetitionCounter = 1;
 #else
@@ -107,8 +111,16 @@ void MX_TIM8_Init(void) {
     Error_Handler();
   }
   TIM8->BDTR |= TIM_BDTR_BK2E;
-  __DSB();                                // BK2E takes an APB cycle to act
-  TIM8->SR = ~(TIM_SR_BIF | TIM_SR_B2IF);  // a break flag from the setup is not a trip
+  __DSB();  // BK2E takes an APB cycle to act
+  // LOCK level 1 (RM0316 20.3.16/20.4.21): DTG, BKE/BKP/BKF, BK2E/BK2P/BK2F,
+  // AOE and OISx are read-only until reset, so no read-modify-write of BDTR
+  // can change the break setup. MOE, which io0 toggles, stays writable.
+  TIM8->BDTR |= TIM_BDTR_LOCK_0;
+  for(volatile int i = 0; i < 4; i++) {  // "wait 4 timer clocks" before B2IF
+  }
+  // Clears only what the setup itself raised: the comparators come up later
+  // with the DAC at 0 V and set BIF/B2IF again; the enable path handles that.
+  TIM8->SR = ~(TIM_SR_BIF | TIM_SR_B2IF);
 
   HAL_TIM_MspPostInit(&htim8);
 }
