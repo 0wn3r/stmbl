@@ -187,6 +187,11 @@ int main(void) {
   for(uint32_t *src = &_siccmram, *dst = &_sccmram; dst < &_eccmram;) {
     *dst++ = *src++;
   }
+  // and the rt code that no longer fits in CCM into SRAM
+  extern uint32_t _siramfunc, _sramfunc, _eramfunc;
+  for(uint32_t *src = &_siramfunc, *dst = &_sramfunc; dst < &_eramfunc;) {
+    *dst++ = *src++;
+  }
 
   // Relocate interrupt vectors
   extern void *g_pfnVectors;
@@ -578,7 +583,8 @@ void SystemClock_Config(void) {
   HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
 
   /* SysTick_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(SysTick_IRQn, 1, 0);  // same level as the rt, below the break
+  // below TIM8 (rt 1, break 0): its handler runs from flash and must not delay the rt
+  HAL_NVIC_SetPriority(SysTick_IRQn, 14, 0);
 }
 
 /**

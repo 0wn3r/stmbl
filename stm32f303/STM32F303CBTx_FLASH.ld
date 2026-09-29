@@ -112,6 +112,21 @@ SECTIONS
     _eccmram = .;       /* create a global symbol at ccmram end */
   } >CCMRAM AT> FLASH
 
+  /* rt code CCM has no room for: SRAM also runs with no wait states.
+   * main() copies it like .ccmram. */
+  _siramfunc = LOADADDR(.ramfunc);
+  .ramfunc :
+  {
+    . = ALIGN(4);
+    _sramfunc = .;
+    *comps/obs.o(.text.rt_func)
+    *comps/angle.o(.text.rt_func)
+    *comps/emf.o(.text.rt_func)
+    *(.text.mod .text.minus)
+    . = ALIGN(4);
+    _eramfunc = .;
+  } >RAM AT> FLASH
+
   /* The program code and other data goes into FLASH */
   .text :
   {
