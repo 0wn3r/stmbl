@@ -181,6 +181,56 @@ void reset(char *ptr) {
 }
 COMMAND("reset", reset, "reset STMBL");
 
+// times obs0's rt code, enabled, on a private copy of its pins and context
+// in nrt: the rt interrupts it, so the minimum is the uninterrupted cost
+#include "obs_comp.h"
+extern hal_comp_t obs_comp_struct;
+void obs_bench(char *ptr) {
+  static hal_pin_inst_t p[48];
+  static uint32_t ctx[32];
+  if(obs_comp_struct.pin_count > 48 || obs_comp_struct.ctx_size > sizeof(ctx)) {
+    printf("obs_bench: buffers too small\n");
+    return;
+  }
+  for(int i = 0; i < 48; i++) {
+    p[i].value  = 0.0;
+    p[i].source = &p[i];
+  }
+  struct obs_pin_ctx_t *pins = (struct obs_pin_ctx_t *)p;
+  obs_comp_struct.nrt_init(ctx, p);
+  obs_comp_struct.rt_start(ctx, p);
+  PIN(en)  = 1.0;
+  PIN(r)   = 0.67;
+  PIN(ld)  = 0.00335;
+  PIN(lq)  = 0.00435;
+  PIN(bw)  = 200.0;
+  PIN(adv) = 0.0005;
+  PIN(max_vel) = 10000.0;
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  uint32_t mn = 0xffffffff, mx = 0;
+  float pos = 0.0;
+  for(int i = 0; i < 500; i++) {
+    pos = mod(pos + 0.1);
+    PIN(pos_ref) = pos;
+    PIN(vel_ref) = 1500.0;
+    PIN(id)      = 0.1;
+    PIN(iq)      = 1.0 + 0.001 * (i & 7);
+    PIN(ud)      = -2.0;
+    PIN(uq)      = 50.0;
+    PIN(pos_chk) = pos;
+    uint32_t t0  = DWT->CYCCNT;
+    obs_comp_struct.rt(1.0 / 15000.0, ctx, p);
+    uint32_t t = DWT->CYCCNT - t0;
+    mn         = MIN(mn, t);
+    mx         = MAX(mx, t);
+    hal_reset_watchdog();  // the iwdg runs out in a few ms
+  }
+  printf("obs_bench: min %lu max %lu cycles, min %.2f us, ok %.0f e %.1f\n",
+         mn, mx, (double)((float)mn * 1.0e6 / (float)systick_freq), (double)PIN(ok), (double)PIN(eq));
+}
+COMMAND("obs_bench", obs_bench, "time obs0 rt outside the rt");
+
 int main(void) {
   // copy the rt path into CCM RAM, the startup code only copies .data
   extern uint32_t _siccmram, _sccmram, _eccmram;
