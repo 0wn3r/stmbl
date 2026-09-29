@@ -69,6 +69,20 @@ void DMA2_Stream0_IRQHandler(void) {
   }
 }
 
+// RM0090 13.8.1: an ADC overrun blocks the DMA requests and ignores further
+// triggers until the ADC and DMA are set up again, so the rt (the DMA TC)
+// would stop for good with nothing else noticing. Stop the hal and say so.
+void ADC_IRQHandler(void) {
+  if((ADC1->SR | ADC2->SR) & ADC_SR_OVR) {
+    ADC1->CR1 &= ~ADC_CR1_OVRIE;
+    ADC2->CR1 &= ~ADC_CR1_OVRIE;
+    ADC1->SR = ~ADC_SR_OVR;
+    ADC2->SR = ~ADC_SR_OVR;
+    hal_stop();
+    hal.hal_state = MISC_ERROR;
+  }
+}
+
 void bootloader(char *ptr) {
   hal_stop();
 
