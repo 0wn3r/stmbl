@@ -30,6 +30,11 @@
 #define PWM_DEADTIME_TICKS DTG_TICKS(PWM_DEADTIME)
 #define PWM_RES 4800
 
+// ADC regular sequence per ADC pair: ADC_CUR_SAMPLES current samples, then
+// one slow voltage (adc.c)
+#define ADC_CUR_SAMPLES 3
+#define ADC_SEQ_LEN (ADC_CUR_SAMPLES + 1)
+
 #define ABS_MAX_TEMP 110.0
 #define ABS_MAX_VOLT 400.0
 #define ABS_MAX_CURRENT 30.0

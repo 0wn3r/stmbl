@@ -80,8 +80,8 @@ HAL_PIN(sbrake_cur);  // chop threshold [A]; 0 = max_cur, or 10 A without it
 HAL_PIN(sbrake_on);   // braking now, out; hv0 holds all compares at 0 on it
 
 
-volatile uint32_t adc_12_buf[6];
-volatile uint32_t adc_34_buf[6];
+volatile uint32_t adc_12_buf[ADC_SEQ_LEN];
+volatile uint32_t adc_34_buf[ADC_SEQ_LEN];
 
 struct io_ctx_t {
   float u_offset;
@@ -122,10 +122,11 @@ struct io_ctx_t {
 #define SHUNT_GAIN 16.0
 
 #define AMP(a, gain) (((a)*AREF / ARES / (gain)-AREF / (SHUNT_PULLUP + SHUNT_SERIE) * SHUNT_SERIE) / (SHUNT * SHUNT_PULLUP) * (SHUNT_PULLUP + SHUNT_SERIE))
-// AMP and VOLT folded to one multiply for the rt path; sum5 is the sum of 5 samples
-#define AMP_K ((float)(AREF / ARES / SHUNT_GAIN / 5.0 / (SHUNT * SHUNT_PULLUP) * (SHUNT_PULLUP + SHUNT_SERIE)))
+// AMP and VOLT folded to one multiply for the rt path; sum is the sum of
+// ADC_CUR_SAMPLES samples
+#define AMP_K ((float)(AREF / ARES / SHUNT_GAIN / ADC_CUR_SAMPLES / (SHUNT * SHUNT_PULLUP) * (SHUNT_PULLUP + SHUNT_SERIE)))
 #define AMP_0 ((float)(AREF / (SHUNT_PULLUP + SHUNT_SERIE) * SHUNT_SERIE / (SHUNT * SHUNT_PULLUP) * (SHUNT_PULLUP + SHUNT_SERIE)))
-#define AMP5(sum5) ((float)(sum5)*AMP_K - AMP_0)
+#define AMPN(sum) ((float)(sum)*AMP_K - AMP_0)
 #define VOLT_K ((float)(AREF / ARES / VDIVDOWN * (VDIVUP + VDIVDOWN)))
 
 float r2temp(float r) {
@@ -167,25 +168,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(brk_present) = 1.0;
   }
 
-  DMA1_Channel1->CCR &= (uint16_t)(~DMA_CCR_EN);
-  DMA1_Channel1->CPAR  = (uint32_t) & (ADC12_COMMON->CDR);
-  DMA1_Channel1->CMAR  = (uint32_t)adc_12_buf;
-  DMA1_Channel1->CNDTR = ARRAY_SIZE(adc_12_buf);
-  DMA1_Channel1->CCR   = DMA_CCR_MINC | DMA_CCR_PL_0 | DMA_CCR_MSIZE_1 | DMA_CCR_PSIZE_1 | DMA_CCR_CIRC;
-  ADC1->CFGR |= ADC_CFGR_DMAEN | ADC_CFGR_DMACFG;
-  DMA1_Channel1->CCR |= DMA_CCR_EN;
-
-  //   ADC12_COMMON->CCR |= ADC12_CCR_MDMA_1;
-
-  DMA2_Channel5->CCR &= (uint16_t)(~DMA_CCR_EN);
-  DMA2_Channel5->CPAR  = (uint32_t) & (ADC34_COMMON->CDR);
-  DMA2_Channel5->CMAR  = (uint32_t)adc_34_buf;
-  DMA2_Channel5->CNDTR = ARRAY_SIZE(adc_34_buf);
-  DMA2_Channel5->CCR   = DMA_CCR_MINC | DMA_CCR_PL_0 | DMA_CCR_MSIZE_1 | DMA_CCR_PSIZE_1 | DMA_CCR_CIRC;
-  ADC3->CFGR |= ADC_CFGR_DMAEN | ADC_CFGR_DMACFG;
-  DMA2_Channel5->CCR |= DMA_CCR_EN;
-
-  //   ADC34_COMMON->CCR |= ADC34_CCR_MDMA_1;
+  // the ADC DMA is set up in main.c, before the ADCs start (RM0316 15.5.4)
 
   ctx->offset_count      = 0;
   ctx->u_offset          = 0.0;
@@ -245,15 +228,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA1->IFCR = DMA_IFCR_CTCIF1;
   DMA2->IFCR = DMA_IFCR_CTCIF5;
 
-  uint32_t a12 = adc_12_buf[0] + adc_12_buf[1] + adc_12_buf[2] + adc_12_buf[3] + adc_12_buf[4];
-  uint32_t a34 = adc_34_buf[0] + adc_34_buf[1] + adc_34_buf[2] + adc_34_buf[3] + adc_34_buf[4];
+  // ranks 1-3 of each pair are current samples, rank 4 the voltage (adc.c)
+  uint32_t a12 = adc_12_buf[0] + adc_12_buf[1] + adc_12_buf[2];
+  uint32_t a34 = adc_34_buf[0] + adc_34_buf[1] + adc_34_buf[2];
 
   if(ctx->offset_count < 100) {
     ctx->offset_count++;
   } else if(ctx->offset_count < 100 + 100) {
-    ctx->w_offset += AMP((float)(a12 & 0xFFFF) / 5.0, SHUNT_GAIN) / 100.0;
-    ctx->u_offset += AMP((float)(a12 >> 16) / 5.0, SHUNT_GAIN) / 100.0;
-    ctx->v_offset += AMP((float)(a34 & 0xFFFF) / 5.0, SHUNT_GAIN) / 100.0;
+    ctx->w_offset += AMP((float)(a12 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
+    ctx->u_offset += AMP((float)(a12 >> 16) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
+    ctx->v_offset += AMP((float)(a34 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
     ctx->offset_count++;
   } else if(ctx->offset_count < 100 + 100 + 1) {
     if(ABS(ctx->u_offset) > 5.0 || ABS(ctx->v_offset) > 5.0 || ABS(ctx->w_offset) > 5.0) {
@@ -264,24 +248,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(uo)       = ctx->u_offset;
     PIN(vo)       = ctx->v_offset;
     PIN(wo)       = ctx->w_offset;
-    PIN(iw)       = -AMP5(a12 & 0xFFFF) + ctx->w_offset;  // 1u
-    PIN(iu)       = -AMP5(a12 >> 16) + ctx->u_offset;
-    PIN(iv)       = -AMP5(a34 & 0xFFFF) + ctx->v_offset;
-    PIN(wr)       = (float)(adc_12_buf[5] & 0xFFFF) * VOLT_K;
-    PIN(vr)       = (float)(adc_12_buf[5] >> 16) * VOLT_K;
-    PIN(ur)       = (float)(adc_34_buf[5] & 0xFFFF) * VOLT_K;
+    PIN(iw)       = -AMPN(a12 & 0xFFFF) + ctx->w_offset;  // 1u
+    PIN(iu)       = -AMPN(a12 >> 16) + ctx->u_offset;
+    PIN(iv)       = -AMPN(a34 & 0xFFFF) + ctx->v_offset;
+    PIN(wr)       = (float)(adc_12_buf[ADC_SEQ_LEN - 1] & 0xFFFF) * VOLT_K;
+    PIN(vr)       = (float)(adc_12_buf[ADC_SEQ_LEN - 1] >> 16) * VOLT_K;
+    PIN(ur)       = (float)(adc_34_buf[ADC_SEQ_LEN - 1] & 0xFFFF) * VOLT_K;
     PIN(w)        = PIN(wr) * 0.05 + PIN(w) * 0.95;  // 0.6u
     PIN(v)        = PIN(vr) * 0.05 + PIN(v) * 0.95;
     PIN(u)        = PIN(ur) * 0.05 + PIN(u) * 0.95;
-    PIN(udc)      = (float)(adc_34_buf[5] >> 16) * VOLT_K * 0.05 + PIN(udc) * 0.95;
+    PIN(udc)      = (float)(adc_34_buf[ADC_SEQ_LEN - 1] >> 16) * VOLT_K * 0.05 + PIN(udc) * 0.95;
     PIN(iabs)     = MAX3(ABS(PIN(iu)), ABS(PIN(iv)), ABS(PIN(iw)));
-    ctx->hv_temp  = adc_34_buf[0];
+    ctx->hv_temp  = adc_34_buf[1];  // ADC4 rank 2: the second hv_temp sample, settled
     if(!ctx->enabled) {
       ctx->en_ticks = 0;
     } else if(ctx->en_ticks < 0xFFFF) {
       ctx->en_ticks++;
     }
-    ctx->mot_temp = adc_34_buf[3];
+    ctx->mot_temp = adc_34_buf[2];  // ADC4 rank 3
 
     if(err_filter(&(ctx->overtemp_error), 5.0, 0.001, PIN(hv_temp) > ABS_MAX_TEMP)) {
       ctx->fault = HV_TEMP_ERROR;
