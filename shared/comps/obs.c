@@ -54,7 +54,7 @@ HAL_PIN(kl);         // *parameter*, current derivative low pass, 0..0.99
 HAL_PIN(e_min);      // *parameter*, emf below which the angle is not trusted [V]
 HAL_PIN(max_vel);    // *parameter*, speed clamp [rad/s electrical]
 HAL_PIN(adv);        // *parameter*, feedback frame lead over pos_ref [s], hv0.adv
-HAL_PIN(u_delay);    // *parameter*, voltage lag behind the current frame [s], half an f3 period
+HAL_PIN(u_delay);    // *parameter*, voltage lag behind the current frame [s], 0 with the f3's voltage angle (ls0.v_lead)
 
 HAL_PIN(id);         // *input*, hv0.id_fb
 HAL_PIN(iq);         // *input*, hv0.iq_fb
@@ -96,7 +96,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(e_min)     = 3.0;
   PIN(max_vel)   = 3000.0;
   PIN(adv)       = 0.0;
-  PIN(u_delay)   = 0.5 / 15000.0;
+  // The f3 computes ud/uq on its voltage angle, v_lead (1.5) periods ahead
+  // of the current sample, which is where the rotor is when that voltage
+  // acts. In the rotor frame they already pair with the sampled currents.
+  PIN(u_delay)   = 0.0;
 }
 
 static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -138,8 +141,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   sincos_fast(delta, &sn, &cs);
   float id = PIN(id) * cs + PIN(iq) * sn;
   float iq = -PIN(id) * sn + PIN(iq) * cs;
-  // the pwm holds the voltage still for a period while the rotor turns on:
-  // on average it acts half a period behind
+  // u_delay: a voltage frame that lags the rotor at the time it acts; 0 when
+  // the f3's v_lead already moved ud/uq to that angle
   sincos_fast(mod(delta + vel * PIN(u_delay)), &sn, &cs);
   float ud = PIN(ud) * cs + PIN(uq) * sn;
   float uq = -PIN(ud) * sn + PIN(uq) * cs;
