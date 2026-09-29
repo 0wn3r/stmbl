@@ -88,6 +88,13 @@ void MX_TIM8_Init(void) {
     Error_Handler();
   }
 
+  // OC5 (no pin) blanks COMP4, V's comparator: PWM mode 1, OC5REF high while
+  // CNT < CCR5. hv0 sets CCR5 to V's compare plus dead time plus the blanking
+  // time, so the comparator only listens once V's low side has been on that long.
+  TIM8->CCMR3 = (TIM8->CCMR3 & ~TIM_CCMR3_OC5M) | TIM_CCMR3_OC5M_1 | TIM_CCMR3_OC5M_2 | TIM_CCMR3_OC5PE;
+  TIM8->CCR5  = PWM_RES + 1;
+  TIM8->CCER |= TIM_CCER_CC5E;
+
   // RM0316 20.3.16: "BRK2 must only be used with OSSR = OSSI = 1". With OSSI
   // the outputs are driven to their idle level (OISx = OISxN = 0: all
   // switches off) when MOE drops, instead of being handed to the GPIOs.

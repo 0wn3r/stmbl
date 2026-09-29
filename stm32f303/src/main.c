@@ -223,7 +223,7 @@ int main(void) {
   //no digital filter (RM0316 table 27 note), so U alone tripped on switching spikes
   COMP2->CSR = COMP_CSR_COMPxINSEL_2 | COMP2_CSR_COMP2OUTSEL_2 | COMP_CSR_COMPxEN;
   //COMP4 in+ pb0 = V (ADC3_IN12) in- pa4(dac1_ch1)  out TIM8 BRK
-  COMP4->CSR = COMP_CSR_COMPxINSEL_2 | COMP4_CSR_COMP4OUTSEL_0 | COMP4_CSR_COMP4OUTSEL_1 | COMP_CSR_COMPxEN;
+  COMP4->CSR = COMP_CSR_COMPxINSEL_2 | COMP4_CSR_COMP4OUTSEL_0 | COMP4_CSR_COMP4OUTSEL_1 | COMP_CSR_COMPxBLANKING_1 | COMP_CSR_COMPxEN;  // blanking: TIM8 OC5 (v_blanking)
   // no hysteresis: tried low (RM0316 17.3.5) on Y, it holds the output through
   // the ringing after an edge and the break filter then trips 10-25 counts
   // earlier. Lock the three CSRs read-only until reset (17.3.4), as the RM

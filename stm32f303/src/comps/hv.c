@@ -270,6 +270,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PWM_U = u;
   PWM_V = v;
   PWM_W = w;
+  // COMP4 blanking window (tim.c): V's low side turns on dead time after its
+  // compare, and rings for a while after that
+  TIM8->CCR5 = MIN(v + PWM_DEADTIME_TICKS + V_BLANK_TICKS, ctx->pwm_res + 1);
 #endif
 }
 

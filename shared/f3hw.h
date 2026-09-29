@@ -29,6 +29,7 @@
 #define DTG_TICKS(v) ((v) < 0x80 ? (v) : (v) < 0xC0 ? ((64 + ((v)&0x3F)) * 2) : (v) < 0xE0 ? ((32 + ((v)&0x1F)) * 8) : ((32 + ((v)&0x1F)) * 16))
 #define PWM_DEADTIME_TICKS DTG_TICKS(PWM_DEADTIME)
 #define PWM_RES 4800
+#define V_BLANK_TICKS 144  // COMP4 (V) blanking after V's low side turns on, 1 us at PWM_TIM_CLK
 
 // ADC regular sequence per ADC pair: ADC_CUR_SAMPLES current samples, then
 // one slow voltage (adc.c)
