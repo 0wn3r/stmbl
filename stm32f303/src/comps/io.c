@@ -394,6 +394,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
       } else {
         ctx->fault_pin_error = 0;
+        // a software trip (oc_lim, temperature, voltage, fault pin) takes the
+        // bridge off in this tick too, not only the driver enable: MOE off
+        // puts all six outputs in their OSSR idle state at once
+        TIM8->BDTR &= ~TIM_BDTR_MOE;
 #ifdef HV_EN_PIN
         //set driver enable pin
         HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
