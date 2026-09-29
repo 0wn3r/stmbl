@@ -74,7 +74,7 @@ void Error_Handler(void);
 // TIM8 runs on its own: once the rt stops (overrun, MISC_ERROR, stop) the
 // last compares stay latched with no current loop behind them. Nothing on
 // that path reliably calls rt_stop, so the tick checks the state instead.
-static void bridge_off(void) {
+void bridge_off(void) {
   TIM8->BDTR &= ~TIM_BDTR_MOE;
 #ifdef HV_EN_PIN
   HAL_GPIO_WritePin(HV_EN_PORT, HV_EN_PIN, GPIO_PIN_SET);
@@ -183,6 +183,17 @@ int main(void) {
   /* Configure the system clock */
   SystemClock_Config();
   systick_freq = HAL_RCC_GetHCLKFreq();
+  // RM0316 20.3.16: with the break filters on (BKF/BK2F 0xF), break handling
+  // is only guaranteed with a fail-safe clock. CSS switches to HSI if the HSE
+  // fails and also drives TIM8's break (9.2.7); NMI_Handler clears it.
+  HAL_RCC_EnableCSS();
+  // RM0316 20.3.28: with the core halted by a debugger, stop TIM8 and let its
+  // outputs go to the OSSI idle state instead of holding the last compares
+  DBGMCU->APB2FZ |= DBGMCU_APB2_FZ_DBG_TIM8_STOP;
+  // a core lockup (fault inside a fault handler) breaks TIM8 in hardware
+  // (SYSCFG_CFGR2 LOCKUP_LOCK), whatever the software is doing
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  SYSCFG->CFGR2 |= SYSCFG_CFGR2_LOCKUP_LOCK;
   /* Initialize all configured peripherals */
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
