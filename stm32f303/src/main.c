@@ -400,6 +400,7 @@ int main(void) {
 
   //ADC TEST
   hal_parse("hv0.udc = io0.udc");
+  hal_parse("ls0.duty_max = hv0.duty_max");
   hal_parse("dq0.u = io0.iu");
   hal_parse("dq0.v = io0.iv");
   hal_parse("dq0.w = io0.iw");

@@ -66,6 +66,7 @@ HAL_PIN(emf_val);
 
 // misc
 HAL_PIN(pwm_volt);
+HAL_PIN(duty_max);  // from hv0: what min_on/min_off leave of the link, 0 = unwired
 HAL_PIN(crc_error);
 HAL_PIN(crc_ok);
 HAL_PIN(timeout);
@@ -372,23 +373,30 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(fault) = MAX(fault, PIN(fault_in));
 
 
+  // The ceiling curpid may ask for. hv.c reserves min_on at one end of the
+  // period and min_off at the other, so the usable link is duty_max of it (0.91
+  // at the 3 us defaults, where the old fixed 0.95 promised 4% more than the
+  // clamp would pass, and the loop wound up against the clamp instead of its
+  // own limit). Falls back to 0.95 when the pin is not wired.
+  float duty = PIN(duty_max) > 0.0 ? PIN(duty_max) : 0.95;
+
   // TODO: sin = 0.5
   switch((uint16_t)PIN(phase_mode)) {
     case PHASE_90_3PH:  // 90°
-      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_2 * 0.95;
+      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_2 * duty;
       break;
 
     case PHASE_90_4PH:  // 90°
-      PIN(pwm_volt) = PIN(dc_volt) * 0.95;
+      PIN(pwm_volt) = PIN(dc_volt) * duty;
       break;
 
     case PHASE_120_3PH:  // 120°
-      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_3 * 0.95;
+      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_3 * duty;
       break;
 
     case PHASE_180_2PH:  // 180°
     case PHASE_180_3PH:  // 180°
-      PIN(pwm_volt) = PIN(dc_volt) * 0.95;
+      PIN(pwm_volt) = PIN(dc_volt) * duty;
       break;
 
     default:

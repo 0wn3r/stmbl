@@ -39,8 +39,9 @@ HAL_PIN(enu);
 HAL_PIN(env);
 HAL_PIN(enw);
 
-HAL_PIN(min_on);   // min on time [s]
-HAL_PIN(min_off);  // min off time [s]
+HAL_PIN(min_on);    // min on time [s], floored at dead time + 0.5 us
+HAL_PIN(min_off);   // min off time [s], floored at dead time + 0.5 us
+HAL_PIN(duty_max);  // usable duty after min_on/min_off, for ls0.pwm_volt
 
 HAL_PIN(arr);
 
@@ -146,9 +147,25 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t w = (int32_t)(CLAMP(uw, 0.0, udc) / udc * (float)(ctx->pwm_res));
-  // center aligned: one compare unit is 2 timer ticks whatever ARR is
-  int32_t min_on  = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_on) + 0.5);
-  int32_t min_off = (int32_t)(PWM_TIM_CLK / 2.0 * PIN(min_off) + 0.5);
+  //convert on and off times to PWM output compare values.
+  //TIM8 is center aligned, so a PWM period spans 2*ARR timer ticks and one
+  //compare unit is worth 2 ticks of on time -- the on time resolution is a
+  //constant PWM_TIM_CLK/2, independent of ARR (which ls.c varies to phase
+  //lock the loop to the master).
+  //
+  //Neither may go below the dead time plus half a microsecond: a high side
+  //pulse shorter than the dead time never turns on at all (the driver's
+  //interlock eats it), and a low side pulse that short leaves nothing for the
+  //current sample, so a smaller setting would not buy resolution, only a dead
+  //band at the ends of the range.
+  float t_min     = (float)PWM_DEADTIME_TICKS / PWM_TIM_CLK + 0.5e-6;
+  int32_t min_on  = (int32_t)(PWM_TIM_CLK / 2.0 * MAX(PIN(min_on), t_min) + 0.5);
+  int32_t min_off = (int32_t)(PWM_TIM_CLK / 2.0 * MAX(PIN(min_off), t_min) + 0.5);
+
+  //what is left for the line to line voltage once both ends are reserved.
+  //ls.c scales pwm_volt by it, so curpid's ceiling matches what this clamp
+  //will actually pass rather than a fixed 95%.
+  PIN(duty_max) = (float)MAX(ctx->pwm_res - min_on - min_off, 0) / (float)ctx->pwm_res;
 
   // a phase spread wider than min_on/min_off leave room for cannot be
   // fixed by a common mode shift: scale it down around its center
@@ -161,22 +178,40 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     w              = center + (int32_t)(((int64_t)(w - center) * max_range) / range);
   }
 
-  // both checks on the uncorrected values, so one shift cannot undo the other
-  int32_t u0 = u, v0 = v, w0 = w;
+  // Common-mode shift by the deficit, not by the whole limit. A phase sitting
+  // 20 units inside min_on used to drag all three up by the full min_on (216
+  // units, 4.5% of the link): the line voltages survive a common-mode move,
+  // but the neutral jumped by that much every time a phase crossed the
+  // boundary, and with it the common-mode current through the motor's
+  // capacitance. Moving by just what the offending phase lacks puts it exactly
+  // on the limit, and the spread scaling above guarantees the far phase still
+  // clears the other end.
+  //
+  // Both deficits come from the pre-shift values, so one shift cannot trigger
+  // the other; after the scaling they cannot both be nonzero anyway. A phase
+  // at exactly 0 is fully off and legal on its own, but once any phase needs
+  // the min_on shift it comes along, to min_on, since the shift is common mode.
+  int32_t lo  = MIN3(u, v, w);
+  int32_t hi  = MAX3(u, v, w);
+  int32_t up  = 0;
+  int32_t dn  = 0;
 
-  if((u0 > 0 && u0 < min_on) || (v0 > 0 && v0 < min_on) || (w0 > 0 && w0 < min_on)) {
-    u += min_on;
-    v += min_on;
-    w += min_on;
+  if((u > 0 && u < min_on) || (v > 0 && v < min_on) || (w > 0 && w < min_on)) {
+    up = min_on - lo;
   }
 
-  if((u0 > ctx->pwm_res - min_off) || (v0 > ctx->pwm_res - min_off) || (w0 > ctx->pwm_res - min_off)) {
-    u -= min_off;
-    v -= min_off;
-    w -= min_off;
+  if(hi > ctx->pwm_res - min_off) {
+    dn = hi - (ctx->pwm_res - min_off);
   }
 
-  // per phase floor for what the shifts could not fix
+  u += up - dn;
+  v += up - dn;
+  w += up - dn;
+
+  // final per-phase safety net: guarantees every phase individually clears
+  // both min_on and min_off even when a single common-mode shift above
+  // can't satisfy both boundaries at once (e.g. one phase near 0 and
+  // another near full scale in the same cycle -- a double violation)
   if(u > 0 && u < min_on) u = min_on;
   if(v > 0 && v < min_on) v = min_on;
   if(w > 0 && w < min_on) w = min_on;
