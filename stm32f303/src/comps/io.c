@@ -19,6 +19,12 @@ HAL_PIN(iw);
 //total current
 HAL_PIN(iabs);
 
+// Rebuild the phase whose low side was not on for the whole sample window
+// from the other two (see rt_func). recon 0 turns it off; recon_phase reports
+// which phase was rebuilt in this tick, 0 none, 1 u, 2 v, 3 w.
+HAL_PIN(recon);
+HAL_PIN(recon_phase);
+
 // software overcurrent trip: iabs above oc_k * max_cur, at least oc_min and
 // at most ABS_MAX_CURRENT, stops the bridge in the same tick
 HAL_PIN(max_cur);
@@ -99,6 +105,9 @@ struct io_ctx_t {
   uint32_t en_ticks;  // rt ticks since the enable edge, saturating
   uint32_t sbrake_ok;     // no trip since the last enable edge
   uint32_t sbrake_ticks;  // ticks since braking started
+  int32_t lo_u;  // low-side half pulse of the previous tick, in timer ticks
+  int32_t lo_v;
+  int32_t lo_w;
 };
 
 #define ARES 4096.0  // analog resolution, 12 bit
@@ -186,6 +195,11 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(hv_temp_ok)        = 0.0;
   ctx->sbrake_ok         = 0;
   ctx->sbrake_ticks      = 0;
+  ctx->lo_u              = 0;
+  ctx->lo_v              = 0;
+  ctx->lo_w              = 0;
+  PIN(recon)             = 1.0;
+  PIN(recon_phase)       = 0.0;
 
 
 #ifdef HV_EN_PIN
@@ -258,6 +272,60 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(v)        = PIN(vr) * 0.05 + PIN(v) * 0.95;
     PIN(u)        = PIN(ur) * 0.05 + PIN(u) * 0.95;
     PIN(udc)      = (float)(adc_34_buf[ADC_SEQ_LEN - 1] >> 16) * VOLT_K * 0.05 + PIN(udc) * 0.95;
+
+    // Which phase could not be sampled. TIM8 is centre aligned and the ADC is
+    // triggered at the counter extreme where the low sides conduct, so a
+    // phase's low side is on from (half its off pulse) before the extreme,
+    // less the dead time the DTG adds to its turn-on, to (half its off pulse)
+    // after it. The half before came from the compare value of the previous
+    // tick, the half after from the one loaded at this extreme, which is what
+    // TIM8->CCRx reads now (io runs before hv rewrites it). The sample window
+    // sits in the half after. So the sample is good only if the half after
+    // outlasts the window and the half before outlasts the dead time.
+    //
+    // Until 2026-09-15 min_off was 5 us against a 417 ns dead time, so the
+    // low side had 4.6 us at maximum duty. That day min_off went to 3 us
+    // (1e8c578) and the dead time to 2.0 us (c8ebe87), which leaves a phase
+    // at maximum duty with its low side on for 1 us inside the sample window
+    // (ADC_CUR_WINDOW_TICKS), and while its current flows into the bridge the
+    // shunt carries nothing during the dead time, so the phase reads low and the loop
+    // pushes harder. That is a torque reversal at speed. Raising min_off
+    // costs output voltage; instead rebuild the phase from the other two,
+    // which are always valid (a phase at the top of the range forces the
+    // others down): with no neutral the three sum to zero. At most one phase
+    // is at the top at a time, so at most one is rebuilt.
+#ifdef PWM_INVERT
+    int32_t lo_u = (int32_t)TIM8->CCR3;
+    int32_t lo_v = (int32_t)TIM8->CCR2;
+    int32_t lo_w = (int32_t)TIM8->CCR1;
+#else
+    int32_t arr  = (int32_t)TIM8->ARR;
+    int32_t lo_u = arr - (int32_t)TIM8->CCR3;
+    int32_t lo_v = arr - (int32_t)TIM8->CCR2;
+    int32_t lo_w = arr - (int32_t)TIM8->CCR1;
+#endif
+    PIN(recon_phase) = 0.0;
+    if(PIN(recon) > 0.0) {
+      int bad_u = lo_u < ADC_CUR_WINDOW_TICKS || ctx->lo_u < PWM_DEADTIME_TICKS;
+      int bad_v = lo_v < ADC_CUR_WINDOW_TICKS || ctx->lo_v < PWM_DEADTIME_TICKS;
+      int bad_w = lo_w < ADC_CUR_WINDOW_TICKS || ctx->lo_w < PWM_DEADTIME_TICKS;
+      // if more than one is flagged (a spread wider than min_off leaves room
+      // for, which hv.c prevents), rebuild the one with the shortest pulse
+      // and leave the rest alone
+      if(bad_u && (!bad_v || lo_u <= lo_v) && (!bad_w || lo_u <= lo_w)) {
+        PIN(iu)          = -(PIN(iv) + PIN(iw));
+        PIN(recon_phase) = 1.0;
+      } else if(bad_v && (!bad_w || lo_v <= lo_w)) {
+        PIN(iv)          = -(PIN(iu) + PIN(iw));
+        PIN(recon_phase) = 2.0;
+      } else if(bad_w) {
+        PIN(iw)          = -(PIN(iu) + PIN(iv));
+        PIN(recon_phase) = 3.0;
+      }
+    }
+    ctx->lo_u = lo_u;
+    ctx->lo_v = lo_v;
+    ctx->lo_w = lo_w;
     PIN(iabs)     = MAX3(ABS(PIN(iu)), ABS(PIN(iv)), ABS(PIN(iw)));
     ctx->hv_temp  = adc_34_buf[1];  // ADC4 rank 2: the second hv_temp sample, settled
     if(!ctx->enabled) {
