@@ -362,7 +362,6 @@ int main(void) {
   hal_parse("load ls");
   hal_parse("load dq");
   hal_parse("load idq");
-  hal_parse("load svm");
   hal_parse("load hv");
   hal_parse("load curpid");
   hal_parse("load emf");
@@ -372,7 +371,6 @@ int main(void) {
   hal_parse("dq0.rt_prio = 2.0");
   hal_parse("curpid0.rt_prio = 3.0");
   hal_parse("idq0.rt_prio = 4.0");
-  hal_parse("svm0.rt_prio = 5.0");
   hal_parse("hv0.rt_prio = 6.0");
   hal_parse("emf0.rt_prio = 7.0");
 
@@ -403,13 +401,11 @@ int main(void) {
   hal_parse("dq0.v = io0.iv");
   hal_parse("dq0.w = io0.iw");
 
-  hal_parse("svm0.u = idq0.u");
-  hal_parse("svm0.v = idq0.v");
-  hal_parse("svm0.w = idq0.w");
-  hal_parse("hv0.u = svm0.su");
-  hal_parse("hv0.v = svm0.sv");
-  hal_parse("hv0.w = svm0.sw");
-  hal_parse("svm0.udc = io0.udc_duty");
+  hal_parse("hv0.u = idq0.u");  // hv0 adds the dead-time comp, then the SVM offset
+  hal_parse("hv0.v = idq0.v");
+  hal_parse("hv0.w = idq0.w");
+  hal_parse("hv0.id_fb = dq0.d");  // volt-mode dead-time reference
+  hal_parse("hv0.iq_fb = dq0.q");
   hal_parse("curpid0.id_fb = dq0.d");
   hal_parse("curpid0.iq_fb = dq0.q");
   hal_parse("ls0.id_fb = dq0.d");

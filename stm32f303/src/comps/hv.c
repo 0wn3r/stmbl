@@ -25,8 +25,17 @@ HAL_PIN(co);
 HAL_PIN(iu);  // reference phase currents, outputs
 HAL_PIN(iv);
 HAL_PIN(iw);
+// Volt mode (vf, the spindle): the reference is the measured current vector,
+// low passed in the dq frame with time constant drop_vlp [s], so the sign
+// follows the fundamental and not the ripple. drop_volt > 0 turns it on.
+HAL_PIN(drop_volt);
+HAL_PIN(drop_vlp);
+HAL_PIN(id_fb);
+HAL_PIN(iq_fb);
 
-//U V W input in Volt
+//U V W input in Volt: idq0's phase voltages, before the common mode. The
+//dead-time compensation is added to them and the space vector offset is
+//taken after that, so it sees the compensated phases (svm0 is not used).
 HAL_PIN(u);
 HAL_PIN(v);
 HAL_PIN(w);
@@ -49,6 +58,8 @@ HAL_PIN(sbrake);  // io0.sbrake_on: all compares 0, so the low sides carry the p
 
 struct hv_ctx_t {
   int32_t pwm_res;
+  float id_lp;
+  float iq_lp;
   int8_t drop_su;
   int8_t drop_sv;
   int8_t drop_sw;
@@ -83,6 +94,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(drop_k)    = 0;
   PIN(drop_band) = 0.5;
   PIN(drop_knee) = 0.0;
+  PIN(drop_volt) = 0.0;
+  PIN(drop_vlp)  = 0.003;
+  ctx->id_lp     = 0.0;
+  ctx->iq_lp     = 0.0;
 }
 
 // the latches survive a stop; start without a stale sign
@@ -109,18 +124,31 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // live pwm_res that ls.c walks to phase lock. drop_k scales that ideal loss
   // (the switches' own delays eat part of the dead time).
   //
-  // Current mode only: in volt mode there is no commanded current to take the
-  // sign from, and the measured one would close the loop again.
+  // In volt mode there is no commanded current to take the sign from. The
+  // instantaneous measured one would close a loop and run away; its low
+  // passed fundamental does not (drop_volt, off by default).
   float dt_drop = PIN(drop_k) * (float)PWM_DEADTIME_TICKS / (2.0 * (float)ctx->pwm_res) * udc;
-  if(PIN(cmd_mode) == VOLT_MODE || PIN(phase_mode) != PHASE_120_3PH) {
+  float d_ref   = PIN(d_cmd);
+  float q_ref   = PIN(q_cmd);
+  if(PIN(cmd_mode) == VOLT_MODE) {
+    float k = CLAMP(period / MAX(PIN(drop_vlp), period), 0.0, 1.0);
+    ctx->id_lp += (PIN(id_fb) - ctx->id_lp) * k;
+    ctx->iq_lp += (PIN(iq_fb) - ctx->iq_lp) * k;
+    d_ref = ctx->id_lp;
+    q_ref = ctx->iq_lp;
+    if(PIN(drop_volt) <= 0.0) {
+      dt_drop = 0.0;
+    }
+  }
+  if(PIN(phase_mode) != PHASE_120_3PH) {
     dt_drop = 0.0;
   }
   // a mistyped drop_k costs a distorted waveform, not a bridge
   dt_drop = CLAMP(dt_drop, 0.0, udc * 0.1);
 
   // reference phase currents, inverse park and clarke of the command
-  float a = PIN(d_cmd) * PIN(co) - PIN(q_cmd) * PIN(si);
-  float b = PIN(d_cmd) * PIN(si) + PIN(q_cmd) * PIN(co);
+  float a = d_ref * PIN(co) - q_ref * PIN(si);
+  float b = d_ref * PIN(si) + q_ref * PIN(co);
   PIN(iu) = a;
   PIN(iv) = -a / 2.0 + b / 2.0 * M_SQRT3;
   PIN(iw) = -a / 2.0 - b / 2.0 * M_SQRT3;
@@ -143,6 +171,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     uv         = PIN(v) + dt_drop * drop_sign(&(ctx->drop_sv), PIN(iv), band);
     uw         = PIN(w) + dt_drop * drop_sign(&(ctx->drop_sw), PIN(iw), band);
   }
+  // space vector common mode (midpoint) on the compensated phases, so near
+  // full modulation the compensation is not cut by the clamp below
+  float off = (MIN3(uu, uv, uw) + MAX3(uu, uv, uw)) / 2.0 - udc / 2.0;
+  uu -= off;
+  uv -= off;
+  uw -= off;
+
   //convert voltages to PWM output compare values
   int32_t u = (int32_t)(CLAMP(uu, 0.0, udc) / udc * (float)(ctx->pwm_res));
   int32_t v = (int32_t)(CLAMP(uv, 0.0, udc) / udc * (float)(ctx->pwm_res));
@@ -173,9 +208,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int32_t range      = MAX3(u, v, w) - MIN3(u, v, w);
   if(max_range > 0 && range > max_range) {
     int32_t center = (MAX3(u, v, w) + MIN3(u, v, w)) / 2;
-    u              = center + (int32_t)(((int64_t)(u - center) * max_range) / range);
-    v              = center + (int32_t)(((int64_t)(v - center) * max_range) / range);
-    w              = center + (int32_t)(((int64_t)(w - center) * max_range) / range);
+    float k        = (float)max_range / (float)range;  // no int64 division from flash
+    u              = center + (int32_t)((float)(u - center) * k);
+    v              = center + (int32_t)((float)(v - center) * k);
+    w              = center + (int32_t)((float)(w - center) * k);
   }
 
   // Common-mode shift by the deficit, not by the whole limit. A phase sitting
