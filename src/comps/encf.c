@@ -321,7 +321,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       int32_t x    = sp + off;
       PIN(pos)     = wrap_bits(x, 22);
       PIN(turns)   = (int16_t)(uint16_t)(turns_pi + ((x + (1 << 21)) >> 22) - ((off + (1 << 21)) >> 22));
-      PIN(state)   = PIN(index) > 0.0 ? 1 : 3;
+      // absolute only once the re-reference is through: no_index clears a
+      // frame before abs_pos jumps, and fb_switch commutates from abs_pos as
+      // soon as this reads 3, so hold 1 through the re-take frames
+      PIN(state) = (PIN(index) > 0.0 || retake) ? 1 : 3;
 
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = wrap_bits(pos, 10);
