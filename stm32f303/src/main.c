@@ -109,6 +109,21 @@ void hal_reset_watchdog() {
   IWDG->KR = 0xAAAA;
 }
 
+// Second shutdown path: a comparator break (BRK or BRK2, after the 0xF
+// digital filter) has already cleared MOE in hardware. Raise HV_EN (IPM
+// ITRIP) here, within about a microsecond, instead of waiting for io.c's
+// next rt tick. The IPM then turns its gate driver off on its own and holds
+// it off for at least 40 us. BIE is switched off so the still-set break
+// flag can't re-enter; io.c's nrt re-arms it once the bridge is idle.
+// io.c's rt keeps using MOE and the flags to report HV_OVERCURRENT_HW.
+void TIM8_BRK_IRQHandler() {
+  TIM8->BDTR &= ~TIM_BDTR_MOE;
+#ifdef HV_EN_PIN
+  HV_EN_PORT->BSRR = HV_EN_PIN;
+#endif
+  TIM8->DIER &= ~TIM_DIER_BIE;
+}
+
 void TIM8_UP_IRQHandler() {
   GPIOA->BSRR |= GPIO_PIN_9;
   __HAL_TIM_CLEAR_IT(&htim8, TIM_IT_UPDATE);
@@ -536,7 +551,7 @@ void SystemClock_Config(void) {
   HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
 
   /* SysTick_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(SysTick_IRQn, 1, 0);  // same level as the rt, below the break
 }
 
 /**

@@ -132,7 +132,11 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef *tim_baseHandle) {
     /* USER CODE END TIM8_MspInit 0 */
     /* Peripheral clock enable */
     __HAL_RCC_TIM8_CLK_ENABLE();
-    HAL_NVIC_SetPriority(TIM8_UP_IRQn, 0, 0);
+    // the break interrupt must preempt the rt (TIM8_UP), so it gets the
+    // highest priority and the rt moves one level down
+    HAL_NVIC_SetPriority(TIM8_BRK_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM8_BRK_IRQn);
+    HAL_NVIC_SetPriority(TIM8_UP_IRQn, 1, 0);
     HAL_NVIC_EnableIRQ(TIM8_UP_IRQn);
     /* USER CODE BEGIN TIM8_MspInit 1 */
 
