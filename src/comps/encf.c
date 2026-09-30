@@ -223,8 +223,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint32_t count = ARRAY_SIZE(tim_data) - DMA1_Stream0->NDTR;
   PIN(dma)       = count;
 
-  //1 bit = 80 ticks 82e6/1.024e6
-  PIN(bit_ticks)      = 82000000 / PIN(freq);
+  // TIM4 counts at 84 MHz (APB1 42 MHz x2): 1 bit = 82.03 ticks at 1.024 Mbit/s.
+  // 82 MHz here put the default freq 1.2% from the CRC-clean edge (bench
+  // sweep on X: clean for freq 962k-1036k, centre ~999k).
+  PIN(bit_ticks)      = 84000000 / PIN(freq);
   const float per_bit = 1.0 / PIN(bit_ticks);
 
   // The frame is built a word at a time: a run of ones is one or two ORs
