@@ -43,6 +43,8 @@ uint32_t hal_get_systick_freq() {
 }
 
 volatile uint64_t systime = 0;
+extern uint32_t hse_failed;  // system_stm32f4xx.c
+
 
 void SysTick_Handler(void) {
   systime++;
@@ -83,17 +85,41 @@ void ADC_IRQHandler(void) {
   }
 }
 
+// Jump to the ROM DFU bootloader from the app. The F4 bootloader on boards in
+// the field (v0.9.18 and older) starts the PLL and jumps to the ROM with it
+// still running, where the ROM's USB clock setup hangs, so the reset-based
+// entry (magic word, see bootloader/src/main.c) only works with a new F4
+// bootloader. This path needs none: RCC_DeInit puts the clocks back at reset
+// first, as AN2606 asks before a jump to system memory.
 void bootloader(char *ptr) {
   hal_stop();
 
-  NVIC_DisableIRQ(TIM_SLAVE_IRQ);
-  NVIC_DisableIRQ(DMA2_Stream0_IRQn);
-  NVIC_DisableIRQ(SysTick_IRQn);
+  // AN2606: interrupts disabled and none pending before the jump. PRIMASK
+  // stays clear: the ROM's USB DFU runs on interrupts and does not enable them.
+  for(int i = 0; i < 8; i++) {
+    NVIC->ICER[i] = 0xFFFFFFFF;
+    NVIC->ICPR[i] = 0xFFFFFFFF;
+  }
 
   void (*SysMemBootJump)(void);
   volatile uint32_t addr = 0x1FFF0000;
 
-  RCC_DeInit();
+  // Clocks back to reset: HSI as system clock, PLL and HSE off (AN2606). Not
+  // RCC_DeInit: it clears PLLON right after writing SW = HSI, before the
+  // switch has happened, and RM0090 6.2.6 / 6.3.3 ignore that for a clock in
+  // use, so the ROM sometimes started with the PLL running and hung.
+  RCC->CR |= RCC_CR_HSION;
+  while((RCC->CR & RCC_CR_HSIRDY) == 0) {
+  }
+  RCC->CFGR = 0;
+  while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI) {
+  }
+  RCC->CR &= ~(RCC_CR_PLLON | RCC_CR_PLLI2SON | RCC_CR_CSSON | RCC_CR_HSEON);
+  while(RCC->CR & (RCC_CR_PLLRDY | RCC_CR_PLLI2SRDY | RCC_CR_HSERDY)) {
+  }
+  RCC->PLLCFGR = 0x24003010;
+  RCC->CR &= ~RCC_CR_HSEBYP;
+  RCC->CIR     = 0x00BF0000;  // clear all RCC interrupt flags, none enabled
   SysTick->CTRL = 0;
   SysTick->LOAD = 0;
   SysTick->VAL  = 0;
@@ -109,7 +135,17 @@ void bootloader(char *ptr) {
   RCC->APB2RSTR = 0x4777933;
   RCC->APB2RSTR = 0;
 
-  SYSCFG->MEMRMP = 0x01;
+  // AN2606: peripheral clocks off too, enables back at their reset values
+  RCC->AHB1ENR = 0x00100000;  // CCM data RAM only
+  RCC->AHB2ENR = 0;
+  RCC->AHB3ENR = 0;
+  RCC->APB1ENR = 0;
+  RCC->APB2ENR = 0;
+  SCB->ICSR    = SCB_ICSR_PENDSTCLR_Msk;  // no SysTick exception left pending
+
+  // No SYSCFG->MEMRMP = 1 here. It never took effect before (SYSCFG had no
+  // clock), and with the clock fixed the ROM DFU hung on the bench (Kira 3,
+  // X). The jump below works on the ROM's own vectors without the remap.
   SysMemBootJump = (void (*)(void))(*((uint32_t *)(addr + 4)));
   __set_MSP(*(uint32_t *)addr);
   SysMemBootJump();
@@ -145,6 +181,9 @@ void about(char *ptr) {
   printf("HAL lib... TODO: print version\n");
 #endif
   printf("CPU ID     %lx %lx %lx\n",U_ID[0], U_ID[1], U_ID[2]);
+  if(hse_failed) {
+    printf("clock      HSE failed, running on HSI, hal not started\n");
+  }
   printf("size: %lu crc:%lx\n", version_info.image_size, version_info.image_crc);
   volatile const version_info_t *bt_version_info = (void *)0x08000188;
   printf("######## Bootloader info ########\n");
@@ -200,7 +239,13 @@ int main(void) {
   hal_parse("flashloadconf");
   hal_parse("loadconf");
   hal_parse("relink");
-  hal_parse("start");
+  if(hse_failed) {
+    // on the HSI the rt runs 5x slow and the F3 link and USB cannot work;
+    // leave the hal stopped rather than run it at the wrong rate
+    hal.hal_state = MISC_ERROR;
+  } else {
+    hal_parse("start");
+  }
 
   TIM_Cmd(TIM_MASTER, ENABLE);
   TIM_ITConfig(TIM_SLAVE, TIM_IT_Update, ENABLE);

@@ -40,6 +40,17 @@
 /* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
 
+// A fault handler that returned faulted again at once, forever, with USB
+// and the terminal dead. Stop the hal and reset. The F4 has no watchdog on
+// purpose: a software-started IWDG kept running through system resets on the
+// bench (Kira 3, 2026-09-29), and neither the F4 bootloader nor the ROM DFU
+// kicks it (AN2606 Table 73 refreshes it only for the hardware IWDG option),
+// so every DFU entry reset-looped before USB came up.
+static void fault_stop(uint32_t handler) {
+  hal_error(handler);
+  NVIC_SystemReset();
+}
+
 /******************************************************************************/
 /*            Cortex-M4 Processor Exceptions Handlers                         */
 /******************************************************************************/
@@ -50,7 +61,14 @@
   * @retval None
   */
 void NMI_Handler(void) {
-  hal_error(NMI);
+  // RM0090 6.2.7: the CSS NMI repeats until CSSC is written. The PLL is off
+  // and the core runs on HSI, so the timers, the F3 link and USB are all off
+  // rate: reset, and SetSysClock reports the HSE if it stays dead.
+  if(RCC->CIR & RCC_CIR_CSSF) {
+    RCC->CIR |= RCC_CIR_CSSC;
+    NVIC_SystemReset();
+  }
+  fault_stop(NMI);
 }
 
 /**
@@ -60,7 +78,7 @@ void NMI_Handler(void) {
   */
 void HardFault_Handler(void) {
   /* Go to infinite loop when Hard Fault exception occurs */
-  hal_error(HardFault);
+  fault_stop(HardFault);
 }
 
 /**
@@ -70,7 +88,7 @@ void HardFault_Handler(void) {
   */
 void MemManage_Handler(void) {
   /* Go to infinite loop when Memory Manage exception occurs */
-  hal_error(MemManage);
+  fault_stop(MemManage);
 }
 
 /**
@@ -80,7 +98,7 @@ void MemManage_Handler(void) {
   */
 void BusFault_Handler(void) {
   /* Go to infinite loop when Bus Fault exception occurs */
-  hal_error(BusFault);
+  fault_stop(BusFault);
 }
 
 /**
@@ -90,7 +108,7 @@ void BusFault_Handler(void) {
   */
 void UsageFault_Handler(void) {
   /* Go to infinite loop when Usage Fault exception occurs */
-  hal_error(UsageFault);
+  fault_stop(UsageFault);
 }
 
 /**

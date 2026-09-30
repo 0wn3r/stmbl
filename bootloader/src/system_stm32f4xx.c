@@ -181,7 +181,7 @@ __I uint8_t AHBPrescTable[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9}
   * @{
   */
 
-static void SetSysClock(void);
+static void SetSysClock(void) __attribute__((unused));
 #ifdef DATA_IN_ExtSRAM
 static void SystemInit_ExtMemCtl(void);
 #endif /* DATA_IN_ExtSRAM */
@@ -207,17 +207,27 @@ void SystemInit(void) {
   /* Reset the RCC clock configuration to the default reset state ------------*/
   /* Set HSION bit */
   RCC->CR |= (uint32_t)0x00000001;
+  while((RCC->CR & RCC_CR_HSIRDY) == 0) {
+  }
 
-  /* Reset CFGR register */
+  /* Reset CFGR register, and wait until the switch to HSI is done: after a
+     ROM DFU "leave" (Go) the PLL still runs the system clock, and RM0090 6.2.6
+     / 6.3.3: a clock in use cannot be stopped, so clearing PLLON/HSEON before
+     the switch has happened is ignored, and so is the PLLCFGR write below
+     (6.3.2: writable only with the PLL off) */
   RCC->CFGR = 0x00000000;
+  while((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI) {
+  }
 
   /* Reset HSEON, CSSON and PLLON bits */
   RCC->CR &= (uint32_t)0xFEF6FFFF;
+  while(RCC->CR & (RCC_CR_PLLRDY | RCC_CR_HSERDY)) {
+  }
 
   /* Reset PLLCFGR register */
   RCC->PLLCFGR = 0x24003010;
 
-  /* Reset HSEBYP bit */
+  /* Reset HSEBYP bit (writable only with the HSE off) */
   RCC->CR &= (uint32_t)0xFFFBFFFF;
 
   /* Disable all interrupts */
@@ -227,9 +237,9 @@ void SystemInit(void) {
   SystemInit_ExtMemCtl();
 #endif /* DATA_IN_ExtSRAM */
 
-  /* Configure the System clock source, PLL Multiplier and Divider factors,
-     AHB/APBx prescalers and Flash settings ----------------------------------*/
-  SetSysClock();
+  /* The bootloader stays on the 16 MHz HSI: it only reads a pin and checks a
+     CRC. AN2606 asks for the PLL to be off before jumping to system memory,
+     and the app's SystemInit sets up its own clocks. */
 
 /* Configure the Vector Table location add offset address ------------------*/
 #ifdef VECT_TAB_SRAM

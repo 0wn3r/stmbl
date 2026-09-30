@@ -55,11 +55,14 @@ void USB_OTG_BSP_Init(USB_OTG_CORE_HANDLE *pdev) {
   // Enable peripheral clocks
   //
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-  RCC->AHB2ENR |= RCC_APB2ENR_SYSCFGEN;
+  RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;  // RM0090 6.3.14: APB2, not AHB2
   RCC->AHB2ENR |= RCC_AHB2ENR_OTGFSEN;
 
   // enable I/O compensation cell to reduce the I/O noise on power supply
+  // (RM0090 9.1, recommended with 50/100 MHz outputs), and wait for READY
   SYSCFG->CMPCR = SYSCFG_CMPCR_CMP_PD;
+  for(uint32_t i = 0; i < 100000 && !(SYSCFG->CMPCR & SYSCFG_CMPCR_READY); i++) {
+  }
 
   // Configure DM and DP Pins
   //

@@ -23,6 +23,7 @@
 #include "hal.h"
 #include "commands.h"
 #include "stm32f4xx_conf.h"
+#include "main.h"
 
 char config[15 * 1024];
 const char *config_ro = (char *)0x08008000;
@@ -47,6 +48,8 @@ COMMAND("flashloadconf", flashloadconf, "load config from flash");
 void flashsaveconf(char *ptr) {
   printf("erasing flash page...\n");
   FLASH_Unlock();
+  // a stale error flag from an earlier access fails every program below
+  FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
   if(FLASH_EraseSector(FLASH_Sector_2, VoltageRange_3) != FLASH_COMPLETE) {
     printf("error!\n");
     FLASH_Lock();
@@ -89,16 +92,25 @@ void deleteconf(char *ptr) {
 }
 COMMAND("deleteconf", deleteconf, "delete config");
 
+// Erasing sector 4 took the vector table (and maybe this code) with it while
+// interrupts were live: the next interrupt fetched 0xFFFFFFFF and the core
+// locked up instead of resetting. Clearing one word of the image is enough:
+// the bootloader's CRC check fails, so the next reset starts the ROM DFU.
+// RM0090 3.6.4 allows programming 1 bits to 0 without an erase. The ROM is
+// entered right away through the app's jump (main.c), because the F4
+// bootloader on field boards leaves the PLL running when it jumps there and
+// the ROM DFU then hangs; only the vector table's reset entry is cleared, so
+// interrupts still work until the jump.
 void hardboot(char *ptr) {
-  printf("erasing flash page...\n");
+  printf("clearing reset vector, calling bootloader\n");
+  Wait(10);  // let the text go out
+  hal_stop();
+  __disable_irq();
   FLASH_Unlock();
-  if(FLASH_EraseSector(FLASH_Sector_4, VoltageRange_3) != FLASH_COMPLETE) {
-    printf("error!\n");
-    FLASH_Lock();
-    return;
-  }
-  printf("OK, call bootloader\n");
+  FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
+  FLASH_ProgramWord(0x08010004, 0);
   FLASH_Lock();
-  NVIC_SystemReset();
+  __enable_irq();
+  bootloader(0);
 }
 COMMAND("hardboot", hardboot, "destroy firmware to force bootloader");

@@ -58,11 +58,16 @@ int main(void) {
   RCC_AHB1PeriphResetCmd(RCC_AHB1Periph_GPIOA, ENABLE);  // reset gpio a
   RCC_AHB1PeriphResetCmd(RCC_AHB1Periph_GPIOA, DISABLE);
   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, DISABLE);
+  int ok = app_ok();
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_CRC, DISABLE);  // AN2606: peripheral clocks off before the jump
 
   void (*SysMemBootJump)(void);
-  if((*((unsigned long *)0x2001C000) == 0xDEADBEEF) || pin || !app_ok()) {  //Memory map, datasheet
+  // 0xDEADBEEF is left by the app's "bootloader" command right before a reset
+  if((*((unsigned long *)0x2001C000) == 0xDEADBEEF) || pin || !ok) {  //Memory map, datasheet
     *((unsigned long *)0x2001C000) = 0xCAFEFEED;                            //Reset bootloader trigger
-    __set_MSP(0x20001000);
+    // the ROM's own initial stack pointer: AN2606 Table 73 has the ROM use the
+    // first 8 KB of SRAM, so a stack at 0x20001000 grew down over its data
+    __set_MSP(*((uint32_t *)0x1FFF0000));
     //Point the PC to the System Memory reset vector (+4)
     //AN2606
     //Table 64. Bootloader device-dependent parameters
