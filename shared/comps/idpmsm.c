@@ -1,4 +1,5 @@
 #include "idpmsm_comp.h"
+#include "common.h"
 #include "hal.h"
 #include "string.h"
 #include "defines.h"
@@ -212,6 +213,10 @@ struct idpmsm_ctx_t {
 // which the coast undoes
 #define HV_IO_ALPHA 0.05
 #define HV_IO_PERIOD (1.0 / 15000.0)
+// the f3 sends one word of its state block per packet, so u_fb and v_fb
+// each refresh every HV_STATE_WORDS rt periods: a zero order hold that
+// scales the back emf by sinc(w T / 2)
+#define HV_STATE_WORDS (sizeof(f3_state_data_t) / 4)
 
 #define L_SETTLE 0.1  // l test: after each axis starts [s]
 #define L_BLOCK 0.05  // l test: one amplitude sizing block [s]
@@ -228,6 +233,7 @@ struct idpmsm_ctx_t {
 #define PSI_COAST_MIN 0.2   // psi coast: ignore speeds under this fraction of test_vel
 #define PSI_COAST_SPLIT 0.6 // psi coast: the fast band is above this fraction of test_vel
 #define PSI_COAST_TIME 4.0  // psi coast: longest it may run [s]
+#define PSI_COAST_HOLDOFF 0.05 // psi coast: wait after the bridge drops, for the winding current to die [s]
 #define PSI_COAST_N 200     // psi coast: fewest samples a band needs
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -525,8 +531,16 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     case 33:
       if(PIN(psi_ok) > 0.0) {
-        printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
-        printf("<font color='green'># back emf with the bridge off, coasting down from %f rad/s:\n", PIN(vel_hi));
+        // the f3 map sums every pwm sample with no filter and no hold in it,
+        // so it is the value to keep; the f4 coast is the cross-check
+        if(PIN(emf_ok) > 0.0) {
+          printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(emf_psi));
+          printf("<font color='green'># from the f3 back emf map; the f4 coast read %f.\n", PIN(psi));
+        } else {
+          printf("conf0.psi = %f <font color='green'># append to config</font>\n", PIN(psi));
+          printf("<font color='green'>");
+        }
+        printf("# back emf with the bridge off, coasting down from %f rad/s:\n", PIN(vel_hi));
         printf("# %f in the fast half, %f in the slow half. no dead time or\n", PIN(psi_hi), PIN(psi_lo));
         printf("# current loop in it -- it is what a scope on the phases reads.</font>\n");
         printf("<font color='green'># back emf leads the commutation angle by %f deg el at standstill,\n", PIN(emf_angle));
@@ -986,9 +1000,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           //
           //   u - v = sqrt3 w psi cos(th + phi)       w = pp vel, th = commutation angle
           //
-          // seen through io.c's filter H(w). Multiplying by
-          // g = exp(-j th) / (sqrt3 w H(w)) and averaging leaves psi exp(j phi) / 2,
-          // plus the dc level of u - v times the mean of g, taken back out.
+          // seen through io.c's filter H(w) and the state block's hold. Multiplying
+          // by g = exp(-j th) / (sqrt3 w H(w) sinc(w T / 2)) and averaging leaves
+          // psi exp(j phi) / 2, plus the dc level of u - v times the mean of g,
+          // taken back out.
           PIN(en_out)   = 0.0;
           PIN(d_cmd)    = 0.0;
           PIN(q_cmd)    = 0.0;
@@ -1000,7 +1015,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           float vel  = PIN(vel_fb);
           float avel = ABS(vel);
           PIN(emf_run) = avel > PIN(test_vel) * PSI_COAST_MIN ? 1.0 : 0.0;
-          if(avel > PIN(test_vel) * PSI_COAST_MIN) {
+          // the f3 opens the bridge a few packets later and the winding current
+          // then freewheels through the diodes for about L / R, the terminals on
+          // the rails; io.c's filter and the hold carry that on. emf0 waits
+          // its own EMF_HOLDOFF for the same reason
+          if(avel > PIN(test_vel) * PSI_COAST_MIN && ctx->st_t > PSI_COAST_HOLDOFF) {
             int b   = avel > PIN(test_vel) * PSI_COAST_SPLIT ? 0 : 1;
             float w = vel * PIN(pp);
             float s_th, c_th, s_wt, c_wt;
@@ -1009,9 +1028,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             // 1 / H = (1 - (1 - a) exp(-j w T)) / a
             float hi_re = (1.0 - (1.0 - HV_IO_ALPHA) * c_wt) / HV_IO_ALPHA;
             float hi_im = ((1.0 - HV_IO_ALPHA) * s_wt) / HV_IO_ALPHA;
+            // the hold's sinc(w T / 2): its delay stays in, emf_delay reports it
+            float x    = w * (float)HV_STATE_WORDS * period * 0.5;
+            float zoh  = ABS(x) > 1e-3 ? sinf(x) / x : 1.0;
             // exp(-j th) / H, over sqrt3 w (signed, so turning backwards does
-            // not add half a turn to phi)
-            float k    = 1.0 / (1.7320508 * w);
+            // not add half a turn to phi) and the hold
+            float k    = 1.0 / (1.7320508 * w * zoh);
             float g_re = (c_th * hi_re + s_th * hi_im) * k;
             float g_im = (c_th * hi_im - s_th * hi_re) * k;
             float uv   = PIN(u_fb) - PIN(v_fb);
