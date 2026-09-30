@@ -53,13 +53,6 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct enc_fb_ctx_t *ctx      = (struct enc_fb_ctx_t *)ctx_ptr;
   struct enc_fb_pin_ctx_t *pins = (struct enc_fb_pin_ctx_t *)pin_ptr;
   GPIO_InitTypeDef GPIO_InitStructure;
-  TIM_ICInitTypeDef TIM_ICInitStructure;
-  TIM_ICInitStructure.TIM_Channel     = TIM_Channel_1 | TIM_Channel_2;
-  TIM_ICInitStructure.TIM_ICPolarity  = TIM_ICPolarity_BothEdge;
-  TIM_ICInitStructure.TIM_ICSelection = TIM_ICSelection_DirectTI;
-  TIM_ICInitStructure.TIM_ICPrescaler = TIM_ICPSC_DIV1;
-  TIM_ICInitStructure.TIM_ICFilter    = 0xF;
-  TIM_ICInit(FB0_ENC_TIM, &TIM_ICInitStructure);
 
   /***************** port 1, quadrature , sin/cos or resolver *********************/
   ctx->e_res = (int)PIN(res);
@@ -94,6 +87,11 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // quad
   TIM_Cmd(FB0_ENC_TIM, DISABLE);
   TIM_EncoderInterfaceConfig(FB0_ENC_TIM, TIM_EncoderMode_TI12, TIM_ICPolarity_Rising, TIM_ICPolarity_Falling);
+  // Input filter on A and B: IC1F = IC2F = 0011, fCK_INT with N = 8, about
+  // 95 ns at 84 MHz (RM0090 18.4.7). The old TIM_ICInit ran before the TIM4
+  // clock was on, so its 0xF (fDTS/32, N = 8: 3 us, which would cap the line
+  // rate near 160 kHz) never landed, and it only addressed channel 2.
+  FB0_ENC_TIM->CCMR1 = (FB0_ENC_TIM->CCMR1 & ~(TIM_CCMR1_IC1F | TIM_CCMR1_IC2F)) | (3 << 4) | (3 << 12);
   TIM_Cmd(FB0_ENC_TIM, ENABLE);
   FB0_ENC_TIM->CCMR2 |= TIM_CCMR2_CC3S_0;  //CC3 channel is configured as input, IC3 is mapped on CH3
   FB0_ENC_TIM->CCER |= TIM_CCER_CC3E;      //Capture enabled
