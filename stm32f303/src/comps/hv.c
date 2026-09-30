@@ -59,7 +59,7 @@
 * - The values go to `PWM_U/V/W` (TIM8 CCR3/CCR2/CCR1), inverted when the board defines `PWM_INVERT`.
 *
 * {{% hint warning %}}
-* - `hv` has no enable or fault handling of its own. The bridge is switched on and off by `io0` (TIM8 MOE and the driver enable pin), so `hv` keeps writing compare values even while the bridge is off.
+* - `hv` has no enable or fault handling of its own. The bridge is switched on and off by `io0` (TIM8 MOE and the driver enable pin) and, on an overcurrent comparator break, by the hardware break plus the TIM8 break interrupt in main.c, so `hv` keeps writing compare values even while the bridge is off.
 * - The voltage mode compensation (`drop_volt`) is new and off by default; it has not been tried on the spindle yet.
 * - The compensation is added on top of the voltage `curpid0` was limited to, so near full modulation the spread can exceed `pwm_res - min_on - min_off` again and the spread scaling cuts it by a few percent.
 * - `ls0.pwm_volt` is computed from the slow `io0.udc`, while this component divides by the fast `io0.udc_duty`, so during a fast link voltage change the two limits differ briefly.

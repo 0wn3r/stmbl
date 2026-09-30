@@ -46,7 +46,8 @@
 * ```
 * - `oc_k` defaults to 1.3 and `oc_min` to 5 A; `oc_lim` shows the level in force.
 * - `HV_FAULT_ERROR`: the driver's fault pin (PB7, active low) for 5 ticks while enabled, unless `ignore_fault_pin` is set.
-* - `HV_OVERCURRENT_HW`: the bridge is enabled but TIM8's MOE bit has been cleared. The comparators COMP2 (U, PA7), COMP4 (V, PB0) and COMP1 (W, PA1) compare the phase currents with the DAC reference (`dac`, raw 0..4095 on DAC1 channel 1, output buffer off) and trip the TIM8 break inputs in hardware, all three through a digitally filtered input. `cu`, `cv`, `cw` show the comparator outputs.
+* - `HV_OVERCURRENT_HW`: the bridge is enabled but TIM8's MOE bit has been cleared or a break flag (BIF/B2IF) is set. The flags catch a break that lands between the enable edge's MOE and driver enable writes and leaves MOE set again once the comparator releases. The comparators COMP2 (U, PA7), COMP4 (V, PB0) and COMP1 (W, PA1) compare the phase currents with the DAC reference (`dac`, raw 0..4095 on DAC1 channel 1, output buffer off) and trip the TIM8 break inputs in hardware, all three through a digitally filtered input. `cu`, `cv`, `cw` show the comparator outputs.
+* - Second shutdown path: the break also raises `TIM8_BRK_IRQHandler` (main.c, NVIC priority 0; the rt on TIM8_UP and SysTick run at 1, so it preempts the rt). It clears MOE, sets the driver enable pin PA15 high (the IPM's ITRIP) within about a microsecond instead of at the next rt tick (66 to 133 us later), so the IPM turns its gate driver off on its own and holds it off for at least 40 us, and then switches the break interrupt (BIE) off so the still-set flag cannot re-enter. `io`'s nrt re-arms it, with the break flags cleared, whenever the bridge is not enabled and not braking; the fault itself is still reported by rt as above.
 * - The "5 ticks" filters use `err_filter`: +1 per tick with the error, -0.001 without (-0.01 for the fault pin), and trip at 4.95, so about 0.33 ms at 15 kHz.
 * - `fault` shows the current fault code (0 = none) every tick.
 *
@@ -76,6 +77,7 @@
 * - `HV_CURRENT_OFFSET_FAULT` is raised only once, at tick 200. As `hv_en` is normally 0 then, it is cleared again right after, so it shows on `fault` for one tick only and can easily be lost before `ls0` sends it to the F4. The same goes for any other fault raised while the bridge is off and not braking.
 * - The reconstruction reads `TIM8->CCR3/CCR2/CCR1` for U/V/W directly, not through `PWM_U/V/W`, so it only matches boards with that mapping (the current HV board does). On the first tick after the calibration the stored previous pulses are 0, so one phase is rebuilt for that tick.
 * - Both thermistors use the same NTC constants. This is specific to the HV board and to the motor sensor it was built for.
+* - The break interrupt is re-armed only from nrt. A comparator break while the bridge is idle leaves the flag set and the interrupt off until the next nrt call, so an enable in that window reports `HV_OVERCURRENT_HW` at once.
 * - `hv_temp_ok` is not sent to the F4, so the F4 cannot tell a held `hv_temp` from a live one.
 * - `brk`, `oc_k`, `oc_min`, `sbrake_cur` and `recon` are not wired in main.c and not carried by the F4 link, so they can only be changed from the F3 terminal.
 * {{% /hint %}}
