@@ -60,6 +60,16 @@ HAL_PIN(off_mag);  // resultant length, 1 = the rotor held station
 HAL_PIN(off_n);
 HAL_PIN(com_ok);   // the offset dwell drew its current and the rotor held still
 
+// commutation track (encf com_pos, fanuc_io, uvw halls): the angle fb_switch
+// commutates from while mot_state is not absolute, e.g. an encf encoder not
+// yet indexed after a battery reset
+HAL_PIN(com_fb);         // fb_switch0.com_fb_no_offset
+HAL_PIN(com_rev);        // conf0.com_fb_rev
+HAL_PIN(com_polecount);  // conf0.com_fb_polecount, 0 = polecount
+HAL_PIN(com_fb_offset);  // for conf0.com_fb_offset [rad]
+HAL_PIN(com_fb_ok);      // 1 fine track, 2 coarse (halls), 0 none: the track did not move in the pp test
+HAL_PIN(mot_state);      // fb_switch0.mot_state_fb: 3 = absolute
+
 HAL_PIN(test_cur);
 HAL_PIN(test_vel);
 HAL_PIN(ki);
@@ -157,6 +167,10 @@ struct idpmsm_ctx_t {
   uint32_t pp_w;     // ticks in the measure window
   float pp_field;    // field angle turned across the window [rad el]
   float pp_rotor;    // rotor angle turned across the window [rad]
+  float com_last;    // com track in the pp test: last value,
+  float com_travel;  // total movement [rad]
+  float com_step;    // and largest single step [rad]
+  float com_sin, com_cos;  // com track sums in the offset dwell
 
   // psi test: dwells at test_vel / 2 and test_vel, then a coast from the top
   uint8_t psi_stage;  // 0 spin up low, 1 dwell low, 2 spin up high, 3 dwell high, 4 coast
@@ -394,6 +408,17 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->pp_w     = 0;
       ctx->pp_field = 0.0;
       ctx->pp_rotor = 0.0;
+      ctx->com_last   = PIN(com_fb);
+      ctx->com_travel = 0.0;
+      ctx->com_step   = 0.0;
+      ctx->com_sin    = 0.0;
+      ctx->com_cos    = 0.0;
+      PIN(com_fb_ok)  = 0.0;
+
+      if(PIN(mot_state) != 3.0) {
+        printf("<font color='red'>motor feedback not absolute</font> (fb_switch0.mot_state %f):\n", PIN(mot_state));
+        printf("the offsets below are relative to power-up. index the encoder first\n");
+      }
 
       if(PIN(auto_step) >= 2) {
         PIN(state) = 2.2;
@@ -427,6 +452,12 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 25:  // pp, out_rev, com_offset
       printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
       printf("conf0.mot_fb_offset = %f <font color='green'># append to config</font>\n", PIN(com_offset));
+      if(PIN(com_fb_ok) > 0.0) {
+        printf("conf0.com_fb_offset = %f <font color='green'># append to config</font>\n", PIN(com_fb_offset));
+        if(PIN(com_fb_ok) > 1.0) {
+          printf("# coarse commutation track (halls): com_fb_offset up to 30 deg el off\n");
+        }
+      }
       if(PIN(out_rev) > 0.0) {
         printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
       }
@@ -764,6 +795,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             ctx->pp_n++;
           }
         }
+
+        // does a commutation track follow the rotor, and in what steps
+        // (in its own angle units: halls step 60 deg, encf about 0.35 deg)
+        float step = ABS(minus(PIN(com_fb), ctx->com_last));
+        ctx->com_last = PIN(com_fb);
+        ctx->com_travel += step;
+        ctx->com_step = MAX(ctx->com_step, step);
       }
 
       PIN(timer) += period;
@@ -813,6 +851,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(off_sin) += sinf(PIN(pos_fb));
         PIN(off_cos) += cosf(PIN(pos_fb));
         PIN(off_n) += 1.0;
+        // the commutation track at the same rotor angle, electrical
+        float cpp = PIN(com_polecount) >= 1.0 ? PIN(com_polecount) : PIN(pp);
+        ctx->com_sin += sinf(PIN(com_fb) * PIN(pp) / cpp);
+        ctx->com_cos += cosf(PIN(com_fb) * PIN(pp) / cpp);
       }
 
       if(PIN(timer) >= 2.0) {
@@ -827,6 +869,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           com_off    = com_off - fold * floorf(com_off / fold);
         }
         PIN(com_offset) = com_off;
+
+        // fb_switch commutates mod((com + com_fb_offset) * pp / cpp), both
+        // negated under com_rev, and the rotor sits at electrical 0 here:
+        // com_fb_offset = -com, com_fb_no_offset carrying com_rev's sign
+        if(ctx->com_travel > M_PI && PIN(pp) >= 1.0) {
+          float cpp          = PIN(com_polecount) >= 1.0 ? PIN(com_polecount) : PIN(pp);
+          float com_el       = atan2f(ctx->com_sin, ctx->com_cos);
+          PIN(com_fb_offset) = -com_el * cpp / PIN(pp) * (PIN(com_rev) > 0.0 ? -1.0 : 1.0);
+          PIN(com_fb_ok)     = ctx->com_step > 0.5 ? 2.0 : 1.0;
+        } else {
+          PIN(com_fb_offset) = 0.0;
+          PIN(com_fb_ok)     = 0.0;
+        }
         PIN(com_ok)     = (PIN(off_mag) > 0.98 && PIN(id_fb) > PIN(test_cur) * 0.5) ? 1.0 : 0.0;
 
         PIN(d_cmd) = 0.0;
