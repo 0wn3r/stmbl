@@ -100,8 +100,12 @@ static union {
 } data;
 static uint8_t print_buf[10];
 
-static int32_t pos_offset;
-static uint32_t state_counter;
+// turn count referenced to the +-pi wrap of pos, see rt_func
+static int32_t turns_pi;
+static uint32_t turns_age;
+static uint32_t last_no_index;
+static int32_t last_sp;
+static uint32_t retake;
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
@@ -180,11 +184,14 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   GPIO_SetBits(GPIOD, GPIO_Pin_15);  //tx enable
 
-  pos_offset    = 0;
   PIN(pos_offset) = 0;
-  PIN(req_len)  = 2046;
-  state_counter = 0;
-  PIN(freq)     = 1024000;
+  PIN(req_len)    = 2046;
+  turns_pi        = 0;
+  turns_age       = 1000;
+  last_no_index   = 0;
+  last_sp         = 0;
+  retake          = 0;
+  PIN(freq)       = 1024000;
 }
 
 // crc5 of four bits (MSB first) from a zero register
@@ -268,46 +275,68 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     if(crc == 0) {
       PIN(crc_ok)
       ++;
-      int32_t pos = data.fanuc.pos_lo + (data.fanuc.pos_hi << 6);
-      PIN(index)  = data.fanuc.no_index;
-      PIN(batt)   = data.fanuc.bat;
+      uint32_t pos = data.fanuc.pos_lo + (data.fanuc.pos_hi << 6);
+      PIN(index)   = data.fanuc.no_index;
+      PIN(batt)    = data.fanuc.bat;
 
       PIN(abs_pos) = wrap_bits(pos, 22);
 
-      if(PIN(index) > 0.0) {
-        pos_offset    = pos;
-        PIN(pos)      = PIN(abs_pos);
-        PIN(state)    = 1;
-        state_counter = 1;
-      } else if(state_counter == 1) {
-        state_counter = 2;
-        pos_offset    = pos;
-        PIN(pos)      = PIN(abs_pos);
-      } else {
-        state_counter = 3;
-        PIN(pos)      = wrap_bits(pos + pos_offset + ((uint32_t)PIN(pos_offset) << 6), 22);
-        PIN(state)    = 3;
+      // The encoder steps its turn count where the unsigned 22 bit count
+      // wraps (abs_pos = 0), half a turn away from the +-pi wrap of abs_pos.
+      // turns_pi counts turns at the +-pi wrap instead: turns + 1 on the
+      // negative half. Near abs_pos = 0 the encoder's own step may land a
+      // few counts off, so there the last value is held; it can only
+      // change at +-pi, a quarter turn or more away (a frame moves at most
+      // about 0.01 turn at 3000 rpm).
+      int32_t sp = (int32_t)(pos << 10) >> 10;  // signed count, abs_pos
+      // The encoder re-references its count at the first index: on X the
+      // no_index flag clears one frame before pos and turns jump. Take its
+      // turns at once for a few frames after the flag changes, and on any
+      // pos jump larger than a frame of motion can explain (2^17 counts is
+      // 1/32 turn, about 9000 rpm at 5 kHz), instead of holding a value
+      // from the old reference.
+      if(data.fanuc.no_index != last_no_index) {
+        retake = 3;
       }
+      last_no_index = data.fanuc.no_index;
+      int32_t jump  = (int32_t)((uint32_t)(sp - last_sp) << 10) >> 10;
+      if(turns_age <= 10 && (jump > (1 << 17) || jump < -(1 << 17))) {
+        retake = MAX(retake, 1);
+      }
+      last_sp = sp;
+      if(retake || turns_age > 10 || sp < -(1 << 20) || sp >= (1 << 20)) {
+        turns_pi = (int32_t)data.fanuc.turns + (sp < 0);
+      }
+      if(retake) {
+        retake--;
+      }
+      turns_age = 0;
 
-      if (data.fanuc.turns > 32767) {
-        PIN(turns) = (int32_t)data.fanuc.turns % 32768 - 32768;
-      } else {
-        PIN(turns) = data.fanuc.turns;
-      }
+      // pos_offset (in 16 bit counts) shifts pos in every state; turns
+      // steps exactly where pos wraps. The constant term makes turns equal
+      // the encoder's own count at pos = pos_offset (abs_pos 0 and just
+      // above): pos_offset = 0 reads the encoder's turns on the positive
+      // half, and 32768 gives the same pos and turns as before.
+      int32_t off  = (int32_t)PIN(pos_offset) << 6;
+      int32_t x    = sp + off;
+      PIN(pos)     = wrap_bits(x, 22);
+      PIN(turns)   = (int16_t)(uint16_t)(turns_pi + ((x + (1 << 21)) >> 22) - ((off + (1 << 21)) >> 22));
+      PIN(state)   = PIN(index) > 0.0 ? 1 : 3;
 
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = wrap_bits(pos, 10);
       PIN(error)   = 0;
     } else {
+      turns_age += turns_age < 1000;
       PIN(crc_er)
       ++;
       PIN(state) = 1;
       PIN(error) = 1;
     }
   } else {
-    PIN(error)    = 1;
-    PIN(state)    = 1;
-    state_counter = 0;
+    turns_age += turns_age < 1000;
+    PIN(error) = 1;
+    PIN(state) = 1;
   }
   //reset timer
   FB0_ENC_TIM->CNT  = 0;
