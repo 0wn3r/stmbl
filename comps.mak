@@ -52,6 +52,7 @@ LV_SHARED_COMPS += shared/comps/stp.c
 LV_SHARED_COMPS += shared/comps/uf2.c
 LV_SHARED_COMPS += shared/comps/ramp.c
 LV_SHARED_COMPS += shared/comps/scale.c
+LV_SHARED_COMPS += shared/comps/ocdac.c
 LV_SHARED_COMPS += shared/comps/idx_home.c
 LV_SHARED_COMPS += shared/comps/move.c
 # LV_SHARED_COMPS += shared/comps/ac.c
