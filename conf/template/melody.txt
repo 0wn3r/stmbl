@@ -20,7 +20,8 @@
 #
 # ## Key Parameters
 #
-# - `melody0.amp` -- tone peak current (A), default 2
+# - `melody0.amp` -- tone peak current command (A), default 6; the current
+#   loop passes about half of it at these pitches, about 3-4 A is audible
 # - `melody0.wave` -- 1 = square (default, louder), 0 = sine
 # - `melody0.chime` -- 0 = no ready chime
 #

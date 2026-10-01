@@ -229,7 +229,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct melody_pin_ctx_t *pins = (struct melody_pin_ctx_t *)pin_ptr;
 
   PIN(en)    = 1.0;
-  PIN(amp)   = 2.0;
+  PIN(amp)   = 6.0;
   PIN(wave)  = 1.0;
   PIN(bpm)   = 120.0;
   PIN(gate)  = 0.9;
