@@ -109,7 +109,7 @@ void hal_reset_watchdog() {
   IWDG->KR = 0xAAAA;
 }
 
-// Second shutdown path: a comparator break (BRK or BRK2, after the 0xF
+// Second shutdown path: a comparator break (BRK or BRK2, after the 0xC
 // digital filter) has already cleared MOE in hardware. Raise HV_EN (IPM
 // ITRIP) here, within about a microsecond, instead of waiting for io.c's
 // next rt tick. The IPM then turns its gate driver off on its own and holds
@@ -198,7 +198,7 @@ int main(void) {
   /* Configure the system clock */
   SystemClock_Config();
   systick_freq = HAL_RCC_GetHCLKFreq();
-  // RM0316 20.3.16: with the break filters on (BKF/BK2F 0xF), break handling
+  // RM0316 20.3.16: with the break filters on (BKF/BK2F 0xC), break handling
   // is only guaranteed with a fail-safe clock. CSS switches to HSI if the HSE
   // fails and also drives TIM8's break (9.2.7); NMI_Handler clears it.
   HAL_RCC_EnableCSS();

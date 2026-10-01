@@ -97,15 +97,18 @@ void MX_TIM8_Init(void) {
   sBreakDeadTimeConfig.DeadTime         = PWM_DEADTIME;
   sBreakDeadTimeConfig.BreakState       = TIM_BREAK_ENABLE;
   sBreakDeadTimeConfig.BreakPolarity    = TIM_BREAKPOLARITY_HIGH;
-  // 0xF: fDTS/32, N = 8. The sense nodes ring for about 0.5 us after every
-  // edge; a real short still trips well inside the short-circuit time.
-  sBreakDeadTimeConfig.BreakFilter      = 0xf;
+  // 0xC: fDTS/16, N = 8, 0.89 us (0xF was 1.78 us). The IM06B50GC1 allows
+  // about 3 us from overcurrent to off, 1.43 us of it inside the module
+  // after ITRIP. On X (C38 3.3 uF, sense caps) 0xC trips 3-5 A earlier than
+  // 0xF at the same hv0.dac from switching ringing, so the dac goes up: 0xC
+  // at 255 trips where 0xF did at 215 (19.5-21 A); 0xA tripped at 1 A at 150.
+  sBreakDeadTimeConfig.BreakFilter      = 0xc;
   // BRK2 carries COMP1 and COMP2, the W and U overcurrent comparators (main.c).
   // BK2E follows in a second write below: RM0316 20.3.16 forbids setting BK2P
   // and BK2E in one TIMx_BDTR write
   sBreakDeadTimeConfig.Break2State      = TIM_BREAK2_DISABLE;
   sBreakDeadTimeConfig.Break2Polarity   = TIM_BREAK2POLARITY_HIGH;
-  sBreakDeadTimeConfig.Break2Filter     = 0xf;
+  sBreakDeadTimeConfig.Break2Filter     = 0xc;
   sBreakDeadTimeConfig.AutomaticOutput  = TIM_AUTOMATICOUTPUT_DISABLE;
   if(HAL_TIMEx_ConfigBreakDeadTime(&htim8, &sBreakDeadTimeConfig) != HAL_OK) {
     Error_Handler();
