@@ -129,6 +129,7 @@ HAL_PIN(avg_test_volt);
 static const float dw_ang_tab[DW_ANGLES] = {0.0, M_PI, M_PI / 2.0, -M_PI / 2.0};
 static const float dw_cur_tab[DW_CURS]   = {1.0, 0.67, 0.5, 0.33, 0.25, 0.17, 0.1};
 #define DW_SETTLE 1.0    // per dwell before averaging [s]; the first at each angle gets twice
+#define DW_ZERO 0.2      // 0 A at the start of each new angle [s], inside its settle
 #define DW_AVG 0.5       // averaging [s]
 
 // per phase share of the dead time loss, as hv.c's drop_knee curve shapes it
@@ -627,10 +628,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         break;
       }
       PIN(cur_bw) = 300.0;
+      // The bootstrap r is ud / id at test_cur with drop_k 0, so it carries
+      // the dead time volts (about 2.3x the winding on X at 12 A). The loop's
+      // integral gain is cur_bw * r, and with it the steps to test_cur at the
+      // next angles overshoot into the f3's peak trip. Use r_known when it is
+      // given, else the slope between the first two dwells below, where the
+      // dead time loss is flat and cancels.
+      if(PIN(r_known) > 0.0 && ctx->dw == 0) {
+        PIN(r) = PIN(r_known);
+      }
       {
         int a        = ctx->dw / DW_CURS, k = ctx->dw % DW_CURS;
         PIN(com_pos) = dw_ang_tab[a];
         PIN(d_cmd)   = PIN(test_cur) * dw_cur_tab[k];
+        // a new angle starts from 0 A, not from the last (lowest) dwell of
+        // the old one, so the angle jump and the step to test_cur are apart
+        if(a > 0 && k == 0 && ctx->dw_t < DW_ZERO) {
+          PIN(d_cmd) = 0.0;
+        }
         float settle = k == 0 ? 2.0 * DW_SETTLE : DW_SETTLE;
         ctx->dw_t += period;
         if(ctx->dw_t > settle) {
@@ -644,6 +659,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           ctx->dw_i[ctx->dw]   = ctx->dw_si / n;
           ctx->dw_u[ctx->dw]   = ctx->dw_su / n;
           ctx->dw++;
+          if(ctx->dw == 2 && PIN(r_known) <= 0.0) {  // test_cur and 0.67 test_cur, angle 0
+            float di = ctx->dw_i[0] - ctx->dw_i[1];
+            if(di > 0.1) {
+              PIN(r) = CLAMP((ctx->dw_u[0] - ctx->dw_u[1]) / di, 0.01, PIN(r));
+            }
+          }
           ctx->dw_t  = 0.0;
           ctx->dw_n  = 0;
           ctx->dw_si = ctx->dw_su = 0.0;
