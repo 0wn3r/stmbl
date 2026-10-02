@@ -46,6 +46,7 @@ HAL_COMP(obs);
 
 HAL_PIN(en);         // *input*, 0 = off and reset (the f3 runs it only when asked)
 HAL_PIN(r);          // *parameter*, winding resistance [ohm]
+HAL_PIN(r_w);        // *parameter*, d loss growing with speed [ohm per rad/s electrical], r + r_w |vel|, 0 = none
 HAL_PIN(ld);         // *parameter*, d inductance [H] (induction motor: sigma*Ls)
 HAL_PIN(lq);         // *parameter*, q inductance [H], 0 = ld
 HAL_PIN(polecount);  // *parameter*, pole pairs
@@ -127,7 +128,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     return;
   }
 
-  float r   = MAX(PIN(r), 0.0);
+  // induction motor iron loss shows as a resistance that grows with speed;
+  // left out it puts a sign(vel) angle lag into the observer
+  float r   = MAX(PIN(r) + PIN(r_w) * ABS(PIN(vel)), 0.0);
   float ld  = MAX(PIN(ld), 0.00001);
   float lq  = PIN(lq) > 0.0 ? PIN(lq) : ld;
   float kl  = CLAMP(PIN(kl), 0.0, 0.99);
