@@ -27,6 +27,10 @@
 * commutation in state 3: hv0.obs_mode = sl_seq0.f3_mode. It runs free from
 * the start, so it is locked by the handover.
 *
+* `vel_ref` and `acc_ref` replace the command into pid: they follow f in I/f
+* and, from the handover, ramp from the observed speed to vel_cmd at `acc`,
+* so the handover is bumpless and pid gets acceleration feedforward.
+*
 * Speeds are mechanical rad/s. `vel_e` is f * polecount for angle0.vel_cmd,
 * `src` goes to angle0.src.
 */
@@ -57,12 +61,15 @@ HAL_PIN(track);       // *output*, to obs0.track
 HAL_PIN(pid_en);      // *output*, to pid0.en
 HAL_PIN(d_cmd);       // *output*, to hv0.d_cmd
 HAL_PIN(q_cmd);       // *output*, to hv0.q_cmd
+HAL_PIN(vel_ref);     // *output*, speed command for pid [rad/s mech], to pid0.vel_ext_cmd
+HAL_PIN(acc_ref);     // *output*, its slope [rad/s^2], to pid0.acc_ext_cmd
 HAL_PIN(f3_mode);     // *output*, to hv0.obs_mode: f3 obs shadow while on, commutating in state 3
 
 struct sl_seq_ctx_t {
   float time;
   float free_time;
   float fade;
+  float ref;
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -124,6 +131,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
          ctx->free_time >= PIN(lock_time)) {
         state     = 3;
         ctx->fade = 1.0;
+        ctx->ref  = ov;  // pid starts from the speed it has, not from the command
       }
       break;
 
@@ -137,6 +145,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
       break;
   }
+
+  // speed command for pid: f until the handover, then from the observed speed
+  // toward vel_cmd at acc, with the slope as acceleration feedforward, so pid
+  // neither sees a step nor has to build the inertia torque on its integrator
+  float ref = state == 3 ? ctx->ref + LIMIT(PIN(vel_cmd) - ctx->ref, MAX(PIN(acc), 0.0) * period) : f;
+  PIN(acc_ref) = state == 3 || state == 2 ? (ref - (state == 3 ? ctx->ref : PIN(vel_ref))) / period : 0.0;
+  ctx->ref     = ref;
+  PIN(vel_ref) = ref;
 
   PIN(state)  = state;
   PIN(f)      = f;

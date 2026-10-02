@@ -5,6 +5,8 @@
 # sl_seq0.align_time (about 3 * acim_flux0.tr), sl_seq0.w_hand, obs0.bw.
 # Optional, f3 commutates from its own observer once handed over:
 # hv0.obs_mode = sl_seq0.f3_mode
+# command through ramp0: sl_seq0.vel_cmd = ramp0.vel_cmd (sensorless
+# links vel0.vel); pid takes sl_seq0.vel_ref, keep no pid0.vel_ext_cmd line.
 link sensorless
 sl_seq0.d_in = acim_foc0.d_cmd
 sl_seq0.q_in = acim_foc0.q_cmd
