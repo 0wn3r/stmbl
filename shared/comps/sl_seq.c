@@ -18,7 +18,7 @@
 *    below `w_hand` / 2, so it starts with the right direction, then runs free.
 * 3. observer: angle0 from obs (src 2), d and q from the drive (`d_in`, `q_in`,
 *    pmsm_ttc0 or acim_foc0), `pid_en` = 1, pid closes the speed loop on
-*    obs0.vel_m, while i_f on d fades out over `fade_time` so the current
+*    obs0.vel_m, while d goes from i_f to d_in over `fade_time` so the current
 *    does not step. Entered once obs is ok, |f| >= w_hand and obs ran free
 *    `lock_time`. Back to 2 when obs drops ok or |obs0.vel_m| < w_hand - hyst,
 *    with f seeded from obs0.vel_m.
@@ -144,7 +144,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(src)    = state == 3 ? 2.0 : 3.0;
   PIN(track)  = state < 2 || (state == 2 && ctx->free_time <= 0.0) ? 1.0 : 0.0;
   PIN(pid_en) = state == 3 ? 1.0 : 0.0;
-  PIN(d_cmd)  = state == 3 ? PIN(d_in) + PIN(i_f) * ctx->fade : (state > 0 ? PIN(i_f) : 0.0);
+  // state 3: from i_f to the drive's d, so an induction motor's d_in (id_n) is not added on top
+  PIN(d_cmd)  = state == 3 ? PIN(d_in) + (PIN(i_f) - PIN(d_in)) * ctx->fade : (state > 0 ? PIN(i_f) : 0.0);
   PIN(q_cmd)  = state == 3 ? PIN(q_in) : 0.0;
   PIN(f3_mode) = state == 3 ? 2.0 : (state > 0 ? 1.0 : 0.0);
 }
