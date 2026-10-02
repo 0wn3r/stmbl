@@ -33,6 +33,7 @@ pid0.neg_min_torque = acim_foc0.t_max
 pid0.max_vel = conf0.max_vel
 angle0.src = 1
 angle0.polecount = conf0.polecount
+angle0.pos_m = fb_switch0.vel_fb
 angle0.vel_m = vel1.vel
 angle0.slip = acim_flux0.slip
 hv0.d_cmd = acim_foc0.d_cmd
