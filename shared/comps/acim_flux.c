@@ -15,7 +15,16 @@
 *     slip            = iq / (tr * i_mr)             [rad/s electrical]
 *     torque          = 3/2 * pp * lmr * i_mr * iq    lmr = Lm^2 / Lr
 *
-* `tr` (Lr/Rr) and `lmr` come from idacim. `id`/`iq` are normally the measured
+* `tr` (Lr/Rr) and `lmr` come from idacim, at rated flux (i_mr = `i_n`).
+* Below rated flux (field weakening) the iron desaturates and both grow:
+*
+*     x       = 1 - |i_mr| / i_n, 0 at or above i_n
+*     tr_act  = tr_est * (1 + tr_sat * x)
+*     lmr_act = lmr * (1 + lmr_sat * x)
+*
+* The model, slip, psi and torque run on tr_act and lmr_act. tr changes about
+* twice as much as the secant lmr, so the two gains are separate; 0 (default)
+* or i_n 0 keeps both constant. `id`/`iq` are normally the measured
 * currents, so a current limit in curpid scales both and the slip stays right.
 *
 * `psi` = lmr * i_mr is the rotor flux seen from the stator. Sent as hv0.psi,
@@ -66,7 +75,12 @@ HAL_PIN(r_w);        // *parameter*, speed dependent d loss [ohm per rad/s elect
 HAL_PIN(ud);         // *input*, hv0.ud_fb
 HAL_PIN(uq);         // *input*, hv0.uq_fb
 HAL_PIN(vel);        // *input*, synchronous speed [rad/s electrical], angle0.vel
-HAL_PIN(tr_est);     // *output*, the tr the model runs on
+HAL_PIN(tr_est);     // *output*, tr at rated flux, tr or adapted
+HAL_PIN(i_n);        // *parameter*, rated magnetizing current [A], acim_foc0.id_n, 0 = no saturation
+HAL_PIN(tr_sat);     // *parameter*, tr growth at zero flux, tr * (1 + tr_sat * x)
+HAL_PIN(lmr_sat);    // *parameter*, lmr growth at zero flux, lmr * (1 + lmr_sat * x)
+HAL_PIN(tr_act);     // *output*, the tr the model runs on
+HAL_PIN(lmr_act);    // *output*, the lmr the model runs on, to acim_foc0.lmr
 HAL_PIN(q_res);      // *output*, reactive power residual Q - Q_m [VA]
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -85,8 +99,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct acim_flux_pin_ctx_t *pins = (struct acim_flux_pin_ctx_t *)pin_ptr;
 
   float tr_n = MAX(PIN(tr), 0.001);
-  float lmr  = MAX(PIN(lmr), 0.0);
   float i_mr = PIN(i_mr);
+
+  // desaturation below rated flux
+  float x = PIN(i_n) > 0.0 ? CLAMP(1.0 - ABS(i_mr) / PIN(i_n), 0.0, 1.0) : 0.0;
+  float lmr = MAX(PIN(lmr), 0.0) * MAX(1.0 + PIN(lmr_sat) * x, 0.1);
+  float k_tr = MAX(1.0 + PIN(tr_sat) * x, 0.1);
 
   float tr = tr_n;
   if(PIN(tr_ki) > 0.0) {
@@ -102,13 +120,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     if(PIN(en) > 0.0 && ABS(iq) > PIN(tr_iq_min) && ABS(w) > PIN(tr_vel_min)) {
       // Q and Q_m both follow the direction of rotation; the detuning term
       // goes with iq^2, so only the sign of w matters
-      tr -= PIN(tr_ki) * PIN(q_res) * (w > 0.0 ? 1.0 : -1.0) * period;
+      // tr_est is the rated flux value, so the step is scaled back from tr_act
+      tr -= PIN(tr_ki) * PIN(q_res) * (w > 0.0 ? 1.0 : -1.0) * period / k_tr;
     }
     tr = CLAMP(tr, 0.5 * tr_n, 2.0 * tr_n);
   } else {
     PIN(q_res) = 0.0;
   }
   PIN(tr_est) = tr;
+  tr *= k_tr;
 
   if(PIN(en) > 0.0) {
     // backward Euler step of the first order lag, stable for any period
@@ -129,6 +149,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   PIN(i_mr)   = i_mr;
+  PIN(tr_act)  = tr;
+  PIN(lmr_act) = lmr;
   PIN(psi)    = lmr * i_mr;
   PIN(slip)   = slip;
   PIN(torque) = 1.5 * MAX(PIN(polecount), 1.0) * lmr * i_mr * PIN(iq);
