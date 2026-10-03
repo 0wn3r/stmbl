@@ -20,7 +20,7 @@ HAL_PIN(input_filter);
 
 struct enc_cmd_ctx_t {
   int e_res;
-  uint32_t a_pin, b_pin, c_pin, c_en_pin, a_pin_source, b_pin_source, tim_af, tim_rcc;
+  uint32_t a_pin, b_pin, c_pin, c_en_pin, tim_af, tim_rcc;
   GPIO_TypeDef *a_port, *b_port, *c_port, *c_en_port;
   TIM_TypeDef *tim;
 };
@@ -61,8 +61,6 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->b_port       = CMD_B_PORT;
       ctx->c_port       = CMD_C_PORT;
       ctx->c_en_port    = CMD_C_EN_PORT;
-      ctx->a_pin_source = CMD_A_PIN_SOURCE;
-      ctx->b_pin_source = CMD_B_PIN_SOURCE;
       ctx->tim_af       = CMD_ENC_TIM_AF;
       ctx->tim_rcc      = CMD_ENC_TIM_RCC;
       ctx->tim          = CMD_ENC_TIM;
@@ -77,8 +75,6 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->b_port       = FB0_B_PORT;
       ctx->c_port       = FB0_Z_PORT;
       ctx->c_en_port    = FB0_Z_TXEN_PORT;
-      ctx->a_pin_source = FB0_A_PIN_SOURCE;
-      ctx->b_pin_source = FB0_B_PIN_SOURCE;
       ctx->tim_af       = FB0_ENC_TIM_AF;
       ctx->tim_rcc      = FB0_ENC_TIM_RCC;
       ctx->tim          = FB0_ENC_TIM;
@@ -93,8 +89,6 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->b_port       = FB1_B_PORT;
       ctx->c_port       = FB1_Z_PORT;
       ctx->c_en_port    = FB1_Z_TXEN_PORT;
-      ctx->a_pin_source = FB1_A_PIN_SOURCE;
-      ctx->b_pin_source = FB1_B_PIN_SOURCE;
       ctx->tim_af       = FB1_ENC_TIM_AF;
       ctx->tim_rcc      = FB1_ENC_TIM_RCC;
       ctx->tim          = FB1_ENC_TIM;
@@ -109,8 +103,6 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->b_port       = GPIOA;
       ctx->c_port       = GPIOB;
       ctx->c_en_port    = GPIOB;
-      ctx->a_pin_source = 8;
-      ctx->b_pin_source = 9;
       ctx->tim_af       = FB1_ENC_TIM_AF;
       ctx->tim_rcc      = FB1_ENC_TIM_RCC;
       ctx->tim          = FB1_ENC_TIM;
