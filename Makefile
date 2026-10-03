@@ -75,7 +75,7 @@ SOURCES += $(USB_DEVICE_DIR)/Core/Src/usbd_ctlreq.c
 SOURCES += $(USB_DEVICE_DIR)/Core/Src/usbd_ioreq.c
 SOURCES += $(USB_DEVICE_DIR)/Class/CDC/Src/usbd_cdc.c
 
-# STM32CubeF4 LL drivers, HAL only for USB (PCD) and flash
+# STM32CubeF4 LL drivers, HAL only under the USB device library (PCD)
 CPPFLAGS += -DUSE_FULL_LL_DRIVER
 
 LL_DRV_DIR = lib/STM32F4xx_HAL_Driver
@@ -103,8 +103,6 @@ SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_rcc_ex.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_gpio.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd.c
 SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_pcd_ex.c
-SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_flash.c
-SOURCES += $(LL_DRV_DIR)/src/stm32f4xx_hal_flash_ex.c
 
 SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 
