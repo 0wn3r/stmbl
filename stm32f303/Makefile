@@ -1,7 +1,7 @@
 # Optimization level, can be [0, 1, 2, 3, s].
 #     0 = turn off optimization. s = optimize for size.
 #
-OPT = -O3
+OPT = -O2  # -O3 only added 2.4 KB of flash and 40 B of CCM (2026-10-03)
 # OPT = -O1         # for debugging
 
 # Object files directory
@@ -101,6 +101,10 @@ CFLAGS += -fno-signaling-nans
 CFLAGS += -fno-rounding-math
 CFLAGS += -fno-signed-zeros
 CFLAGS += -fno-math-errno
+# x / c as x * (1 / c): the rt divided by constants (ADC scaling, /3, filter
+# time constants) 16 times a tick at ~14 cycles each. One extra rounding on
+# 12 bit ADC data.
+CFLAGS += -freciprocal-math
 #CFLAGS += -Wstrict-prototypes
 #CFLAGS += -Wextra
 #CFLAGS += -Wpointer-arith
