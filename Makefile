@@ -174,10 +174,11 @@ CXXFLAGS += -Wall
 #
 LDFLAGS += $(OPT)
 LDFLAGS += -lm
+LDFLAGS += -specs=nosys.specs
 LDFLAGS += -Wl,-Map=$(TARGET).map,--cref
 LDFLAGS += -Wl,--gc-sections
 
-# LDFLAGS += -specs=nano.specs -u _printf_float -u _scanf_float
+LDFLAGS += -specs=nano.specs -u _printf_float -u _scanf_float
 LDFLAGS += -T$(LDSCRIPT)
 
 #============================================================================
