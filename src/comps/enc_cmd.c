@@ -143,11 +143,23 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   LL_TIM_SetAutoReload(ctx->tim, ctx->e_res * 2 - 1);
   // quad
   LL_TIM_DisableCounter(ctx->tim);
-  tim_encoder_config(ctx->tim, LL_TIM_ENCODERMODE_X4_TI12, LL_TIM_IC_POLARITY_RISING, LL_TIM_IC_POLARITY_RISING);
-  uint32_t filter = MAX(MIN(PIN(input_filter), 15), 0);  //Digital filtering @ 1/32 fDTS
-  // polarity, selection (1 direct, 2 indirect) and the raw prescaler value 1 are kept exactly as with StdPeriph
-  tim_ic_init(ctx->tim, 1, LL_TIM_IC_POLARITY_BOTHEDGE, 2, 1, filter);  //clock
-  tim_ic_init(ctx->tim, 2, LL_TIM_IC_POLARITY_RISING, 1, 1, filter);    //direction
+  // X4 on TI1/TI2, both direct, non-inverted, no prescaler, input_filter
+  // (0..15) as the IC1F/IC2F code. The StdPeriph setup had TI1 on "both
+  // edges", which RM0090 forbids in encoder mode, and its unshifted
+  // "prescaler 1" had turned CC1S into TRC; neither reached the counting
+  // path, so the count is the same.
+  uint32_t filter = (uint32_t)MAX(MIN(PIN(input_filter), 15), 0) << (TIM_CCMR1_IC1F_Pos + 16U);  // the LL_TIM_IC_FILTER_* encoding
+  LL_TIM_ENCODER_Init(ctx->tim, &(LL_TIM_ENCODER_InitTypeDef){
+                                    .EncoderMode    = LL_TIM_ENCODERMODE_X4_TI12,
+                                    .IC1Polarity    = LL_TIM_IC_POLARITY_RISING,
+                                    .IC1ActiveInput = LL_TIM_ACTIVEINPUT_DIRECTTI,
+                                    .IC1Prescaler   = LL_TIM_ICPSC_DIV1,
+                                    .IC1Filter      = filter,
+                                    .IC2Polarity    = LL_TIM_IC_POLARITY_RISING,
+                                    .IC2ActiveInput = LL_TIM_ACTIVEINPUT_DIRECTTI,
+                                    .IC2Prescaler   = LL_TIM_ICPSC_DIV1,
+                                    .IC2Filter      = filter,
+                                });
   LL_TIM_EnableCounter(ctx->tim);
 }
 
