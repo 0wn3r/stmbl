@@ -23,14 +23,15 @@
 #include "hal.h"
 #include "commands.h"
 #include "stm32f4xx_conf.h"
+#include "stm32f4xx_hal.h"
 
 char config[15 * 1024];
 const char *config_ro = (char *)0x08008000;
 
 void confcrc(char *ptr) {
   uint32_t len = strnlen(config, sizeof(config) - 1);
-  CRC_ResetDR();
-  uint32_t crc = CRC_CalcBlockCRC((uint32_t *)config, len / 4);
+  CRC->CR = CRC_CR_RESET;
+  uint32_t crc = crc_calc_block((uint32_t *)config, len / 4);
   for(int i = 0; i < len; i++) {
     printf("%x ", config[i]);
   }
@@ -46,24 +47,26 @@ COMMAND("flashloadconf", flashloadconf, "load config from flash");
 
 void flashsaveconf(char *ptr) {
   printf("erasing flash page...\n");
-  FLASH_Unlock();
-  if(FLASH_EraseSector(FLASH_Sector_2, VoltageRange_3) != FLASH_COMPLETE) {
+  HAL_FLASH_Unlock();
+  uint32_t sector_error;
+  FLASH_EraseInitTypeDef erase = {.TypeErase = FLASH_TYPEERASE_SECTORS, .Sector = FLASH_SECTOR_2, .NbSectors = 1, .VoltageRange = FLASH_VOLTAGE_RANGE_3};
+  if(HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK) {
     printf("error!\n");
-    FLASH_Lock();
+    HAL_FLASH_Lock();
     return;
   }
   printf("saving conf\n");
   int i   = 0;
   int ret = 0;
   do {
-    ret = FLASH_ProgramByte((uint32_t)(config_ro + i), config[i]) != FLASH_COMPLETE;
+    ret = HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, (uint32_t)(config_ro + i), config[i]) != HAL_OK;
     if(ret) {
       printf("error writing %i\n", ret);
       break;
     }
   } while(config[i++] != 0);
   printf("OK %i bytes written\n", i);
-  FLASH_Lock();
+  HAL_FLASH_Lock();
 }
 COMMAND("flashsaveconf", flashsaveconf, "save config to flash");
 
@@ -91,14 +94,16 @@ COMMAND("deleteconf", deleteconf, "delete config");
 
 void hardboot(char *ptr) {
   printf("erasing flash page...\n");
-  FLASH_Unlock();
-  if(FLASH_EraseSector(FLASH_Sector_4, VoltageRange_3) != FLASH_COMPLETE) {
+  HAL_FLASH_Unlock();
+  uint32_t sector_error;
+  FLASH_EraseInitTypeDef erase = {.TypeErase = FLASH_TYPEERASE_SECTORS, .Sector = FLASH_SECTOR_4, .NbSectors = 1, .VoltageRange = FLASH_VOLTAGE_RANGE_3};
+  if(HAL_FLASHEx_Erase(&erase, &sector_error) != HAL_OK) {
     printf("error!\n");
-    FLASH_Lock();
+    HAL_FLASH_Lock();
     return;
   }
   printf("OK, call bootloader\n");
-  FLASH_Lock();
+  HAL_FLASH_Lock();
   NVIC_SystemReset();
 }
 COMMAND("hardboot", hardboot, "destroy firmware to force bootloader");
