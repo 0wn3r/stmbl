@@ -98,7 +98,6 @@ SECTIONS
     *(.ccmram*)
     *comps/ls.o(.text.rt_func)
     *comps/io.o(.text.rt_func)
-    *comps/dq.o(.text.rt_func)
     *comps/curpid.o(.text.rt_func)
     *comps/idq.o(.text.rt_func)
     *comps/hv.o(.text.rt_func)
@@ -120,6 +119,7 @@ SECTIONS
     _sramfunc = .;
     *comps/emf.o(.text.rt_func)
     *comps/term.o(.text.rt_func)
+    *comps/dq.o(.text.rt_func)
     *(.text.mod)
     . = ALIGN(4);
     _eramfunc = .;
