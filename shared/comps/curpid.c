@@ -106,7 +106,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     // integrate A^2, which on a spindle swung the voltage between 0 and full
     // every tick, and it undid the voltage clamp whenever current was low.
     absvolt          = idc * idc + iqc * iqc;  // clamp cmd
-    float volt_scale = __builtin_sqrtf(CLAMP(max_volt * max_volt / MAX(absvolt, max_volt * max_volt * 0.01), 0.0, 1.0));
+    float volt_scale = sqrtf(CLAMP(max_volt * max_volt / MAX(absvolt, max_volt * max_volt * 0.01), 0.0, 1.0));
 
     abscur = id * id + iq * iq;  // clamp over fb
     ctx->cur_scale += (1.0 - abscur / (max_cur * max_cur)) * PIN(kci) * period;
@@ -115,10 +115,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(scale) = MIN(volt_scale, ctx->cur_scale);
   } else {
     ctx->cur_scale = 1.0;
-    // clamp cmd. __builtin_sqrtf is the FPU's vsqrt: with -fno-builtin plain
-    // sqrtf is a software routine that cost several us of the f3's tick
+    // clamp cmd
     abscur     = idc * idc + iqc * iqc;
-    PIN(scale) = abscur > max_cur * max_cur ? max_cur / __builtin_sqrtf(abscur) : 1.0;
+    PIN(scale) = abscur > max_cur * max_cur ? max_cur / sqrtf(abscur) : 1.0;
   }
   PIN(scale) = CLAMP(PIN(scale), 0.0, 1.0);
 
@@ -160,7 +159,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // takes whatever the limit cut from its axis, so it holds at the limit
   // instead of winding up.
   float ud_lim = LIMIT(ud, max_volt);
-  float uq_max = __builtin_sqrtf(MAX(max_volt * max_volt - ud_lim * ud_lim, 0.0));
+  float uq_max = sqrtf(MAX(max_volt * max_volt - ud_lim * ud_lim, 0.0));
   float uq_lim = LIMIT(uq, uq_max);
   ctx->id_error_sum += ud_lim - ud;
   ctx->iq_error_sum += uq_lim - uq;

@@ -84,7 +84,10 @@ CFLAGS += -std=gnu11
 CFLAGS += -ffunction-sections
 CFLAGS += -fdata-sections
 CFLAGS += -Wall
-CFLAGS += -fno-builtin ## from old
+# no -fno-builtin: sqrtf/fabsf must compile to vsqrt/vabs, not libm calls.
+# GCC then also turns zeroing/copy loops into memset/memcpy calls; in rt code
+# running from CCM or SRAM that would be a hidden call into flash, so not that.
+CFLAGS += -fno-tree-loop-distribute-patterns
 CFLAGS += -nostartfiles
 CFLAGS += -Wfatal-errors
 CFLAGS += -Wno-pointer-sign #for usb lib...
@@ -177,7 +180,7 @@ stm32f303/inc/commandslist.h: tools/create_cmd.py $(SOURCES)
 	@$(MKDIR) -p $(dir $@)
 	@$(PYTHON) tools/create_cmd.py $@ $(SOURCES)
 
-stm32f303/src/hal_tbl.c: tools/create_hal_tbl.py $(COMPS)
+stm32f303/src/hal_tbl.c: tools/create_hal_tbl.py $(COMPS) stm32f303/comps.mak
 	@echo Generating HAL table
 	@$(MKDIR) -p $(dir $@)
 	@$(PYTHON) tools/create_hal_tbl.py $@ $(COMPS)
