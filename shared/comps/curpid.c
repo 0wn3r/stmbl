@@ -55,6 +55,8 @@ HAL_PIN(iq_error);
 struct curpid_ctx_t {
   float id_error_sum;
   float iq_error_sum;
+  float ld_last, ld_inv;  // 1 / ld, 1 / lq recomputed only when the pin changes:
+  float lq_last, lq_inv;  // two divisions a tick otherwise, ~14 cycles each
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -78,6 +80,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float r  = MAX(PIN(r), 0.1);
   float ld = MAX(PIN(ld), 0.001);
   float lq = MAX(PIN(lq), 0.001);
+  if(ld != ctx->ld_last) {
+    ctx->ld_last = ld;
+    ctx->ld_inv  = 1.0 / ld;
+  }
+  if(lq != ctx->lq_last) {
+    ctx->lq_last = lq;
+    ctx->lq_inv  = 1.0 / lq;
+  }
 
   float ff   = PIN(ff);
   float kind = PIN(kind);
@@ -120,8 +130,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float indq  = vel * psi_d;
 
   // predictor to cancel pwm delay
-  id += (PIN(ud) - r * id + indd) / ld * period * PIN(ksp);
-  iq += (PIN(uq) - r * iq - indq) / lq * period * PIN(ksp);
+  id += (PIN(ud) - r * id + indd) * ctx->ld_inv * period * PIN(ksp);
+  iq += (PIN(uq) - r * iq - indq) * ctx->lq_inv * period * PIN(ksp);
 
   float id_error = idc - id;
   float iq_error = iqc - iq;
