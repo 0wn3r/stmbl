@@ -405,6 +405,11 @@ int main(void) {
     uint32_t JumpAddress = *(__IO uint32_t *)(APP_START + 4);
     JumpToApplication    = (void *)JumpAddress;
 
+    // stop the 1 kHz tick: until the app sets VTOR it would run this
+    // bootloader's SysTick_Handler on the app's RAM
+    SysTick->CTRL = 0;
+    SCB->ICSR     = SCB_ICSR_PENDSTCLR_Msk;
+
     /* Initialize user application's Stack Pointer */
     __set_MSP(*(__IO uint32_t *)APP_START);
     JumpToApplication();
