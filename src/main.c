@@ -28,7 +28,7 @@
 #include "main.h"
 #include "commands.h"
 
-extern RCC_ClocksTypeDef RCC_Clocks;
+extern LL_RCC_ClocksTypeDef RCC_Clocks;
 
 uint32_t hal_get_systick_value() {
   return (SysTick->VAL);
@@ -48,11 +48,16 @@ void SysTick_Handler(void) {
   systime++;
 }
 
+// HAL (USB, flash) timebase: the 1 kHz SysTick above, no HAL_Init()
+uint32_t HAL_GetTick(void) {
+  return (uint32_t)systime;
+}
+
 //20kHz
 void TIM_SLAVE_HANDLER(void) {
-  TIM_ClearITPendingBit(TIM_SLAVE, TIM_IT_Update);
+  LL_TIM_ClearFlag_UPDATE(TIM_SLAVE);
   hal_run_frt();
-  if(TIM_GetITStatus(TIM_SLAVE, TIM_IT_Update) == SET) {
+  if(LL_TIM_IsActiveFlag_UPDATE(TIM_SLAVE)) {
     hal_stop();
     hal.hal_state = FRT_TOO_LONG;
   }
@@ -61,9 +66,9 @@ void TIM_SLAVE_HANDLER(void) {
 //5 kHz interrupt for hal. at this point all ADCs have been sampled,
 //see setup_res() in setup.c if you are interested in the magic behind this.
 void DMA2_Stream0_IRQHandler(void) {
-  DMA_ClearITPendingBit(DMA2_Stream0, DMA_IT_TCIF0);
+  LL_DMA_ClearFlag_TC0(DMA2);
   hal_run_rt();
-  if(DMA_GetITStatus(DMA2_Stream0, DMA_IT_TCIF0) == SET) {
+  if(LL_DMA_IsActiveFlag_TC0(DMA2)) {
     hal_stop();
     hal.hal_state = RT_TOO_LONG;
   }
@@ -93,7 +98,7 @@ void bootloader(char *ptr) {
   void (*SysMemBootJump)(void);
   volatile uint32_t addr = 0x1FFF0000;
 
-  RCC_DeInit();
+  LL_RCC_DeInit();
   SysTick->CTRL = 0;
   SysTick->LOAD = 0;
   SysTick->VAL  = 0;
@@ -138,8 +143,8 @@ void about(char *ptr) {
 #ifdef __CM4_CMSIS_VERSION
   printf("CMSIS      %i.%i\n", __CM4_CMSIS_VERSION_MAIN, __CM4_CMSIS_VERSION_SUB);
 #endif
-#ifdef __STM32F4XX_STDPERIPH_VERSION
-  printf("StdPeriph  %i.%i.%i\n", __STM32F4XX_STDPERIPH_VERSION_MAIN, __STM32F4XX_STDPERIPH_VERSION_SUB1, __STM32F4XX_STDPERIPH_VERSION_SUB2);
+#ifdef __STM32F4xx_CMSIS_VERSION
+  printf("F4 CMSIS   %i.%i.%i\n", __STM32F4xx_CMSIS_VERSION_MAIN, __STM32F4xx_CMSIS_VERSION_SUB1, __STM32F4xx_CMSIS_VERSION_SUB2);
 #endif
 #ifdef __STM32F3xx_HAL_VERSION
   printf("HAL lib... TODO: print version\n");
@@ -202,8 +207,8 @@ int main(void) {
   hal_parse("relink");
   hal_parse("start");
 
-  TIM_Cmd(TIM_MASTER, ENABLE);
-  TIM_ITConfig(TIM_SLAVE, TIM_IT_Update, ENABLE);
+  LL_TIM_EnableCounter(TIM_MASTER);
+  LL_TIM_EnableIT_UPDATE(TIM_SLAVE);
 
   while(1)  //run non realtime stuff
   {
