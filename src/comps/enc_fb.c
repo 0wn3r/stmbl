@@ -87,12 +87,21 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   // quad
   LL_TIM_DisableCounter(FB0_ENC_TIM);
-  tim_encoder_config(FB0_ENC_TIM, LL_TIM_ENCODERMODE_X4_TI12, LL_TIM_IC_POLARITY_RISING, LL_TIM_IC_POLARITY_FALLING);
-  // Input filter on A and B: IC1F = IC2F = 0011, fCK_INT with N = 8, about
-  // 95 ns at 84 MHz (RM0090 18.4.7). The old TIM_ICInit ran before the TIM4
-  // clock was on, so its 0xF (fDTS/32, N = 8: 3 us, which would cap the line
-  // rate near 160 kHz) never landed, and it only addressed channel 2.
-  FB0_ENC_TIM->CCMR1 = (FB0_ENC_TIM->CCMR1 & ~(TIM_CCMR1_IC1F | TIM_CCMR1_IC2F)) | (3 << 4) | (3 << 12);
+  // X4 on TI1/TI2, B inverted. Input filter on A and B: fCK_INT with N = 8,
+  // about 95 ns at 84 MHz (RM0090 18.4.7). The old TIM_ICInit ran before the
+  // TIM4 clock was on, so its 0xF (fDTS/32, N = 8: 3 us, which would cap the
+  // line rate near 160 kHz) never landed, and it only addressed channel 2.
+  LL_TIM_ENCODER_Init(FB0_ENC_TIM, &(LL_TIM_ENCODER_InitTypeDef){
+                                       .EncoderMode    = LL_TIM_ENCODERMODE_X4_TI12,
+                                       .IC1Polarity    = LL_TIM_IC_POLARITY_RISING,
+                                       .IC1ActiveInput = LL_TIM_ACTIVEINPUT_DIRECTTI,
+                                       .IC1Prescaler   = LL_TIM_ICPSC_DIV1,
+                                       .IC1Filter      = LL_TIM_IC_FILTER_FDIV1_N8,
+                                       .IC2Polarity    = LL_TIM_IC_POLARITY_FALLING,
+                                       .IC2ActiveInput = LL_TIM_ACTIVEINPUT_DIRECTTI,
+                                       .IC2Prescaler   = LL_TIM_ICPSC_DIV1,
+                                       .IC2Filter      = LL_TIM_IC_FILTER_FDIV1_N8,
+                                   });
   LL_TIM_EnableCounter(FB0_ENC_TIM);
   FB0_ENC_TIM->CCMR2 |= TIM_CCMR2_CC3S_0;  //CC3 channel is configured as input, IC3 is mapped on CH3
   FB0_ENC_TIM->CCER |= TIM_CCER_CC3E;      //Capture enabled
