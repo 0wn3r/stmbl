@@ -15,6 +15,12 @@ HAL_COMP(ls);
 //process data from LS
 HAL_PIN(d_cmd);
 HAL_PIN(q_cmd);
+// The f4 sends d/q every third tick; stepped straight in, the command carries
+// a 5 kHz staircase into the current loop. ramp = 1 spreads each step over
+// the LS_RAMP_TICKS ticks to the next packet, a linear ramp that lags the
+// step by half an f4 period. 0 = step as before.
+HAL_PIN(ramp);
+#define LS_RAMP_TICKS 3  // f3 ticks per f4 packet, 15 kHz / 5 kHz
 HAL_PIN(pos);
 HAL_PIN(vel);
 // The angle the voltage computed this tick lands at, on average: the
@@ -94,6 +100,8 @@ HAL_PIN(window);
 
 struct ls_ctx_t {
   uint32_t timeout;
+  float d_tgt, q_tgt;    // the last packet's command
+  float d_step, q_step;  // per tick towards it while ramping
   uint32_t sbrake_loss;  // brake for this link loss
   uint32_t tx_addr;
   uint32_t conf_seen;  // bit per config word written since boot
@@ -190,6 +198,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(v_lead) = 1.5;
   config.pins.obs_mode  = 0.0;
   config.pins.obs_bw    = 200.0;
+  PIN(ramp)   = 1.0;
 
   LL_USART_SetRxTimeout(USART3, 16);  // 16 bits timeout
   LL_USART_EnableRxTimeout(USART3);
@@ -282,8 +291,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(ignore_fault_pin) = ctx->packet_to_hv.flags.ignore_fault_pin;
       PIN(sbrake)           = ctx->packet_to_hv.flags.sbrake;
       PIN(sbrake_arm)       = ctx->packet_to_hv.flags.sbrake_arm;
-      PIN(d_cmd)            = ctx->packet_to_hv.d_cmd;
-      PIN(q_cmd)            = ctx->packet_to_hv.q_cmd;
+      ctx->d_tgt            = ctx->packet_to_hv.d_cmd;
+      ctx->q_tgt            = ctx->packet_to_hv.q_cmd;
+      ctx->d_step           = (ctx->d_tgt - PIN(d_cmd)) * (1.0 / LS_RAMP_TICKS);
+      ctx->q_step           = (ctx->q_tgt - PIN(q_cmd)) * (1.0 / LS_RAMP_TICKS);
       PIN(pos)              = ctx->packet_to_hv.pos;
       PIN(vel)              = ctx->packet_to_hv.vel;
 
@@ -323,6 +334,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     }
   } else if(ctx->timeout <= 5) {  // if no packet and no timeout, advance pos by velovity
     PIN(pos) = PIN(pos) + PIN(vel) * period;
+  }
+
+  // timeout counts the ticks since the packet: 0, 1, 2 are the ramp, a late
+  // or missing packet lands on the target (also cleans up the float sum)
+  if(PIN(ramp) > 0.0 && ctx->timeout < LS_RAMP_TICKS) {
+    PIN(d_cmd) += ctx->d_step;
+    PIN(q_cmd) += ctx->q_step;
+  } else {
+    PIN(d_cmd) = ctx->d_tgt;
+    PIN(q_cmd) = ctx->q_tgt;
   }
 
 
