@@ -22,6 +22,15 @@ const uint8_t APBPrescTable[8]  = {0, 0, 0, 0, 1, 2, 3, 4};
 // point, whether after a reset or a jump from the bootloader.
 void SystemInit(void) {
   SCB->CPACR |= ((3UL << 10 * 2) | (3UL << 11 * 2));  // CP10, CP11 full access
+  // the bootloader enters the app with SYSCLK on the PLL. LL_RCC_DeInit
+  // writes SW = HSI and clears PLLON back to back, and PLLON can't be cleared
+  // until the switch is done, so finish the switch first (HAL_RCC_DeInit order)
+  LL_RCC_HSI_Enable();
+  while(!LL_RCC_HSI_IsReady()) {
+  }
+  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSI);
+  while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_HSI) {
+  }
   LL_RCC_DeInit();
 }
 

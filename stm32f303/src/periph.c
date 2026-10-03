@@ -52,6 +52,12 @@ void clock_init(void) {
   LL_RCC_LSI_Enable();
   while(!LL_RCC_LSI_IsReady()) {
   }
+  // f3_boot jumps here with SYSCLK on the PLL and the CubeF3 SystemInit no
+  // longer resets RCC. PLLON can't be cleared while the PLL is SYSCLK, so
+  // move SYSCLK to HSI first or PLLRDY never drops.
+  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSI);
+  while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_HSI) {
+  }
   LL_RCC_PLL_Disable();
   while(LL_RCC_PLL_IsReady()) {
   }
