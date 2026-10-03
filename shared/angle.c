@@ -107,7 +107,14 @@ inline float minus(float a, float b) {
 }
 
 inline float mod(float a) {
-  if(a + M_PI < 0.0f) {
+  // the rt callers stay within +-3 pi: a compare and subtract, no fmodf
+  if(a >= -M_PI && a < M_PI) {
+    return a;
+  } else if(a >= M_PI && a < 3.0 * M_PI) {
+    return a - 2.0 * M_PI;
+  } else if(a < -M_PI && a >= -3.0 * M_PI) {
+    return a + 2.0 * M_PI;
+  } else if(a + M_PI < 0.0f) {
     return -(fmodf(-(a + M_PI), M_PI * 2.0) - M_PI);
   } else {
     return fmodf(a + M_PI, M_PI * 2.0) - M_PI;
