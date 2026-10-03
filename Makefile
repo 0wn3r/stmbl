@@ -21,7 +21,7 @@ INCDIRS += shared
 
 SOURCES += src/main.c
 SOURCES += src/stm32f4xx_it.c
-SOURCES += src/system_stm32f4xx.c #TODO: update this, system file from cmsis
+SOURCES += src/f4_clock.c
 SOURCES += src/setup.c
 SOURCES += src/config.c
 # SOURCES += src/hal_conf.c
@@ -110,7 +110,6 @@ SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 
 CPPFLAGS += -DSTM32F405xx
 CPPFLAGS += -DHSE_VALUE=8000000
-CPPFLAGS += -DHSI_VALUE=16000000
 CPPFLAGS += -DHSE_STARTUP_TIMEOUT=0x05000
 LDSCRIPT = stm32_flash.ld
 

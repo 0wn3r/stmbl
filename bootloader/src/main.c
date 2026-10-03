@@ -19,6 +19,7 @@
 */
 
 #include "stm32f4xx_conf.h"
+#include "f4_clock.h"
 #include "version.h"
 
 #if __GNUC__ < 5
@@ -46,6 +47,10 @@ static int app_ok(void) {
 }
 
 int main(void) {
+  extern void *g_pfnVectors;
+  SCB->VTOR = (uint32_t)&g_pfnVectors;
+  clock_init();  // the ROM bootloader and the app were always entered at 168 MHz
+
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_CRC);
   // PA13 input with pull up
   LL_GPIO_SetPinPull(GPIOA, LL_GPIO_PIN_13, LL_GPIO_PULL_UP);

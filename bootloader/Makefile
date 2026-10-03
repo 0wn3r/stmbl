@@ -20,7 +20,8 @@ INCDIRS += shared
 SOURCES += bootloader/src/main.c
 SOURCES += bootloader/src/version.c
 SOURCES += bootloader/src/stm32f4xx_it.c
-SOURCES += bootloader/src/system_stm32f4xx.c
+SOURCES += src/f4_clock.c
+SOURCES += lib/STM32F4xx_HAL_Driver/src/stm32f4xx_ll_rcc.c
 
 # STM32CubeF4 LL drivers (header only inline functions)
 CPPFLAGS += -DUSE_FULL_LL_DRIVER
@@ -32,7 +33,6 @@ SOURCES += lib/CMSIS/Device/ST/STM32F4xx/Source/startup_stm32f405xx.s
 
 CPPFLAGS += -DSTM32F405xx
 CPPFLAGS += -DHSE_VALUE=8000000
-CPPFLAGS += -DHSI_VALUE=16000000
 CPPFLAGS += -DHSE_STARTUP_TIMEOUT=0x05000
 LDSCRIPT = bootloader/stm32_flash.ld
 

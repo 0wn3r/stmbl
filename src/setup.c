@@ -9,12 +9,15 @@
 #include "setup.h"
 #include "usbd_cdc_if.h"
 #include "defines.h"
+#include "f4_clock.h"
 
 LL_RCC_ClocksTypeDef RCC_Clocks;
 volatile uint32_t ADC_DMA_Buffer0[ADC_SAMPLES_IN_RT];  //240
 volatile uint32_t ADC_DMA_Buffer1[ADC_SAMPLES_IN_RT];
 
 void setup() {
+  clock_init();  // 168 MHz, from the HSI SystemInit() left us on
+
   //Enable clocks
   //TODO: small f4 does not have GPIOE
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_GPIOB | LL_AHB1_GRP1_PERIPH_GPIOC | LL_AHB1_GRP1_PERIPH_GPIOD | LL_AHB1_GRP1_PERIPH_GPIOE | LL_AHB1_GRP1_PERIPH_DMA1 | LL_AHB1_GRP1_PERIPH_DMA2 | LL_AHB1_GRP1_PERIPH_CRC);
