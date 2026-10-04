@@ -283,7 +283,7 @@ int main(void) {
   dac_start();
   tim8_start();
 
-  hal_init(1.0 / 15000.0, 0.0);
+  hal_init(1.0 / PWM_FREQ, 0.0);
   // hal load comps
   hal_parse("debug_level 1");
   hal_parse("load term");
