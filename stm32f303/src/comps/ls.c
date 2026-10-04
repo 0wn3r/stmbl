@@ -98,6 +98,7 @@ HAL_PIN(window);
 
 struct ls_ctx_t {
   uint32_t timeout;
+  uint32_t lock_voted;  // the first tick in this packet has trimmed ARR
   float d_tgt, q_tgt;    // the last packet's command
   float d_step, q_step;  // per tick towards it while ramping
   uint32_t sbrake_loss;  // brake for this link loss
@@ -210,6 +211,7 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct ls_pin_ctx_t *pins = (struct ls_pin_ctx_t *)pin_ptr;
 
   ctx->timeout     = 0;
+  ctx->lock_voted  = 0;
   ctx->sbrake_loss = 0;
   ctx->tx_addr     = 0;
   ctx->conf_seen   = 0;
@@ -235,12 +237,21 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(dma_pos2) = dma_pos;
   PIN(arr)      = PWM_RES;
 
+  // Phase lock to the f4 packets: the first tick inside a packet compares
+  // how far it has come with dma_pos_cmd and trims this period. Only the
+  // first: at 20 kHz three ticks land inside a packet and their votes never
+  // cancel. Between packets dma_pos is 0 or the whole packet.
   if(dma_pos > PIN(window) && dma_pos < sizeof(packet_to_hv_t) - PIN(window)) {
-    if(PIN(dma_pos_cmd) < dma_pos) {
-      PIN(arr) = PWM_RES - PIN(inc);
-    } else if(PIN(dma_pos_cmd) > dma_pos) {
-      PIN(arr) = PWM_RES + PIN(inc);
+    if(!ctx->lock_voted) {
+      ctx->lock_voted = 1;
+      if(PIN(dma_pos_cmd) < dma_pos) {
+        PIN(arr) = PWM_RES - PIN(inc);
+      } else if(PIN(dma_pos_cmd) > dma_pos) {
+        PIN(arr) = PWM_RES + PIN(inc);
+      }
     }
+  } else {
+    ctx->lock_voted = 0;
   }
 
   uint32_t fault = 0;
