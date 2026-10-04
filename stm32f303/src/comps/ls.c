@@ -378,6 +378,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     state.pins.dc_volt   = PIN(dc_volt);
     state.pins.pwm_volt  = PIN(pwm_volt);
     state.pins.emf_val   = PIN(emf_val);
+    state.pins.pwm_freq  = PWM_FREQ;
 
     // fill tx struct
     ctx->packet_from_hv.fault             = (uint8_t)PIN(fault_in);

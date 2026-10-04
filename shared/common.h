@@ -130,6 +130,7 @@ typedef union {
     float pwm_volt;
     float y;
     float emf_val;  // emf0 result number emf_sel
+    float pwm_freq;  // PWM and rt rate the image was built for [Hz]
   } pins;
   float data[sizeof(struct f3_state_data_temp) / 4];
 } f3_state_data_t;

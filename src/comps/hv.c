@@ -65,6 +65,7 @@ HAL_PIN(u_fb);
 HAL_PIN(v_fb);
 HAL_PIN(w_fb);
 HAL_PIN(emf_val);  // emf0 result number emf_sel, from the f3
+HAL_PIN(pwm_freq);  // f3 PWM and rt rate [Hz], 15000 from an f3 that doesn't report it
 
 // misc
 HAL_PIN(rev);
@@ -275,9 +276,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
                 PIN(duty) = PIN(abs_volt) / PIN(pwm_volt);
               }
 
-              uint16_t a         = ctx->from_hv.packet_from_hv.header.conf_addr;
-              a                  = CLAMP(a, 0, sizeof(f3_state_data_t) / 4 - 1);
-              ctx->state.data[a] = ctx->from_hv.packet_from_hv.header.config.f32;
+              // an address past this image's state is a newer f3's word: ignore it
+              uint16_t a = ctx->from_hv.packet_from_hv.header.conf_addr;
+              if(a < sizeof(f3_state_data_t) / 4) {
+                ctx->state.data[a] = ctx->from_hv.packet_from_hv.header.config.f32;
+              }
 
               PIN(dc_volt)   = ctx->state.pins.dc_volt;
               PIN(pwm_volt)  = ctx->state.pins.pwm_volt;
@@ -289,6 +292,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               PIN(core_temp) = ctx->state.pins.core_temp;
               PIN(y)         = ctx->state.pins.y;
               PIN(emf_val)   = ctx->state.pins.emf_val;
+              PIN(pwm_freq)  = ctx->state.pins.pwm_freq > 0.0 ? ctx->state.pins.pwm_freq : 15000.0;
 
               // not measured: P = 3/2 (ud id + uq iq) from the commanded
               // voltages, so inverter losses are left out
