@@ -27,7 +27,10 @@
 * - Slip compensation from the ACTIVE current, signed: the current along the
 *   voltage vector, which is torque producing and goes negative when the motor
 *   brakes, minus nothing for magnetizing. slip_n is the rated slip in
-*   mechanical rad/s at active current cur_n.
+*   mechanical rad/s at active current cur_n. It uses the active current low
+*   passed at damp_hz, so it follows the load but not the rotor swing:
+*   unfiltered, every current swing would move the field and feed the
+*   hunting.
 * - `vel_e` = (vel + slip) * polecount, synchronous electrical speed for
 *   angle0.vel_cmd, so hv0.vel is right and the f3 extrapolates between packets.
 * - Damping (optional): open loop V/f on a lightly loaded motor hunts, the
@@ -44,7 +47,7 @@
 *   vel_src 1 uses an estimate instead, no encoder: the air gap torque
 *   1.5 * (u * i_act - r * |i|^2) / synchronous speed over `j` is the rotor
 *   acceleration; less the field's own acceleration (the ramp, stall
-*   prevention, damp), high passed at damp_hz and integrated (leaky at
+*   prevention, slip, damp), high passed at damp_hz and integrated (leaky at
 *   damp_hz), it gives the swing of the rotor against the field, `w_est`. Needs `j` (conf0.j) and `r` (conf0.r).
 */
 
@@ -100,7 +103,7 @@ struct vf_ctx_t {
   float w_lp;  // high passed speed swing, low passed at damp_lp_hz
   float t_lp;  // relative acceleration low pass at damp_hz, high pass
   float w_est; // speed swing estimate, leaky integral of the torque swing
-  float vel_f; // last field speed vel + damp, for the field acceleration
+  float vel_f; // last field speed vel + slip + damp, for the field acceleration
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -185,7 +188,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     // i_act follows the power: positive motoring in either direction, so the
     // slip adds in the direction of rotation when motoring and takes away
     // when braking
-    slip = LIMIT(PIN(slip_n) * i_act / PIN(cur_n), 2.0 * PIN(slip_n)) * SIGN(vel);
+    slip = LIMIT(PIN(slip_n) * ctx->i_lp / PIN(cur_n), 2.0 * PIN(slip_n)) * SIGN(vel);
   }
 
   float boost = 0.0;
@@ -212,8 +215,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     float w_s    = MAX(ABS(vel + slip), 5.0);  // synchronous speed [rad/s mech]
     float torque = 1.5 * (u * i_act - PIN(r) * (id * id + iq * iq)) / w_s;
     // rotor acceleration less field acceleration, both [rad/s^2 mech]
-    float acc_f = (vel + PIN(damp) - ctx->vel_f) / period;
-    ctx->vel_f  = vel + PIN(damp);
+    float acc_f = (vel + slip + PIN(damp) - ctx->vel_f) / period;
+    ctx->vel_f  = vel + slip + PIN(damp);
     float a_rel = PIN(j) > 0.0 ? torque / PIN(j) - acc_f : 0.0;
     ctx->t_lp += (a_rel - ctx->t_lp) * k_hp;
     if(PIN(j) > 0.0) {
