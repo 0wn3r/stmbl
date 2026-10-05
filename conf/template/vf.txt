@@ -56,6 +56,7 @@ vf0.iq = hv0.iq_fb
 vf0.ud = hv0.ud_fb
 vf0.uq = hv0.uq_fb
 vf0.dc_volt = hv0.dc_volt
+vf0.pwm_volt = hv0.pwm_volt
 vf0.dc_hold = conf0.high_dc_volt
 angle0.src = 3
 angle0.vel_cmd = vf0.vel_e

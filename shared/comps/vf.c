@@ -20,7 +20,10 @@
 *   motor regenerating into the link). `scale` (fault0.scale) lowers i_stall,
 *   so a derate slows the motor instead of cutting its flux.
 * - Voltage: u_n * |vel| / vel_n plus a boost u_boost that fades linearly to 0
-*   at boost_vel. Phase peak volts, like every volt mode d_cmd.
+*   at boost_vel. Phase peak volts, like every volt mode d_cmd. Capped at
+*   duty * pwm_volt (hv0.pwm_volt, live from the dc link): above that speed
+*   the flux falls as 1/f, field weakening, and `u_lim` is 1. pwm_volt 0 =
+*   no cap.
 * - Slip compensation from the ACTIVE current, signed: the current along the
 *   voltage vector, which is torque producing and goes negative when the motor
 *   brakes, minus nothing for magnetizing. slip_n is the rated slip in
@@ -76,6 +79,8 @@ HAL_PIN(iq);         // *input*, hv0.iq_fb
 HAL_PIN(ud);         // *input*, hv0.ud_fb
 HAL_PIN(uq);         // *input*, hv0.uq_fb
 HAL_PIN(dc_volt);    // *input*, hv0.dc_volt
+HAL_PIN(pwm_volt);   // *input*, hv0.pwm_volt [V peak], 0 = no voltage cap
+HAL_PIN(duty);       // *parameter*, voltage cap as a fraction of pwm_volt
 
 HAL_PIN(vel);        // *output*, stator frequency, less slip [rad/s mech]
 HAL_PIN(vel_e);      // *output*, synchronous electrical speed [rad/s], to angle0.vel_cmd
@@ -86,6 +91,7 @@ HAL_PIN(stall);      // *output*, 1 accel held, 2 accel reversed, -1 decel held
 HAL_PIN(damp);       // *output*, damping frequency offset [rad/s mech]
 HAL_PIN(torque);     // *output*, air gap torque estimate [Nm]
 HAL_PIN(w_est);      // *output*, estimated rotor speed swing [rad/s mech]
+HAL_PIN(u_lim);      // *output*, 1 = u_cmd capped at duty * pwm_volt
 
 struct vf_ctx_t {
   float i_lp;  // active current low pass at damp_hz, damping high pass
@@ -118,6 +124,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(vel_src)   = 0.0;
   PIN(j)         = 0.0;
   PIN(r)         = 0.0;
+  PIN(duty)      = 0.9;
   PIN(damp_hz)    = 3.0;
   PIN(damp_lp_hz) = 20.0;
 }
@@ -186,6 +193,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     boost = PIN(u_boost) * MAX(1.0 - ABS(vel) / PIN(boost_vel), 0.0);
   }
   float u_cmd = PIN(u_n) * ABS(vel + slip) / MAX(PIN(vel_n), 0.1) + boost;
+  float u_max = CLAMP(PIN(duty), 0.0, 1.0) * PIN(pwm_volt);
+  float u_lim = 0.0;
+  if(PIN(pwm_volt) > 0.0 && u_cmd > u_max) {
+    u_cmd = u_max;
+    u_lim = 1.0;
+  }
 
   float damp = 0.0;
   if(PIN(en) > 0.0) {
@@ -231,6 +244,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(w_est) = ctx->w_est;
   PIN(vel_e) = (vel + slip + damp) * MAX(PIN(polecount), 1.0);
   PIN(u_cmd) = u_cmd;
+  PIN(u_lim) = u_lim;
 }
 
 hal_comp_t vf_comp_struct = {
