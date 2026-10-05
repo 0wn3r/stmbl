@@ -31,6 +31,19 @@
 * and, from the handover, ramp from the observed speed to vel_cmd at `acc`,
 * so the handover is bumpless and pid gets acceleration feedforward.
 *
+* Encoder plausibility guard (optional, `enc_tol` > 0, needs `vel_enc` from
+* an encoder with the same sign and scale as obs0.vel_m, e.g. a spindle
+* orientation encoder). The tolerance is enc_tol times the slip model's own
+* limit, `slip_max` (acim_flux0.slip_max, electrical) / polecount, so about 1
+* fits any motor: in I/f the frequency stays within it of the encoder speed,
+* so a rotor that does not follow is not left behind. In state 3 an observer
+* speed further than it from the encoder for `enc_time`
+* falls back to I/f, seeded from the encoder, and sets `enc_err` (held until
+* `en` = 0; link it to a fault input to trip instead). `slip_err` is
+* obs0.vel_m - vel_enc in state 3, low passed at 1 Hz: steady, it is the
+* slip model's error, a check on acim_flux0.tr without the MRAS. enc_tol 0
+* = off.
+*
 * Speeds are mechanical rad/s. `vel_e` is f * polecount for angle0.vel_cmd,
 * `src` goes to angle0.src.
 */
@@ -64,12 +77,19 @@ HAL_PIN(q_cmd);       // *output*, to hv0.q_cmd
 HAL_PIN(vel_ref);     // *output*, speed command for pid [rad/s mech], to pid0.vel_ext_cmd
 HAL_PIN(acc_ref);     // *output*, its slope [rad/s^2], to pid0.acc_ext_cmd
 HAL_PIN(f3_mode);     // *output*, to hv0.obs_mode: f3 obs shadow while on, commutating in state 3
+HAL_PIN(vel_enc);     // *input*, encoder rotor speed [rad/s mech], for the guard
+HAL_PIN(enc_tol);     // *parameter*, allowed |speed - vel_enc| as a multiple of slip_max, 0 = no guard
+HAL_PIN(slip_max);    // *parameter*, slip limit [rad/s electrical], acim_flux0.slip_max
+HAL_PIN(enc_time);    // *parameter*, observer error longer than this falls back [s]
+HAL_PIN(enc_err);     // *output*, 1 = observer disagreed with the encoder, held until en 0
+HAL_PIN(slip_err);    // *output*, obs0.vel_m - vel_enc in state 3, 1 Hz low pass [rad/s mech]
 
 struct sl_seq_ctx_t {
   float time;
   float free_time;
   float fade;
   float ref;
+  float enc_time;
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -83,6 +103,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(hyst)       = 10.0;
   PIN(lock_time)  = 0.1;
   PIN(fade_time)  = 0.1;
+  PIN(enc_time)   = 0.05;
   PIN(src)        = 3.0;
   PIN(track)      = 1.0;
 }
@@ -95,12 +116,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float f      = PIN(f);
   float w_hand = MAX(PIN(w_hand), 1.0);
   float ov     = PIN(obs_vel);
+  float tol    = PIN(enc_tol) > 0.0 ? PIN(enc_tol) * MAX(PIN(slip_max), 1.0) / MAX(PIN(polecount), 1.0) : 0.0;
+  float ve     = PIN(vel_enc);
 
   if(PIN(en) <= 0.0) {
     state          = 0;
     f              = 0.0;
     ctx->time      = 0.0;
     ctx->free_time = 0.0;
+    ctx->enc_time  = 0.0;
+    PIN(enc_err)   = 0.0;
+    PIN(slip_err)  = 0.0;
   }
 
   switch(state) {
@@ -122,6 +148,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     case 2:
       f += LIMIT(PIN(vel_cmd) - f, MAX(PIN(acc), 0.0) * period);
+      if(tol > 0.0) {  // the field does not run away from the rotor
+        f = CLAMP(f, ve - tol, ve + tol);
+      }
       if(ABS(f) >= 0.5 * w_hand) {
         ctx->free_time += period;
       } else {
@@ -139,7 +168,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       f = ov;
       ctx->fade -= period / MAX(PIN(fade_time), period);
       ctx->fade = MAX(ctx->fade, 0.0);
-      if(PIN(obs_ok) <= 0.0 || ABS(ov) < w_hand - MAX(PIN(hyst), 0.0)) {
+      if(tol > 0.0) {
+        PIN(slip_err) += (ov - ve - PIN(slip_err)) * CLAMP(2.0 * M_PI * period, 0.0, 1.0);
+        ctx->enc_time = ABS(ov - ve) > tol ? ctx->enc_time + period : 0.0;
+      }
+      if(tol > 0.0 && ctx->enc_time > MAX(PIN(enc_time), period)) {
+        state          = 2;  // observer implausible: back to I/f from the encoder speed
+        f              = ve;
+        ctx->free_time = 0.0;
+        ctx->enc_time  = 0.0;
+        PIN(enc_err)   = 1.0;
+      } else if(PIN(obs_ok) <= 0.0 || ABS(ov) < w_hand - MAX(PIN(hyst), 0.0)) {
         state          = 2;
         ctx->free_time = 0.0;
       }
