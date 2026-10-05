@@ -107,11 +107,28 @@ typedef enum {
   CRC_CHECK,
   SEND_TO_APP,
   FLASH_FAILED,
+  VERIFY_FLASH,
 } flash_state_t;
 
 flash_state_t flash_state;
 
 uint32_t send_to_bootloader;
+
+// hv_verify: with the f3 sitting in its bootloader (after a failed
+// hv_update), read the app area back word by word with the bootloader's
+// READ opcode and compare it with the embedded image, plus VERIFY_EXTRA
+// words past its end, which an erased app area holds as 0xFFFFFFFF.
+#define VERIFY_EXTRA 8
+#define VERIFY_LIST 8
+static uint32_t send_verify;
+static volatile struct {
+  uint32_t state;  // 0 idle, 1 running, 2 done, 3 no answer
+  uint32_t words;  // words read so far
+  uint32_t total;
+  uint32_t bad;
+  uint32_t addr[VERIFY_LIST], got[VERIFY_LIST], want[VERIFY_LIST];
+  uint32_t vi_crc, vi_size;  // the f3's version_info image_crc and image_size
+} verify;
 
 extern uint8_t _binary_obj_hvf3_hvf3_bin_start;
 extern uint8_t _binary_obj_hvf3_hvf3_bin_size;
@@ -370,6 +387,37 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           case FLASH_FAILED:
 
             break;
+          case VERIFY_FLASH:
+            if(ctx->from_hv.packet_from_hv.header.slave_addr == 255 && ctx->from_hv.packet_from_hv.header.len == (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4) {
+              uint32_t a = 0x08004000 + ctx->addr * 4;
+              if(ctx->from_hv.packet_from_hv_bootloader.state == BOOTLOADER_STATE_OK && ctx->from_hv.packet_from_hv_bootloader.cmd == BOOTLOADER_OPCODE_READ && ctx->from_hv.packet_from_hv_bootloader.addr == a) {
+                uint32_t n    = ((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) / 4;
+                uint32_t got  = ctx->from_hv.packet_from_hv_bootloader.value;
+                uint32_t want = ctx->addr < n ? ((uint32_t *)&(_binary_obj_hvf3_hvf3_bin_start))[ctx->addr] : 0xFFFFFFFFu;
+                if(ctx->addr == 0x188 / 4) {
+                  verify.vi_crc = got;
+                }
+                if(ctx->addr == 0x18C / 4) {
+                  verify.vi_size = got;
+                }
+                if(got != want) {
+                  if(verify.bad < VERIFY_LIST) {
+                    verify.addr[verify.bad] = a;
+                    verify.got[verify.bad]  = got;
+                    verify.want[verify.bad] = want;
+                  }
+                  verify.bad++;
+                }
+                ctx->timeout = 0;
+                ctx->addr++;
+                verify.words = ctx->addr;
+                if(ctx->addr >= verify.total) {
+                  verify.state = 2;
+                  flash_state  = SLAVE_IN_APP;
+                }
+              }
+            }
+            break;
         }
 
 
@@ -437,6 +485,18 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       ctx->conf_addr %= sizeof(f3_config_data_t) / 4;
 
+      if(send_verify) {
+        send_verify    = 0;
+        ctx->addr      = 0;
+        ctx->timeout   = 0;
+        verify.words   = 0;
+        verify.bad     = 0;
+        verify.vi_crc  = 0;
+        verify.vi_size = 0;
+        verify.total   = ((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) / 4 + VERIFY_EXTRA;
+        verify.state   = 1;
+        flash_state    = VERIFY_FLASH;
+      }
       if(send_to_bootloader) {
         send_to_bootloader = 0;
         flash_state        = SEND_TO_BOOTLOADER;
@@ -528,6 +588,26 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         flash_state  = SLAVE_IN_APP;
       }
       break;
+    case VERIFY_FLASH:
+      ctx->to_hv.packet_to_hv.header.slave_addr = 255;
+      ctx->to_hv.packet_to_hv.header.flags.cmd  = NO_CMD;
+      ctx->to_hv.packet_to_hv.header.flags.counter++;
+      ctx->to_hv.packet_to_hv.header.len        = (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4;
+      ctx->to_hv.packet_to_hv.header.conf_addr  = 0;
+      ctx->to_hv.packet_to_hv.header.config.f32 = 0;
+      ctx->to_hv.packet_to_hv_bootloader.addr   = 0x08004000 + ctx->addr * 4;
+      ctx->to_hv.packet_to_hv_bootloader.value  = 0;
+      ctx->to_hv.packet_to_hv_bootloader.cmd    = BOOTLOADER_OPCODE_READ;
+
+      tx_size = sizeof(packet_bootloader_t);
+
+      if(ctx->timeout > 200) {  // 40 ms without an answer: the f3 is not in its bootloader
+        ctx->timeout = 0;
+        verify.state = 3;
+        flash_state  = SLAVE_IN_APP;
+      }
+      break;
+
     case FLASH_FAILED:
       if(ctx->timeout > 10) {
         ctx->timeout = 0;
@@ -574,6 +654,15 @@ void send_boot(char *ptr) {
 }
 COMMAND("hv_update", send_boot, "try hv update");
 
+void hv_verify(char *ptr) {
+  if(flash_state == SLAVE_IN_APP) {
+    send_verify = 1;
+  } else {
+    printf("hv_verify: busy\n");
+  }
+}
+COMMAND("hv_verify", hv_verify, "read the f3 app area back from its bootloader and compare it with the embedded image");
+
 static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct hv_ctx_t *ctx = (struct hv_ctx_t *)ctx_ptr;
   // struct hv_pin_ctx_t *pins = (struct hv_pin_ctx_t *)pin_ptr;
@@ -582,10 +671,32 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     printf("%c", c);
   }
 
+  static uint32_t verify_shown = 0, verify_tenth = 0;
+  if(verify.state == 1 && verify.total) {
+    uint32_t tenth = verify.words * 10 / verify.total;
+    if(tenth != verify_tenth) {
+      verify_tenth = tenth;
+      printf("hv_verify: %lu%%, %lu bad so far\n", tenth * 10, verify.bad);
+    }
+    verify_shown = 0;
+  } else if(verify.state >= 2 && !verify_shown) {
+    verify_shown = 1;
+    verify_tenth = 0;
+    if(verify.state == 3) {
+      printf("hv_verify: no answer at word %lu: the f3 is not in its bootloader\n", verify.words);
+    }
+    printf("hv_verify: %lu of %lu words read (image %lu + %u past its end), %lu differ\n", verify.words, verify.total, verify.total - VERIFY_EXTRA, VERIFY_EXTRA, verify.bad);
+    printf("hv_verify: f3 version_info image_crc 0x%08lx image_size %lu, embedded image_crc 0x%08lx image_size %lu\n", verify.vi_crc, verify.vi_size,
+           ((uint32_t *)&(_binary_obj_hvf3_hvf3_bin_start))[0x188 / 4], ((uint32_t *)&(_binary_obj_hvf3_hvf3_bin_start))[0x18C / 4]);
+    for(uint32_t i = 0; i < verify.bad && i < VERIFY_LIST; i++) {
+      printf("hv_verify: 0x%08lx f3 0x%08lx image 0x%08lx\n", verify.addr[i], verify.got[i], verify.want[i]);
+    }
+  }
+
   static flash_state_t last_flash_state = SLAVE_IN_APP;
   static uint32_t last_addr             = 0;
 
-  if(ctx->addr >= last_addr + 1024) {
+  if(flash_state == SEND_APP && ctx->addr >= last_addr + 1024) {
     printf("hv_update: status: %i%%\n", (int)(100.0 * ctx->addr * 4. / (float)((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size))));
     last_addr = ctx->addr;
   }
@@ -594,6 +705,10 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     switch(flash_state) {
       case SLAVE_IN_APP:
         printf("hv_update: SLAVE_IN_APP\n");
+        break;
+      case VERIFY_FLASH:
+        printf("hv_verify: reading the f3 app area\n");
+        last_addr = 0;
         break;
       case SEND_TO_BOOTLOADER:
         printf("hv_update: SEND_TO_BOOTLOADER\n");
