@@ -1,7 +1,7 @@
 # Optimization level, can be [0, 1, 2, 3, s].
 #     0 = turn off optimization. s = optimize for size.
 #
-OPT = -O3
+OPT = -O2  # -O3 only added 2.4 KB of flash and 40 B of CCM (2026-10-03)
 # OPT = -O1         # for debugging
 
 # Object files directory
@@ -84,7 +84,10 @@ CFLAGS += -std=gnu11
 CFLAGS += -ffunction-sections
 CFLAGS += -fdata-sections
 CFLAGS += -Wall
-CFLAGS += -fno-builtin ## from old
+# no -fno-builtin: sqrtf/fabsf must compile to vsqrt/vabs, not libm calls.
+# GCC then also turns zeroing/copy loops into memset/memcpy calls; in rt code
+# running from CCM or SRAM that would be a hidden call into flash, so not that.
+CFLAGS += -fno-tree-loop-distribute-patterns
 CFLAGS += -nostartfiles
 CFLAGS += -Wfatal-errors
 CFLAGS += -Wno-pointer-sign #for usb lib...
@@ -98,6 +101,10 @@ CFLAGS += -fno-signaling-nans
 CFLAGS += -fno-rounding-math
 CFLAGS += -fno-signed-zeros
 CFLAGS += -fno-math-errno
+# x / c as x * (1 / c): the rt divided by constants (ADC scaling, /3, filter
+# time constants) 16 times a tick at ~14 cycles each. One extra rounding on
+# 12 bit ADC data.
+CFLAGS += -freciprocal-math
 #CFLAGS += -Wstrict-prototypes
 #CFLAGS += -Wextra
 #CFLAGS += -Wpointer-arith
@@ -177,7 +184,7 @@ stm32f303/inc/commandslist.h: tools/create_cmd.py $(SOURCES)
 	@$(MKDIR) -p $(dir $@)
 	@$(PYTHON) tools/create_cmd.py $@ $(SOURCES)
 
-stm32f303/src/hal_tbl.c: tools/create_hal_tbl.py $(COMPS)
+stm32f303/src/hal_tbl.c: tools/create_hal_tbl.py $(COMPS) stm32f303/comps.mak
 	@echo Generating HAL table
 	@$(MKDIR) -p $(dir $@)
 	@$(PYTHON) tools/create_hal_tbl.py $@ $(COMPS)

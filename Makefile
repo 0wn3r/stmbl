@@ -124,6 +124,7 @@ CPPFLAGS += $(addprefix -I,$(INCDIRS))
 #  -save-temps    preserve .s and .i-files
 #
 CPPFLAGS += -fsingle-precision-constant
+CPPFLAGS += -fno-math-errno  # sqrtf is a bare vsqrt, nothing reads errno from libm
 CPPFLAGS += -g
 # CPPFLAGS += -save-temps=obj
 
@@ -139,7 +140,7 @@ CFLAGS += -fdata-sections
 CFLAGS += -Wall
 CFLAGS += -Wmaybe-uninitialized
 CFLAGS += -Wuninitialized
-CFLAGS += -fno-builtin ## from old
+# no -fno-builtin: sqrtf/fabsf compile to vsqrt/vabs instead of libm calls
 CFLAGS += -nostartfiles
 CFLAGS += -Wfatal-errors
 #CFLAGS += -Wstrict-prototypes
