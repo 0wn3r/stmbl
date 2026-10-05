@@ -67,6 +67,7 @@ int rb_write(struct ringbuf *rb, const void *data, int len);
  * Read one line, without the '\n', as a string into ptr
  *
  * \return  bytes taken including the '\n', 0 if no complete line of at most
- *          len bytes is in the buffer yet (nothing is taken then)
+ *          len bytes is in the buffer yet. Nothing is taken then, unless
+ *          len bytes without a '\n' are waiting: those are dropped.
  */
 int rb_getline(struct ringbuf *rb, char *ptr, int len);

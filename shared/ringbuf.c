@@ -66,5 +66,13 @@ int rb_getline(struct ringbuf *rb, char *ptr, int len) {
     }
     ptr[i] = c;
   }
+  // len bytes and still no '\n': this can never become a line that fits.
+  // Drop them, or the reader would wait on them forever and every later
+  // line behind them too (a dead terminal after one overlong or binary
+  // burst from the host).
+  if(len > 0 && avail >= (unsigned)len) {
+    unsigned d = rb->rd + (unsigned)len;
+    rb->rd     = d >= rb->bufsize ? d - rb->bufsize : d;
+  }
   return 0;
 }
