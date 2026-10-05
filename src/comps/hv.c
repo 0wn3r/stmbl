@@ -480,7 +480,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       // flash_state = SLAVE_IN_APP;
 
-      if(ctx->timeout > 20000) {
+      // 12 s: a full erase takes 1-2 s and a lost reply costs another round
+      // (the f3 bootloader skips pages that are already blank on a repeat)
+      if(ctx->timeout > 60000) {
         ctx->timeout = 0;
         flash_state  = FLASH_FAILED;
       }

@@ -430,6 +430,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   if(ctx->timeout == LS_TIMEOUT_TICKS + 1) {
     // brake on the loss only if the motor was driven or already braking
     ctx->sbrake_loss = PIN(sbrake_arm) > 0.0 && (PIN(en) > 0.0 || PIN(sbrake) > 0.0);
+    // a restarted f4 sends its config from word 0 again: no enable until the
+    // whole set has come round once more, as after an f3 boot
+    ctx->conf_seen = 0;
+    PIN(conf_ok)   = 0.0;
   }
   if(ctx->timeout > LS_TIMEOUT_TICKS) {  //disable driver
     PIN(en)     = 0.0;
