@@ -30,6 +30,8 @@ HAL_PIN(l_zb);      // |Z| at l_freq_b [ohm]
 HAL_PIN(l_ia);      // injected current amplitude reached at l_freq_a [A]
 HAL_PIN(l_ib);      // injected current amplitude reached at l_freq_b [A]
 HAL_PIN(l_res);     // resistance the two frequencies imply, stator plus cage [ohm]
+HAL_PIN(l_fa);      // lower injection frequency used [Hz]
+HAL_PIN(l_fb);      // upper injection frequency used [Hz]
 
 HAL_PIN(rot_half);    // *parameter*, rotor test, time at each current level [s]
 HAL_PIN(rot_cycles);  // *parameter*, rotor test, measured cycles (two edges each)
@@ -64,6 +66,21 @@ HAL_PIN(r_ok);          // this run produced a resistance
 
 HAL_PIN(pp);
 HAL_PIN(out_rev);
+HAL_PIN(spin);          // *parameter*, 1 = go on to the pole pair spin after the standstill test (turns the rotor)
+
+// Plate values for the V/f set the standstill test computes; 0 = not given
+HAL_PIN(n_volt);        // *parameter*, plate voltage, line to line rms [V]
+HAL_PIN(n_freq);        // *parameter*, plate frequency at that voltage [Hz]
+HAL_PIN(n_cur);         // *parameter*, plate current, rms [A]
+HAL_PIN(n_pp);          // *parameter*, pole pairs (poles / 2)
+HAL_PIN(id_n);          // magnetizing current at plate voltage and frequency [A peak]
+HAL_PIN(iq_n);          // active current at plate current [A peak]
+HAL_PIN(vf_u_n);        // vf0.u_n, phase peak volts at vf_vel_n [V]
+HAL_PIN(vf_vel_n);      // vf0.vel_n [rad/s mech]
+HAL_PIN(vf_boost);      // vf0.u_boost [V]
+HAL_PIN(vf_boost_vel);  // vf0.boost_vel [rad/s mech]
+HAL_PIN(vf_slip_n);     // vf0.slip_n, slip at vf_cur_n [rad/s mech]
+HAL_PIN(vf_cur_n);      // vf0.cur_n, active current at plate current [A peak]
 
 HAL_PIN(test_cur);
 HAL_PIN(test_vel);
@@ -91,6 +108,7 @@ HAL_PIN(avg_test_volt);
 struct idacim_ctx_t {
   // leakage injection
   uint8_t l_fi;     // 0 = l_freq_a, 1 = l_freq_b
+  uint8_t l_up;     // the pair runs at l_freq_a/b times 2^l_up
   uint8_t l_stage;  // 0 settle, 1 size the amplitude, 2 measure
   uint16_t l_block; // sizing blocks done
   uint32_t l_n;     // samples in this block or window
@@ -102,6 +120,8 @@ struct idacim_ctx_t {
   uint16_t r_edge;      // edges seen in this rung, the first comes from another level
   uint16_t r_n;         // edges that produced a fit (nrt)
   uint16_t r_seen;      // edges handed to nrt, fitted or not
+  float half_e;         // this edge's length [s]
+  float t0_e;           // this edge's rot_t0 [s]
   uint16_t dec;         // ticks since the fit sums were last fed
   uint8_t rung;         // 0 = the test at test_cur, 1.. = ladder rungs
   uint8_t act;          // this edge is being fitted
@@ -383,6 +403,52 @@ static void rot_nrt(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) {
   }
 }
 
+// The V/f set from the standstill measurements and the plate: what a VFD's
+// standstill autotune gives, enough to run a spindle without feedback.
+// The plate voltage at the plate frequency sets the flux; at no load the
+// stator sees r id_n + j w ls id_n, so that voltage gives id_n with the ls
+// this test read. ls is lmr's chord over test_cur/2..test_cur, so id_n is
+// best when test_cur is near it. Slip at active current iq is iq / (tr i_mr)
+// electrical, and the boost covers r id_n where the emf is still small.
+static void vf_set(struct idacim_pin_ctx_t *pins) {
+  float u  = PIN(n_volt) * 0.8164966;  // line to line rms to phase peak
+  float we = 2.0 * M_PI * PIN(n_freq);
+  float pp = PIN(n_pp);
+  float r  = PIN(r);
+  float ls = PIN(ls);
+  float in = PIN(n_cur) * 1.4142136;
+  float id = u / sqrtf(r * r + we * we * ls * ls);
+  float iq = in > id ? sqrtf(in * in - id * id) : 0.0;
+
+  PIN(id_n)         = id;
+  PIN(iq_n)         = iq;
+  PIN(vf_u_n)       = u;
+  PIN(vf_vel_n)     = we / pp;
+  PIN(vf_boost)     = r * id;
+  PIN(vf_boost_vel) = CLAMP(3.0 * r / ls, 0.02 * we, 0.2 * we) / pp;  // where w ls is 3 r
+  PIN(vf_slip_n)    = iq / (PIN(tr) * id) / pp;
+  PIN(vf_cur_n)     = iq;
+
+  printf("<font color='green'># V/f from the standstill test and the plate (%f V, %f Hz, %f A, %f pole pairs):</font>\n", PIN(n_volt), PIN(n_freq), PIN(n_cur), pp);
+  printf("conf0.polecount = %f <font color='green'># append to config</font>\n", pp);
+  printf("vf0.u_n = %f <font color='green'># append to config</font>\n", PIN(vf_u_n));
+  printf("vf0.vel_n = %f <font color='green'># append to config</font>\n", PIN(vf_vel_n));
+  printf("vf0.u_boost = %f <font color='green'># append to config</font>\n", PIN(vf_boost));
+  printf("vf0.boost_vel = %f <font color='green'># append to config</font>\n", PIN(vf_boost_vel));
+  printf("vf0.slip_n = %f <font color='green'># append to config</font>\n", PIN(vf_slip_n));
+  printf("vf0.cur_n = %f <font color='green'># append to config</font>\n", PIN(vf_cur_n));
+  printf("acim_foc0.id_n = %f <font color='green'># FOC start value, the rotating test refines it</font>\n", id);
+  printf("<font color='green'># id_n %f A and iq_n %f A peak at the plate current.\n", id, iq);
+  if(in <= id) {
+    printf("</font><font color='red'># id_n is over the plate current: check n_volt, n_freq and n_cur.</font>\n");
+  } else if(id > 1.2 * PIN(test_cur) || id < 0.6 * PIN(test_cur)) {
+    printf("# lmr was read at %f..%f A: for an id_n that saturates the iron the\n", PIN(test_cur) * 0.5, PIN(test_cur));
+    printf("# way it will run, rerun with idacim0.test_cur near %f.</font>\n", id);
+  } else {
+    printf("# lmr was read at %f..%f A, close enough to id_n.</font>\n", PIN(test_cur) * 0.5, PIN(test_cur));
+  }
+}
+
 static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct idacim_ctx_t *ctx       = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
@@ -423,7 +489,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         if(PIN(l_ok) > 0.0) {
           printf("conf0.l = %f <font color='green'># leakage, sigma*Ls</font>\n", PIN(l));
-          printf("<font color='green'># from |Z| %f / %f ohm at %f / %f Hz, which\n", PIN(l_za), PIN(l_zb), PIN(l_freq_a), PIN(l_freq_b));
+          printf("<font color='green'># from |Z| %f / %f ohm at %f / %f Hz, which\n", PIN(l_za), PIN(l_zb), PIN(l_fa), PIN(l_fb));
           printf("# also imply %f ohm of stator plus cage resistance there.\n", PIN(l_res));
           printf("# right for acim_foc (hv0.psi carries the rotor flux); acim_ttc\n");
           printf("# has no flux term, so there it makes iq fall short at speed.</font>\n");
@@ -447,6 +513,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("# lmr = Lm^2/Lr = %f mH, ls = %f mH, at %f..%f A on d.\n", PIN(lmr) * 1000.0, PIN(ls) * 1000.0, PIN(test_cur) * 0.5, PIN(test_cur));
           printf("# tr is the rotor's at this temperature and flux: a hot cage\n");
           printf("# reads shorter, and rated flux saturates it a little shorter.</font>\n");
+          if(PIN(n_volt) > 0.0 && PIN(n_freq) > 0.0 && PIN(n_cur) > 0.0 && PIN(n_pp) >= 1.0) {
+            vf_set(pins);
+          } else {
+            printf("<font color='green'># for the V/f set give the plate: idacim0.n_volt, n_freq, n_cur, n_pp</font>\n");
+          }
           if(PIN(rot_dip) > 0.1) {
             printf("<font color='red'># the current was %f of the step off at rot_t0:\n", PIN(rot_dip));
             printf("# the loop is slow. the fit uses the current that flowed, but\n");
@@ -510,8 +581,16 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("nothing below is measured, do not append it\n");
         printf("check that idacim0.test_cur (%f) is under conf0.max_ac_cur\n", PIN(test_cur));
       }
-      // walk on only if r worked: hv0.r is this pin
-      PIN(state) = PIN(r_ok) > 0.0 ? 2.0 : 0.0;
+      // the standstill test ends here; the pole pair spin turns the rotor and
+      // runs only when asked for. walk on only if r worked: hv0.r is this pin
+      if(PIN(r_ok) <= 0.0) {
+        PIN(state) = 0.0;
+      } else if(PIN(spin) > 0.0) {
+        PIN(state) = 2.0;
+      } else {
+        printf("standstill test done\n");
+        PIN(state) = 3.0;
+      }
       break;
 
     case 20:  // pp
@@ -666,8 +745,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos)  = 0.0;
       PIN(q_cmd)    = 0.0;
 
-      float fa = CLAMP(PIN(l_freq_a), 20.0, 0.2 / period);
-      float fb = CLAMP(PIN(l_freq_b), 20.0, 0.2 / period);
+      float fa = CLAMP(PIN(l_freq_a) * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
+      float fb = CLAMP(PIN(l_freq_b) * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
       float f  = ctx->l_fi == 0 ? fa : fb;
       float w  = 2.0 * M_PI * f;
       ctx->l_th += w * period;
@@ -739,6 +818,21 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             int ok     = l2 > 0.0 && PIN(l_ia) > target * 0.5 && PIN(l_ia) < target * 2.0 && i1 > target * 0.5 && i1 < target * 2.0;
             PIN(l_ok)  = ok ? 1.0 : 0.0;
             PIN(l_res) = r2 > 0.0 ? sqrtf(r2) : 0.0;
+            PIN(l_fa)  = fa;
+            PIN(l_fb)  = fb;
+            // a small leakage, as on high speed spindles, leaves |Z| mostly
+            // resistance at these frequencies, and the cage's rise between
+            // them then weighs on l^2. Go up an octave until the reactance at
+            // the upper one is twice the resistance, as far as rt can draw it.
+            if(ok && sqrtf(l2) * wb < 2.0 * PIN(l_res) && fb * 2.0 <= 0.2 / period && ctx->l_up < 3) {
+              ctx->l_up++;
+              ctx->l_fi    = 0;
+              ctx->l_stage = 0;
+              ctx->l_block = 0;
+              ctx->l_t     = 0.0;
+              ctx->l_n     = 0;
+              break;
+            }
             // hv0.l = idacim0.l, so the rotor test's current loop runs on this.
             // A failed read leaves the 1 mH init, a sane leakage for a few kW.
             PIN(l) = ok ? sqrtf(l2) : 0.001;
@@ -804,8 +898,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       int nrung  = (int)CLAMP(PIN(lad_n), 0.0, 4.0);
       float hi   = ctx->rung ? PIN(lad_top) * (float)ctx->rung / (float)MAX(nrung, 1) : PIN(test_cur);
-      float half = MAX(PIN(rot_half), 0.1);
-      float t0   = CLAMP(PIN(rot_t0), period, half * 0.25);
+      if(ctx->r_t == 0.0) {
+        // rot_half is the longest edge. Once an edge has given a tr, the
+        // next ones last 16 tr: past that the flux has settled and a longer
+        // edge only lets an offset error grow (as e t in lam). On a short tr,
+        // as on high speed spindles, 1.5 s edges spread 40-55% and 16 tr
+        // ones 7-9% (simulated, tr 20 ms). rot_t0 skips the current loop's
+        // settling; there it would skip most of the flux's move too, so it
+        // stays under a fifth of tr.
+        float tr_last = ctx->r_n > 0 ? ctx->tr_e[ctx->r_n - 1] : 0.0;
+        ctx->half_e   = MAX(PIN(rot_half), 0.1);
+        ctx->t0_e     = PIN(rot_t0);
+        if(tr_last > 0.0) {
+          ctx->half_e = CLAMP(16.0 * tr_last, 0.1, ctx->half_e);
+          ctx->t0_e   = MIN(ctx->t0_e, 0.2 * tr_last);
+        }
+      }
+      float half = ctx->half_e;
+      float t0   = CLAMP(ctx->t0_e, period, half * 0.25);
       float t1   = half * ROT_TAIL;
       int lv     = ctx->r_edge & 1;  // 0 at hi, 1 at half of it
       float rin  = PIN(r_2p) > 0.0 ? PIN(r_2p) : PIN(r);
