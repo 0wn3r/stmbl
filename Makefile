@@ -291,14 +291,6 @@ f3_btburn:
 hv_firmware.o: force_look
 	$(MAKE) -f stm32f303/Makefile all
 
-#build f103 firmware for V3 hardware
-f1: force_look
-	$(MAKE) -f stm32f103/Makefile
-
-#flash f103 firmware for V3 hardware using stlink
-f1_flash: boot
-	$(MAKE) -f stm32f103/Makefile flash
-
 f3_all_btburn: f3.bin
 	@$(DFU-UTIL) -d 0483:df11 -a 0 -s 0x08000000:leave -D f3.bin
 all_btburn: tools/bootloader.py f4.bin
@@ -334,7 +326,7 @@ stmbl.dfu: tools/dfu-convert.py $(TARGET).bin
 binall: f4.dfu f3.dfu stmbl.dfu
 
 format:
-	find src/ f3_boot/ bootloader/ stm32f103/ stm32f303/ shared/ inc/ tools/ -iname '*.h' -o -iname '*.c' | xargs clang-format -i
+	find src/ f3_boot/ bootloader/ stm32f303/ shared/ inc/ tools/ -iname '*.h' -o -iname '*.c' | xargs clang-format -i
 
 docs:
 	$(MAKE) -f docs/Makefile
@@ -353,7 +345,6 @@ clean:
 	rm -rf src/hal_tbl.c
 	@$(MAKE) -f bootloader/Makefile clean
 	@$(MAKE) -f f3_boot/Makefile clean
-	@$(MAKE) -f stm32f103/Makefile clean
 	@$(MAKE) -f stm32f303/Makefile clean
 	@$(MAKE) -f docs/Makefile clean
 
