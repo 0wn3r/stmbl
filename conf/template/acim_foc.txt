@@ -12,6 +12,9 @@ acim_foc0.rt_prio = 8.7
 acim_fw0.en = fault0.en_out
 acim_fw0.vel = angle0.vel
 acim_fw0.polecount = conf0.polecount
+acim_fw0.pwm_volt = hv0.pwm_volt
+acim_fw0.id_n = acim_foc0.id_n
+# acim_fw0.ls = conf0.l + lmr (stator inductance); 0 = no feedforward
 acim_flux0.en = fault0.en_out
 acim_flux0.id = hv0.id_fb
 acim_flux0.iq = hv0.iq_fb
