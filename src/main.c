@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include "main.h"
 #include "commands.h"
+#include "hw/hw.h"
 
 extern RCC_ClocksTypeDef RCC_Clocks;
 
@@ -58,9 +59,17 @@ void TIM_SLAVE_HANDLER(void) {
   }
 }
 
+// fb0 encoder counter and A/B pins, latched as close to the sin/cos samples
+// as the rt can get, for enc_fb. Reading them has no side effects, so this
+// runs whichever fb0 component is loaded.
+volatile uint32_t fb0_cnt_latch;
+volatile uint32_t fb0_idr_latch;
+
 //5 kHz interrupt for hal. at this point all ADCs have been sampled,
 //see setup_res() in setup.c if you are interested in the magic behind this.
 void DMA2_Stream0_IRQHandler(void) {
+  fb0_cnt_latch = FB0_ENC_TIM->CNT;
+  fb0_idr_latch = FB0_A_PORT->IDR;
   DMA_ClearITPendingBit(DMA2_Stream0, DMA_IT_TCIF0);
   hal_run_rt();
   if(DMA_GetITStatus(DMA2_Stream0, DMA_IT_TCIF0) == SET) {

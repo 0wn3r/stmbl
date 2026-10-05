@@ -37,6 +37,10 @@ struct enc_fb_ctx_t {
   float absoffset;
 };
 
+// latched in DMA2_Stream0_IRQHandler (main.c), see there
+extern volatile uint32_t fb0_cnt_latch;
+extern volatile uint32_t fb0_idr_latch;
+
 static int indexpos   = 0;
 static int indexprint = 0;
 
@@ -119,9 +123,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct enc_fb_ctx_t *ctx      = (struct enc_fb_ctx_t *)ctx_ptr;
   struct enc_fb_pin_ctx_t *pins = (struct enc_fb_pin_ctx_t *)pin_ptr;
 
-  //sample timer value and timer pins together, so we can calculate the quadrant of the timer
-  int32_t tim     = TIM_GetCounter(FB0_ENC_TIM);  //TODO: interrupt here?
-  uint32_t scgpio = FB0_A_PORT->IDR;
+  // timer value and timer pins, sampled together at the start of the rt
+  // interrupt, about 4 us after the last sin/cos sample. Read here they were
+  // about 50 us later (spindle bench, 128 lines): qdiff reached 2 from
+  // 220 rad/s and went uncorrected. Latched, no qdiff 2 up to 838 rad/s.
+  int32_t tim     = fb0_cnt_latch;
+  uint32_t scgpio = fb0_idr_latch;
 
   float p = 0.0;
   int r   = (int)PIN(res);
