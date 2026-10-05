@@ -34,6 +34,15 @@
 *   acceleration current out, the low pass the pwm and current loop ripple.
 *   Frequency only, the voltage stays on vel + slip. Clamped to 5 % of vel_n.
 *   k_damp 0 = off, positive damps.
+* - Speed damping (optional, needs a speed feedback): `k_vel` times the
+*   rotor speed swing (vel_fb - vel, same band pass) adds to `damp`. With an
+*   encoder this measures the swing directly, to find the damping law that
+*   an estimate can then replace. k_vel 0 = off.
+*   vel_src 1 uses an estimate instead, no encoder: the air gap torque
+*   1.5 * (u * i_act - r * |i|^2) / synchronous speed over `j` is the rotor
+*   acceleration; less the field's own acceleration (the ramp, stall
+*   prevention, damp), high passed at damp_hz and integrated (leaky at
+*   damp_hz), it gives the swing of the rotor against the field, `w_est`. Needs `j` (conf0.j) and `r` (conf0.r).
 */
 
 HAL_COMP(vf);
@@ -56,6 +65,11 @@ HAL_PIN(scale);      // *input*, derate, 1 = none
 HAL_PIN(k_damp);     // *parameter*, damping gain [rad/s mech per A], 0 = off
 HAL_PIN(damp_hz);    // *parameter*, damping high pass corner [Hz]
 HAL_PIN(damp_lp_hz); // *parameter*, damping low pass corner [Hz]
+HAL_PIN(k_vel);      // *parameter*, speed damping gain [1], 0 = off
+HAL_PIN(vel_fb);     // *input*, rotor speed [rad/s mech], for k_vel
+HAL_PIN(vel_src);    // *parameter*, k_vel input: 0 vel_fb, 1 estimate
+HAL_PIN(j);          // *parameter*, inertia [kg m^2], conf0.j, for the estimate
+HAL_PIN(r);          // *parameter*, phase resistance [ohm], conf0.r, for the estimate
 
 HAL_PIN(id);         // *input*, hv0.id_fb
 HAL_PIN(iq);         // *input*, hv0.iq_fb
@@ -70,10 +84,17 @@ HAL_PIN(i_act);      // *output*, active current [A], negative when braking
 HAL_PIN(slip);       // *output*, slip compensation [rad/s mech]
 HAL_PIN(stall);      // *output*, 1 accel held, 2 accel reversed, -1 decel held
 HAL_PIN(damp);       // *output*, damping frequency offset [rad/s mech]
+HAL_PIN(torque);     // *output*, air gap torque estimate [Nm]
+HAL_PIN(w_est);      // *output*, estimated rotor speed swing [rad/s mech]
 
 struct vf_ctx_t {
   float i_lp;  // active current low pass at damp_hz, damping high pass
   float d_lp;  // high passed current, low passed at damp_lp_hz
+  float v_lp;  // speed swing low pass at damp_hz, high pass
+  float w_lp;  // high passed speed swing, low passed at damp_lp_hz
+  float t_lp;  // relative acceleration low pass at damp_hz, high pass
+  float w_est; // speed swing estimate, leaky integral of the torque swing
+  float vel_f; // last field speed vel + damp, for the field acceleration
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -93,6 +114,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(dc_hold)   = 0.0;
   PIN(scale)     = 1.0;
   PIN(k_damp)    = 0.0;
+  PIN(k_vel)     = 0.0;
+  PIN(vel_src)   = 0.0;
+  PIN(j)         = 0.0;
+  PIN(r)         = 0.0;
   PIN(damp_hz)    = 3.0;
   PIN(damp_lp_hz) = 20.0;
 }
@@ -164,10 +189,38 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   float damp = 0.0;
   if(PIN(en) > 0.0) {
-    ctx->d_lp += (i_act - ctx->i_lp - ctx->d_lp) * CLAMP(2.0 * M_PI * PIN(damp_lp_hz) * period, 0.0, 1.0);
-    damp = LIMIT(PIN(k_damp) * ctx->d_lp, 0.05 * MAX(PIN(vel_n), 0.1));
+    float k_lp = CLAMP(2.0 * M_PI * PIN(damp_lp_hz) * period, 0.0, 1.0);
+    ctx->d_lp += (i_act - ctx->i_lp - ctx->d_lp) * k_lp;
+    float k_hp = CLAMP(2.0 * M_PI * PIN(damp_hz) * period, 0.0, 1.0);
+    float dv   = PIN(vel_fb) - vel;
+    ctx->v_lp += (dv - ctx->v_lp) * k_hp;
+    float w = dv - ctx->v_lp;  // measured swing
+
+    float w_s    = MAX(ABS(vel + slip), 5.0);  // synchronous speed [rad/s mech]
+    float torque = 1.5 * (u * i_act - PIN(r) * (id * id + iq * iq)) / w_s;
+    // rotor acceleration less field acceleration, both [rad/s^2 mech]
+    float acc_f = (vel + PIN(damp) - ctx->vel_f) / period;
+    ctx->vel_f  = vel + PIN(damp);
+    float a_rel = PIN(j) > 0.0 ? torque / PIN(j) - acc_f : 0.0;
+    ctx->t_lp += (a_rel - ctx->t_lp) * k_hp;
+    if(PIN(j) > 0.0) {
+      ctx->w_est += (a_rel - ctx->t_lp - ctx->w_est * 2.0 * M_PI * PIN(damp_hz)) * period;
+    } else {
+      ctx->w_est = 0.0;
+    }
+    PIN(torque) = torque;
+    if(PIN(vel_src) > 0.0) {
+      w = ctx->w_est;
+    }
+    ctx->w_lp += (w - ctx->w_lp) * k_lp;
+    damp = LIMIT(PIN(k_damp) * ctx->d_lp + PIN(k_vel) * ctx->w_lp, 0.05 * MAX(PIN(vel_n), 0.1));
   } else {
     ctx->d_lp = 0.0;
+    ctx->v_lp  = 0.0;
+    ctx->w_lp  = 0.0;
+    ctx->t_lp  = 0.0;
+    ctx->w_est = 0.0;
+    ctx->vel_f = 0.0;
   }
 
   PIN(vel)   = vel;
@@ -175,6 +228,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(i_act) = i_act;
   PIN(stall) = stall;
   PIN(damp)  = damp;
+  PIN(w_est) = ctx->w_est;
   PIN(vel_e) = (vel + slip + damp) * MAX(PIN(polecount), 1.0);
   PIN(u_cmd) = u_cmd;
 }
