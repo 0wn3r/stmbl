@@ -115,6 +115,15 @@ flash_state_t flash_state;
 
 uint32_t send_to_bootloader;
 
+// CRC_CHECK: an f3 bootloader computes the app CRC inside its timer IRQ
+// (2-3 ms for 74 KB) and answers once that is done, at an offset that
+// depends on the image size. Our rx DMA is re-armed on every tick we send,
+// so a check sent every tick can lose that answer every time. Send it once,
+// then stay quiet and listen for CRC_LISTEN ticks before sending it again.
+#define CRC_LISTEN 100  // 20 ms
+static uint32_t crc_wait;
+static uint32_t crc_nak;  // the f3 answered NAK: its CRC over the image is not 0
+
 // hv_verify: with the f3 sitting in its bootloader (after a failed
 // hv_update), read the app area back word by word with the bootloader's
 // READ opcode and compare it with the embedded image, plus VERIFY_EXTRA
@@ -364,6 +373,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               }
               if(ctx->addr > ((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) / 4) {
                 flash_state = CRC_CHECK;
+                crc_wait    = 0;
+                crc_nak     = 0;
                 // flash_state = SEND_TO_APP;
               }
             } else {
@@ -377,6 +388,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               if(ctx->from_hv.packet_from_hv_bootloader.state == BOOTLOADER_STATE_OK && ctx->from_hv.packet_from_hv_bootloader.cmd == BOOTLOADER_OPCODE_CRCCHECK) {
                 ctx->timeout = 0;
                 flash_state  = SEND_TO_APP;
+              } else if(ctx->from_hv.packet_from_hv_bootloader.state == BOOTLOADER_STATE_NAK && ctx->from_hv.packet_from_hv_bootloader.cmd == BOOTLOADER_OPCODE_CRCCHECK) {
+                ctx->timeout = 0;
+                crc_nak      = 1;
+                flash_state  = FLASH_FAILED;
               }
             } else {
               // wrong packet len or slave addr
@@ -566,11 +581,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case CRC_CHECK:
-      ctx->to_hv.packet_to_hv.header.flags.counter++;
-      ctx->to_hv.packet_to_hv.header.len     = (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4;
-      ctx->to_hv.packet_to_hv_bootloader.cmd = BOOTLOADER_OPCODE_CRCCHECK;
+      if(crc_wait) {  // listening for the answer to the last check
+        crc_wait--;
+      } else {
+        ctx->to_hv.packet_to_hv.header.flags.counter++;
+        ctx->to_hv.packet_to_hv.header.len     = (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4;
+        ctx->to_hv.packet_to_hv_bootloader.cmd = BOOTLOADER_OPCODE_CRCCHECK;
 
-      tx_size = sizeof(packet_bootloader_t);
+        tx_size = sizeof(packet_bootloader_t);
+      }
 
       if(ctx->timeout > 2000) {
         ctx->timeout = 0;
@@ -625,6 +644,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->send_state = 0;
   }
   ctx->send_state++;
+
+  if(flash_state == CRC_CHECK && tx_size) {
+    crc_wait = CRC_LISTEN;
+  }
 
   if(tx_size) {
     CRC->CR = CRC_CR_RESET;
@@ -732,6 +755,11 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         last_addr = 0;
         break;
       case FLASH_FAILED:
+        if(crc_nak) {
+          printf("hv_update: the f3 bootloader says the app CRC is wrong\n");
+        } else if(last_flash_state == CRC_CHECK) {
+          printf("hv_update: no answer to CRC_CHECK\n");
+        }
         printf("hv_update: FLASH_FAILED\n");
         last_addr = 0;
         break;
