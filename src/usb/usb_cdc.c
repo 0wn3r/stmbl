@@ -166,11 +166,12 @@ int cdc_tx_text(const char *data, int len) {
 }
 
 // usb_rx_buf is filled from the USB interrupt (cdc_itf_receive -> rb_write)
-// and drained here, and ringbuf.c has no locking: rb_putc's len++ against
-// rb_getc's len-- and rb_undo's pos/len rewrite can each lose an update. On
-// the bench that merged two commands into "fault0.faultidpmsm0.state" and
-// swallowed an enable. Hold the interrupt off for the few dozen bytes this
-// touches; anything arriving meanwhile waits in the endpoint.
+// and drained here. The old ringbuf.c shared one len between both sides and
+// lost updates (on the bench: two commands merged into
+// "fault0.faultidpmsm0.state", a swallowed enable). ringbuf.c is single
+// producer / single consumer safe now; the interrupt stays held off for the
+// few dozen bytes this touches anyway, anything arriving meanwhile waits in
+// the endpoint.
 int cdc_getline(char *ptr, int len) {
   NVIC_DisableIRQ(OTG_FS_IRQn);
   int ret = rb_getline(&usb_rx_buf, ptr, len);
