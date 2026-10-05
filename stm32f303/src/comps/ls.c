@@ -15,12 +15,14 @@ HAL_COMP(ls);
 //process data from LS
 HAL_PIN(d_cmd);
 HAL_PIN(q_cmd);
-// The f4 sends d/q every third tick; stepped straight in, the command carries
+// The f4 sends d/q every PWM_TICKS_PER_PACKET ticks (3 at 15 kHz); stepped straight in, the command carries
 // a 5 kHz staircase into the current loop. ramp = 1 spreads each step over
 // the LS_RAMP_TICKS ticks to the next packet, a linear ramp that lags the
 // step by half an f4 period. 0 = step as before.
 HAL_PIN(ramp);
-#define LS_RAMP_TICKS 3  // f3 ticks per f4 packet, 15 kHz / 5 kHz
+#define LS_RAMP_TICKS PWM_TICKS_PER_PACKET
+// link loss after two missed packets (0.4 ms): 5 ticks at 15 kHz
+#define LS_TIMEOUT_TICKS (2 * PWM_TICKS_PER_PACKET - 1)
 HAL_PIN(pos);
 HAL_PIN(vel);
 // The angle the voltage computed this tick lands at, on average: the
@@ -228,7 +230,7 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(sbrake_time) = 1.0;
   PIN(idle)        = 0.0;
   PIN(dma_pos_cmd) = 4;
-  PIN(inc)         = 5;
+  PIN(inc)         = PWM_RES * 5 / 4800;  // ARR step, 5 at 15 kHz, about 0.1 %
   PIN(window)      = 1;
 }
 
@@ -343,7 +345,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ++;
       fault = 3;
     }
-  } else if(ctx->timeout <= 5) {  // if no packet and no timeout, advance pos by velovity
+  } else if(ctx->timeout <= LS_TIMEOUT_TICKS) {  // if no packet and no timeout, advance pos by velovity
     PIN(pos) = PIN(pos) + PIN(vel) * period;
   }
 
@@ -397,6 +399,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     state.pins.emf_val   = PIN(emf_val);
     state.pins.obs_err   = PIN(obs_err);
     state.pins.obs_vel   = PIN(obs_vel);
+    state.pins.pwm_freq  = PWM_FREQ;
 
     // fill tx struct
     ctx->packet_from_hv.fault             = (uint8_t)PIN(fault_in);
@@ -424,14 +427,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     //ctx->send = 0;
   }
 
-  if(ctx->timeout == 6) {
+  if(ctx->timeout == LS_TIMEOUT_TICKS + 1) {
     // brake on the loss only if the motor was driven or already braking
     ctx->sbrake_loss = PIN(sbrake_arm) > 0.0 && (PIN(en) > 0.0 || PIN(sbrake) > 0.0);
   }
-  if(ctx->timeout > 5) {  //disable driver
+  if(ctx->timeout > LS_TIMEOUT_TICKS) {  //disable driver
     PIN(en)     = 0.0;
     PIN(vel)    = 0.0;
-    PIN(sbrake) = ctx->sbrake_loss && (float)(ctx->timeout - 5) * period < PIN(sbrake_time);
+    PIN(sbrake) = ctx->sbrake_loss && (float)(ctx->timeout - LS_TIMEOUT_TICKS) * period < PIN(sbrake_time);
     PIN(timeout)
     ++;
     fault = 1;
