@@ -35,14 +35,25 @@ HAL_PIN(rot_half);    // *parameter*, rotor test, time at each current level [s]
 HAL_PIN(rot_cycles);  // *parameter*, rotor test, measured cycles (two edges each)
 HAL_PIN(rot_bw);      // *parameter*, rotor test, current loop bandwidth [rad/s]
 HAL_PIN(rot_t0);      // *parameter*, rotor test, skip this long after each edge [s]
-HAL_PIN(tr);          // rotor time constant Lr/Rr [s]
+HAL_PIN(tr);          // rotor time constant Lr/Rr, mean of tr_rise and tr_fall [s]
 HAL_PIN(slip_n);      // 1/tr, acim_ttc's slip constant [rad/s electrical]
-HAL_PIN(lmr);         // rotor side magnetizing inductance Lm^2/Lr [H]
+HAL_PIN(lmr);         // rotor side magnetizing inductance Lm^2/Lr, median over edges [H]
 HAL_PIN(ls);          // stator inductance l + lmr [H]
 HAL_PIN(rot_n);       // edges that went into tr and lmr
 HAL_PIN(rot_dip);     // largest current error at rot_t0, fraction of the step
 HAL_PIN(tr_ok);       // 1 = tr, slip_n and lmr are measurements
-HAL_PIN(tr_spread);   // (max - min) / mean of tr across edges
+HAL_PIN(tr_spread);   // (max - min) / median of tr, the worse of the two directions
+HAL_PIN(tr_rise);     // median tr of the edges up to test_cur [s]
+HAL_PIN(tr_fall);     // median tr of the edges down to test_cur/2 [s]
+HAL_PIN(tr_min);      // shortest edge [s]
+HAL_PIN(tr_max);      // longest edge [s]
+
+HAL_PIN(lad_top);     // *parameter*, offset ladder, top current [A], 0 = no ladder
+HAL_PIN(lad_n);       // *parameter*, offset ladder, rungs (at most 4), rung k steps between top k/n and half of it
+HAL_PINA(lad_i, 4);   // rung's upper current [A]
+HAL_PINA(lad_lm, 4);  // rung's lmr, the slope of rotor flux over the rung [H]
+HAL_PINA(lad_tr, 4);  // rung's tr [s]
+HAL_PINA(lad_sp, 4);  // rung's tr spread
 HAL_PIN(drop);          // dead time volts per phase at the top dwell [V]
 HAL_PIN(r_known);       // *parameter*, measured winding resistance, 0 = fit it
 HAL_PIN(fit_di);        // dwell current separation, 0 = r/drop fit did not run
@@ -70,6 +81,10 @@ HAL_PIN(tmp2);
 HAL_PIN(tmp3);
 HAL_PIN(avg_test_volt);
 
+#define ROT_BLK 8     // rotor test: the settled tail is read as the median of this many blocks
+#define ROT_EDGES 32  // rotor test: edges kept per rung, so rot_cycles is at most 16
+#define ROT_DEC 8     // rotor test: the fit sums take every this many ticks
+
 // State of the leakage and rotor tests. They integrate over thousands of
 // ticks, so none of this can be pins without making the state machine's
 // scratch pins mean two different things at once.
@@ -84,25 +99,43 @@ struct idacim_ctx_t {
   float l_amp;      // injection voltage amplitude
   float v_re, v_im, i_re, i_im;
   // rotor step
-  uint16_t r_edge;      // edges seen, the first magnetizes from zero
-  uint16_t r_n;         // edges that produced a fit
-  uint8_t have_lvl[2];  // a settled value is known for level 0 (test_cur), 1 (half)
+  uint16_t r_edge;      // edges seen in this rung, the first comes from another level
+  uint16_t r_n;         // edges that produced a fit (nrt)
+  uint16_t r_seen;      // edges handed to nrt, fitted or not
+  uint16_t dec;         // ticks since the fit sums were last fed
+  uint8_t rung;         // 0 = the test at test_cur, 1.. = ladder rungs
   uint8_t act;          // this edge is being fitted
+  uint8_t have_prev;    // the previous edge's settled values are known
   uint8_t have_t0;      // i_t0 captured
-  uint32_t e_n;         // samples in this level's settled tail
-  float lvl_u[2];       // settled ud_fb at each level
-  float lvl_i[2];       // settled id_fb at each level
   float r_t;            // time since the last commanded edge
-  float eu, ei;         // settled tail sums
-  float uinf, iinf;     // where this edge settles, from the last visit to its level
-  float di;             // the step, settled to settled
+  float prev_u, prev_i; // where the previous edge settled
+  float c0;             // offset taken out while integrating, ud - R id where the last edge settled
   float i0;             // settled current before the step
   float i_t0;           // id_fb at rot_t0
-  float lam_raw;        // integral of ud - uinf - R (id - iinf) since the edge
-  float ii;             // integral of id - iinf since the edge
-  float jj;             // integral of lam since the edge
-  float aa, ab, bb, ay, by;  // normal equations of this edge's fit
-  float tr_sum, lm_sum, tr_min, tr_max;
+  float p;              // integral of ud - R id - c0 since the edge
+  float q;              // integral of id - i0 since the edge
+  float jp;             // integral of p
+  float u1, u2, i1, i2; // the two samples before this one, for a median of three
+  float s[14];          // fit sums, kept as a polynomial in this edge's own offset
+  float blk_u[ROT_BLK], blk_i[ROT_BLK];  // settled tail, sums per block
+  uint16_t blk_n[ROT_BLK];
+  // rt hands each finished edge and rung to nrt, which does the solving and
+  // the medians: in rt they cost the f4 more than its slack (bench, 5 Oct)
+  float ps[14];         // the edge's sums
+  float pd;             // its offset correction c - c0, from the tail
+  float pdip;           // its |current error at rot_t0| / step
+  uint8_t pup;          // 1 = it went up to the upper level
+  float pdi;            // its step, settled to settled [A]
+  float ptail;          // max - min of its tail's block means of ud [V]
+  volatile uint8_t pend;   // an edge waits for nrt
+  volatile uint8_t rdone;  // a rung waits for nrt
+  uint8_t rd_rung;      // which rung
+  float rd_hi;          // its upper current
+  float rd_t1;          // where its settled tail starts, longest tr it can see
+  float rd_per;         // rt period
+  // nrt's
+  float tr_e[ROT_EDGES], lm_e[ROT_EDGES];  // per edge fits
+  uint8_t up_e[ROT_EDGES];                 // 1 = the edge went up to the upper level
   float dip;            // largest |current error at rot_t0| / step
 };
 
@@ -136,7 +169,29 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(rot_cycles)               = 4.0;
   PIN(rot_bw)                   = 1500.0;
   PIN(rot_t0)                   = 0.015;
+  PIN(lad_top)                  = 0.0;
+  PIN(lad_n)                    = 4.0;
   PIN(cur_bw)                   = 1.0;
+}
+
+static float median(float *v, int n) {  // sorts v
+  for(int i = 1; i < n; i++) {
+    float x = v[i];
+    int j   = i - 1;
+    while(j >= 0 && v[j] > x) {
+      v[j + 1] = v[j];
+      j--;
+    }
+    v[j + 1] = x;
+  }
+  if(n <= 0) {
+    return 0.0;
+  }
+  return n & 1 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+static float med3(float a, float b, float c) {
+  return MAX(MIN(a, b), MIN(MAX(a, b), c));
 }
 
 // ctx survives a stop
@@ -145,9 +200,194 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   memset(ctx, 0, sizeof(struct idacim_ctx_t));
 }
 
+// x' G y over the basis (a, bk, t, sg, yk) the fit sums are kept in
+static double rot_dot(const double g[5][5], const double *x, const double *y) {
+  double r = 0.0;
+  for(int i = 0; i < 5; i++) {
+    for(int j = 0; j < 5; j++) {
+      r += x[i] * g[i][j] * y[j];
+    }
+  }
+  return r;
+}
+
+// The rotor test's arithmetic, out of rt. Each edge's fit is solved here in
+// double, from the sums rt collected; at the end of a rung the edges are
+// reduced to medians.
+//
+// The edge's offset c is fitted with Lmr and tr, not read off the tail: an
+// error e in c grows as e t in lam, and at 16 A one mV of it moved lmr 2% and
+// tr with it (bench, 5 Oct; the tail's median carried a few mV). With
+// y = yk + d sg and b = bk + d t the model y = Lmr a + tr b is linear in Lmr
+// and tr but not in d, so Gauss-Newton from the tail's d, which is close.
+// The settled part pins d down through the curvature d t^2/2 it leaves in the
+// integral, over the whole edge instead of its last quarter.
+static void rot_nrt(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) {
+  if(ctx->pend) {
+    float tr = 0.0, lm = 0.0, dfit = 0.0;
+    int ok   = 0;
+    if(ctx->r_n < ROT_EDGES) {
+      float *s       = ctx->ps;
+      double g[5][5] = {
+          {s[0], s[1], s[2], s[7], s[6]},
+          {s[1], s[3], s[4], s[9], s[8]},
+          {s[2], s[4], s[5], s[11], s[10]},
+          {s[7], s[9], s[11], s[12], s[13]},
+          {s[6], s[8], s[10], s[13], 0.0},  // yk yk is not needed
+      };
+      // start: Lmr and tr at the tail's d
+      double d   = ctx->pd;
+      double ea[5] = {1, 0, 0, 0, 0};
+      double eb[5] = {0, 1, d, 0, 0};
+      double ey[5] = {0, 0, 0, d, 1};
+      double aa  = rot_dot(g, ea, ea);
+      double ab  = rot_dot(g, ea, eb);
+      double bb  = rot_dot(g, eb, eb);
+      double ay  = rot_dot(g, ea, ey);
+      double by  = rot_dot(g, eb, ey);
+      double det = aa * bb - ab * ab;
+      ok         = det > 0.0;
+      double x0  = ok ? (ay * bb - by * ab) / det : 0.0;
+      double x1  = ok ? (by * aa - ay * ab) / det : 0.0;
+      for(int it = 0; it < 6 && ok; it++) {
+        // residual y - model and the model's derivatives in (Lmr, tr, d)
+        double r[5]    = {-x0, -x1, -x1 * d, d, 1};
+        double j[3][5] = {
+            {1, 0, 0, 0, 0},
+            {0, 1, d, 0, 0},
+            {0, 0, x1, -1, 0},
+        };
+        double m[3][3], v[3];
+        for(int k = 0; k < 3; k++) {
+          v[k] = rot_dot(g, j[k], r);
+          for(int l = 0; l < 3; l++) {
+            m[k][l] = rot_dot(g, j[k], j[l]);
+          }
+        }
+        double dm = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        if(!(dm > 0.0)) {
+          ok = 0;
+          break;
+        }
+        double s0 = (v[0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (v[1] * m[2][2] - m[1][2] * v[2]) + m[0][2] * (v[1] * m[2][1] - m[1][1] * v[2])) / dm;
+        double s1 = (m[0][0] * (v[1] * m[2][2] - m[1][2] * v[2]) - v[0] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * v[2] - v[1] * m[2][0])) / dm;
+        double s2 = (m[0][0] * (m[1][1] * v[2] - v[1] * m[2][1]) - m[0][1] * (m[1][0] * v[2] - v[1] * m[2][0]) + v[0] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])) / dm;
+        x0 += s0;
+        x1 += s1;
+        d += s2;
+      }
+      if(ok) {
+        lm   = (float)x0;
+        tr   = (float)x1;
+        dfit = (float)d;
+        ok = tr > 0.0 && lm > 0.0;
+        if(ok) {
+          ctx->tr_e[ctx->r_n] = tr;
+          ctx->lm_e[ctx->r_n] = lm;
+          ctx->up_e[ctx->r_n] = ctx->pup;
+          ctx->dip            = MAX(ctx->dip, ctx->pdip);
+          ctx->r_n++;
+        }
+      }
+    }
+    // one line per edge, to see whether the scatter between edges is noise
+    // or follows something: direction, step, offset correction, tail noise
+    ctx->r_seen++;
+    printf("# edge %f %s tr %f ms lmr %f mH d %f V (tail %f) di %f A dip %f tail %f V%s\n", (float)ctx->r_seen, ctx->pup ? "up" : "dn", tr * 1000.0, lm * 1000.0, dfit, ctx->pd, ctx->pdi, ctx->pdip, ctx->ptail, ok ? "" : " rejected");
+    ctx->pend = 0;
+  }
+  if(ctx->rdone && !ctx->pend) {
+    int n    = ctx->r_n;
+    float tr = 0.0, lm = 0.0, sp = 0.0, tmin = 0.0, tmax = 0.0, trise = 0.0, tfall = 0.0;
+    int ok   = 0;
+    if(n >= 2) {
+      // Rising and falling edges are taken apart: over a step that
+      // reaches into saturation the flux is not linear in i_mr, and the
+      // fit then reads one direction long and the other short by about
+      // the same amount (simulated, 8 <-> 16 A on a knee at 12 A: 82 and
+      // 123 ms on 100). The mean of the two medians cancels that, and the
+      // spread is the worse of the two directions' own, so it says how
+      // repeatable the edges are, not how saturated the step is.
+      float v[ROT_EDGES];
+      float med[2] = {0.0, 0.0};
+      int cnt[2]   = {0, 0};
+      for(int up = 0; up < 2; up++) {
+        int m = 0;
+        for(int k = 0; k < n; k++) {
+          if(ctx->up_e[k] == up) {
+            v[m++] = ctx->tr_e[k];
+          }
+        }
+        med[up] = median(v, m);  // sorted now
+        cnt[up] = m;
+        if(m > 0) {
+          tmin = (cnt[0] + cnt[1] == m) ? v[0] : MIN(tmin, v[0]);
+          tmax = (cnt[0] + cnt[1] == m) ? v[m - 1] : MAX(tmax, v[m - 1]);
+          if(med[up] > 0.0) {
+            sp = MAX(sp, (v[m - 1] - v[0]) / med[up]);
+          }
+        }
+      }
+      tfall = med[0];
+      trise = med[1];
+      tr    = cnt[0] && cnt[1] ? 0.5 * (trise + tfall) : (cnt[1] ? trise : tfall);
+      // lmr from the falling edges. Rising ones read it 20% under them at
+      // 12 and 16 A, and with 3 s edges instead of 1.5 their lmr spread
+      // 7.5-11.6 mH and two of four fits failed, while falling ones held
+      // 13.2-13.8, the at-speed 13.2 (bench, 5 Oct): something slow at the
+      // upper level (heating, or flux creeping near saturation) bends the
+      // edges that end there. A falling edge ends at the lower level, where
+      // both are smallest. Rising edges only when no falling one fitted.
+      int lup = cnt[0] ? 0 : 1;
+      int m   = 0;
+      for(int k = 0; k < n; k++) {
+        if(ctx->up_e[k] == lup) {
+          v[m++] = ctx->lm_e[k];
+        }
+      }
+      lm = median(v, m);
+      // a fit that lands outside the window it was taken over is not an
+      // exponential this test can see
+      ok = tr > 5.0 * ctx->rd_per && tr < ctx->rd_t1;
+    }
+    if(ctx->rd_rung == 0) {
+      PIN(rot_n)     = n;
+      PIN(rot_dip)   = ctx->dip;
+      PIN(tr)        = tr;  // reported either way, so a rejected fit still says what it was
+      PIN(tr_rise)   = trise;
+      PIN(tr_fall)   = tfall;
+      PIN(tr_min)    = tmin;
+      PIN(tr_max)    = tmax;
+      PIN(tr_spread) = sp;
+      PIN(slip_n)    = ok ? 1.0 / tr : 0.0;
+      PIN(lmr)       = ok ? lm : 0.0;
+      PIN(ls)        = ok ? PIN(l) + lm : 0.0;
+      PIN(tr_ok)     = ok ? 1.0 : 0.0;
+      for(int k = 0; k < 4; k++) {
+        PINA(lad_i, k)  = 0.0;
+        PINA(lad_lm, k) = 0.0;
+        PINA(lad_tr, k) = 0.0;
+        PINA(lad_sp, k) = 0.0;
+      }
+    } else {
+      PINA(lad_i, ctx->rd_rung - 1)  = ctx->rd_hi;
+      PINA(lad_lm, ctx->rd_rung - 1) = ok ? lm : 0.0;
+      PINA(lad_tr, ctx->rd_rung - 1) = tr;
+      PINA(lad_sp, ctx->rd_rung - 1) = sp;
+    }
+
+    ctx->r_n    = 0;
+    ctx->r_seen = 0;
+    ctx->dip    = 0.0;
+    ctx->rdone = 0;
+  }
+}
+
 static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  //struct idacim_ctx_t * ctx = (struct idacim_ctx_t *)ctx_ptr;
+  struct idacim_ctx_t *ctx       = (struct idacim_ctx_t *)ctx_ptr;
   struct idacim_pin_ctx_t *pins = (struct idacim_pin_ctx_t *)pin_ptr;
+
+  rot_nrt(ctx, pins);
 
   switch((int)(PIN(state) * 10.0 + 0.5)) {
     case 0:
@@ -176,6 +416,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 15:
+      if(ctx->pend || ctx->rdone) {  // the last rung is still being reduced
+        break;
+      }
       if(PIN(r_ok) > 0.0) {
         printf("conf0.r = %f <font color='green'># append to config</font>\n", PIN(r));
         if(PIN(l_ok) > 0.0) {
@@ -194,7 +437,13 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("<font color='green'># rotor time constant tr = %f ms from %f edges\n", PIN(tr) * 1000.0, PIN(rot_n));
           printf("# slip_n = 1/tr = %f rad/s. for acim_ttc, which derives it from vel_n:\n", PIN(slip_n));
           printf("# acim_ttc0.vel_n = (2 pi acim_ttc0.freq_n - %f) / conf0.polecount\n", PIN(slip_n));
-          printf("# edges agree within %f of tr.\n", PIN(tr_spread));
+          printf("# from %f edges: up %f ms, down %f ms (median each), min %f max %f ms,\n", PIN(rot_n), PIN(tr_rise) * 1000.0, PIN(tr_fall) * 1000.0, PIN(tr_min) * 1000.0, PIN(tr_max) * 1000.0);
+          printf("# spread %f of tr within a direction. up and down apart means\n", PIN(tr_spread));
+          printf("# the step reaches into saturation; tr is their mean.</font>\n");
+          if(PIN(tr_spread) > 0.25) {
+            printf("<font color='red'># edges disagree: check ud_fb noise, or rerun with more rot_cycles.</font>\n");
+          }
+          printf("<font color='green'>");
           printf("# lmr = Lm^2/Lr = %f mH, ls = %f mH, at %f..%f A on d.\n", PIN(lmr) * 1000.0, PIN(ls) * 1000.0, PIN(test_cur) * 0.5, PIN(test_cur));
           printf("# tr is the rotor's at this temperature and flux: a hot cage\n");
           printf("# reads shorter, and rated flux saturates it a little shorter.</font>\n");
@@ -207,6 +456,42 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("<font color='red'>tr not measured</font>: the fit gave %f ms, outside what this test can see\n", PIN(tr) * 1000.0);
         } else {
           printf("<font color='red'>tr not measured</font>: fewer than two edges fitted\n");
+        }
+        if(PIN(lad_top) > 0.0 && PIN(lad_n) >= 1.0) {
+          // each rung's lmr is the slope of psi_r over its range; taken at the
+          // range's middle and integrated from zero, it gives psi_r and the
+          // secant psi_r / id that acim_flux's lmr is. Below the first rung
+          // the slope is extended along the line through the first two.
+          printf("<font color='green'># offset ladder: rung, id range [A], lmr slope [mH], tr [ms], spread, psi_r [Vs], secant lmr [mH]\n");
+          int nr   = (int)MIN(PIN(lad_n), 4.0);
+          float l0 = 0.0;
+          for(int k = 0, j = -1; k < nr; k++) {
+            if(PINA(lad_lm, k) > 0.0 && PINA(lad_i, k) > 0.0) {
+              if(j < 0) {
+                j  = k;
+                l0 = PINA(lad_lm, k);
+              } else {
+                float ma = 0.75 * PINA(lad_i, j), mb = 0.75 * PINA(lad_i, k);
+                l0       = PINA(lad_lm, j) + (PINA(lad_lm, j) - PINA(lad_lm, k)) * ma / (mb - ma);
+                l0       = MAX(l0, PINA(lad_lm, j));
+                break;
+              }
+            }
+          }
+          float psi = 0.0, mp = 0.0, lp = l0;
+          for(int k = 0; k < nr; k++) {
+            float lm = PINA(lad_lm, k);
+            float m  = 0.75 * PINA(lad_i, k);
+            if(lm <= 0.0 || m <= 0.0) {
+              printf("# %f %f..%f no fit (tr %f ms, spread %f)\n", (float)(k + 1), PINA(lad_i, k) * 0.5, PINA(lad_i, k), PINA(lad_tr, k) * 1000.0, PINA(lad_sp, k));
+              continue;
+            }
+            psi += 0.5 * (lp + lm) * (m - mp);
+            mp = m;
+            lp = lm;
+            printf("# %f %f..%f %f %f %f %f %f\n", (float)(k + 1), PINA(lad_i, k) * 0.5, PINA(lad_i, k), lm * 1000.0, PINA(lad_tr, k) * 1000.0, PINA(lad_sp, k), psi, psi / m * 1000.0);
+          }
+          printf("# psi_r and secant are at each range's middle, 0.75 of its top.</font>\n");
         }
         printf("<font color='green'># dead time %f V per phase at the %f A dwell, %f V link\n", PIN(drop), PIN(test_cur), PIN(dc_volt));
         if(PIN(r_known) > 0.0) {
@@ -485,20 +770,31 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // moves the flux too. Fitting an exponential to ud alone came out 3% short
       // on tr with a 1500 rad/s loop and 10% at 300 (simulated). So fit the
       // model to the current that actually flowed. With everything integrated
-      // from the edge, where i_mr still sits at the old level:
+      // from the edge, where i_mr still sits at the old level i0, and c the
+      // offset ud - R id where this edge settles:
       //
-      //   lam(t) = integral(ud - uinf - R (id - iinf)) - l (id - i0) = Lmr (i_mr - i0)
-      //   integral(lam) = Lmr * (integral(id - iinf) + di * t) - tr * lam
+      //   lam(t) = integral(ud - R id - c) - l (id - i0) = Lmr (i_mr - i0)
+      //   integral(lam) = Lmr * integral(id - i0) - tr * lam
       //
-      // which is linear in Lmr and tr, fitted by least squares over rot_t0 to
-      // the settled tail. Simulated against a T model with dead time, noise,
-      // a 300 to 1500 rad/s loop and 20% error in R, it lands within 1% on
-      // 49 ms and 147 ms; an l 50% wrong costs 2-4%, and a feedback delay of
-      // two extra ticks between ud_fb and id_fb about 2%.
+      // which is linear in Lmr and tr, fitted by least squares from rot_t0 to
+      // the end of the edge.
       //
-      // uinf and iinf come from the previous visit to the same level, so the
-      // integrals can run from the edge. The first edge magnetizes from zero
-      // and the second has no earlier visit to its level: both are dropped.
+      // c is this edge's own, fitted with them (rot_nrt). Taken from an
+      // earlier visit to the level, as it once was, one bad sample or a cage
+      // warming between visits put an error in c that grows as t in lam and
+      // t^2 in its integral, and edges spread 100-300% on the spindle (2 Oct);
+      // read off the edge's last quarter, a few mV of it still spread them
+      // 30% (5 Oct). The integration takes out c0, the previous edge's offset
+      // (the chord makes it the same at both levels), and the sums are kept as
+      // a polynomial in the correction d = c - c0. The median of ROT_BLK block
+      // means over the last quarter starts the fit and settles the level for
+      // the next edge. A median of three
+      // past rot_t0 keeps single bad samples out of the integrals. Each edge
+      // is fitted on its own and the median is reported.
+      //
+      // Ladder rungs (lad_n > 0, lad_top > 0) repeat the same steps between
+      // lad_top k/n and half of it after the main test: each rung's lmr is the
+      // slope of rotor flux over its range, so together they give psi_r(id).
       // slip_n in acim_ttc is 1/tr in electrical rad/s.
       PIN(en_out)   = 1.0;
       PIN(cmd_mode) = 1.0;  // cur cmd
@@ -506,117 +802,144 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos)  = 0.0;
       PIN(q_cmd)    = 0.0;
 
+      int nrung  = (int)CLAMP(PIN(lad_n), 0.0, 4.0);
+      float hi   = ctx->rung ? PIN(lad_top) * (float)ctx->rung / (float)MAX(nrung, 1) : PIN(test_cur);
       float half = MAX(PIN(rot_half), 0.1);
       float t0   = CLAMP(PIN(rot_t0), period, half * 0.25);
       float t1   = half * ROT_TAIL;
-      int lv     = ctx->r_edge & 1;  // 0 at test_cur, 1 at half of it
+      int lv     = ctx->r_edge & 1;  // 0 at hi, 1 at half of it
       float rin  = PIN(r_2p) > 0.0 ? PIN(r_2p) : PIN(r);
 
-      PIN(d_cmd) = lv ? PIN(test_cur) * 0.5 : PIN(test_cur);
+      PIN(d_cmd) = lv ? hi * 0.5 : hi;
 
       float ud = PIN(ud_fb);
       float id = PIN(id_fb);
 
       if(ctx->r_t == 0.0) {  // first tick of this level
-        ctx->act = ctx->have_lvl[0] && ctx->have_lvl[1];
+        // the first edge of a rung comes from somewhere else: magnetizes only
+        ctx->act = ctx->r_edge >= 1 && ctx->have_prev;
         if(ctx->act) {
-          ctx->uinf    = ctx->lvl_u[lv];
-          ctx->iinf    = ctx->lvl_i[lv];
-          ctx->i0      = ctx->lvl_i[1 - lv];
-          ctx->di      = ctx->iinf - ctx->i0;
-          ctx->act     = ABS(ctx->di) > 0.2 * PIN(test_cur) * 0.5;
+          ctx->i0      = ctx->prev_i;
+          ctx->c0      = ctx->prev_u - rin * ctx->prev_i;
           ctx->have_t0 = 0;
-          ctx->lam_raw = ctx->ii = ctx->jj = 0.0;
-          ctx->aa = ctx->ab = ctx->bb = ctx->ay = ctx->by = 0.0;
+          ctx->p = ctx->q = ctx->jp = 0.0;
+          ctx->dec = 0;
+          for(int k = 0; k < 14; k++) {
+            ctx->s[k] = 0.0;
+          }
+        }
+        for(int k = 0; k < ROT_BLK; k++) {
+          ctx->blk_u[k] = ctx->blk_i[k] = 0.0;
+          ctx->blk_n[k] = 0;
         }
       }
       ctx->r_t += period;
       float t = ctx->r_t;
 
+      // single bad samples: a median of three once the edge's fast part is over
+      float um = ud;
+      float im = id;
+      if(t > t0) {
+        um = med3(ud, ctx->u1, ctx->u2);
+        im = med3(id, ctx->i1, ctx->i2);
+      }
+      ctx->u2 = ctx->u1;
+      ctx->u1 = ud;
+      ctx->i2 = ctx->i1;
+      ctx->i1 = id;
+
       if(ctx->act) {
-        ctx->lam_raw += (ud - ctx->uinf - rin * (id - ctx->iinf)) * period;
-        ctx->ii += (id - ctx->iinf) * period;
-        float lam = ctx->lam_raw - PIN(l) * (id - ctx->i0);
-        ctx->jj += lam * period;
-        if(t >= t0 && t < t1) {
+        ctx->p += (um - rin * im - ctx->c0) * period;
+        ctx->q += (im - ctx->i0) * period;
+        ctx->jp += ctx->p * period;
+        if(t >= t0) {
           if(!ctx->have_t0) {
-            ctx->i_t0    = id;
+            ctx->i_t0    = im;
             ctx->have_t0 = 1;
           }
-          // scaled by the step, so rising and falling edges fit alike and
-          // the sums stay near unity
-          float xa = ctx->ii / ctx->di + t;
-          float xb = -lam / ctx->di;
-          float y  = ctx->jj / ctx->di;
-          ctx->aa += xa * xa;
-          ctx->ab += xa * xb;
-          ctx->bb += xb * xb;
-          ctx->ay += xa * y;
-          ctx->by += xb * y;
+          if(++ctx->dec >= ROT_DEC) {
+            ctx->dec = 0;
+            // y = Lmr a + tr b, with b = bk + d t and y = yk - d t^2/2
+            float a  = ctx->q;
+            float bk = -(ctx->p - PIN(l) * (im - ctx->i0));
+            float yk = ctx->jp - PIN(l) * ctx->q;
+            float tt = t;
+            float sg = -0.5 * t * t;
+            ctx->s[0] += a * a;
+            ctx->s[1] += a * bk;
+            ctx->s[2] += a * tt;
+            ctx->s[3] += bk * bk;
+            ctx->s[4] += bk * tt;
+            ctx->s[5] += tt * tt;
+            ctx->s[6] += a * yk;
+            ctx->s[7] += a * sg;
+            ctx->s[8] += bk * yk;
+            ctx->s[9] += bk * sg;
+            ctx->s[10] += tt * yk;
+            ctx->s[11] += tt * sg;
+            ctx->s[12] += sg * sg;
+            ctx->s[13] += sg * yk;
+          }
         }
       }
       if(t >= t1) {
-        ctx->eu += ud;
-        ctx->ei += id;
-        ctx->e_n++;
+        int k = (int)((t - t1) / (half - t1) * ROT_BLK);
+        k     = CLAMP(k, 0, ROT_BLK - 1);
+        ctx->blk_u[k] += um;
+        ctx->blk_i[k] += im;
+        ctx->blk_n[k]++;
       }
 
       if(t >= half) {  // end of this level
-        if(ctx->act) {
-          float det = ctx->aa * ctx->bb - ctx->ab * ctx->ab;
-          if(det > 0.0) {
-            float lm = (ctx->ay * ctx->bb - ctx->by * ctx->ab) / det;
-            float tr = (ctx->by * ctx->aa - ctx->ay * ctx->ab) / det;
-            if(tr > 0.0 && lm > 0.0) {
-              ctx->tr_sum += tr;
-              ctx->lm_sum += lm;
-              ctx->tr_min = ctx->r_n ? MIN(ctx->tr_min, tr) : tr;
-              ctx->tr_max = ctx->r_n ? MAX(ctx->tr_max, tr) : tr;
-              ctx->dip    = MAX(ctx->dip, ABS((ctx->i_t0 - ctx->iinf) / ctx->di));
-              ctx->r_n++;
-            }
+        float bu[ROT_BLK], bi[ROT_BLK];
+        int nb = 0;
+        for(int k = 0; k < ROT_BLK; k++) {
+          if(ctx->blk_n[k] > 0) {
+            bu[nb] = ctx->blk_u[k] / (float)ctx->blk_n[k];
+            bi[nb] = ctx->blk_i[k] / (float)ctx->blk_n[k];
+            nb++;
           }
         }
-        if(ctx->e_n > 0) {
-          ctx->lvl_u[lv]    = ctx->eu / (float)ctx->e_n;
-          ctx->lvl_i[lv]    = ctx->ei / (float)ctx->e_n;
-          ctx->have_lvl[lv] = 1;
+        if(nb > 0) {
+          float uinf = median(bu, nb);
+          float iinf = median(bi, nb);
+          float di   = iinf - ctx->i0;
+          if(ctx->act && ABS(di) > 0.1 * hi && !ctx->pend) {
+            for(int k = 0; k < 14; k++) {
+              ctx->ps[k] = ctx->s[k];
+            }
+            ctx->pd   = uinf - rin * iinf - ctx->c0;
+            ctx->pdip = ABS((ctx->i_t0 - iinf) / di);
+            ctx->pup  = lv == 0;
+            ctx->pdi  = di;
+            ctx->ptail = bu[nb - 1] - bu[0];  // median() sorted bu
+            ctx->pend = 1;
+          }
+          ctx->prev_u    = uinf;
+          ctx->prev_i    = iinf;
+          ctx->have_prev = 1;
         }
-        ctx->eu = ctx->ei = 0.0;
-        ctx->e_n = 0;
         ctx->r_edge++;
         ctx->r_t = 0.0;
       }
 
-      if(ctx->r_edge >= 1 + 2 * (int)MAX(PIN(rot_cycles), 1.0)) {
-        float tr_ok  = 0.0;
-        PIN(rot_n)   = ctx->r_n;
-        PIN(rot_dip) = ctx->dip;
-        PIN(tr)      = 0.0;
-        PIN(slip_n)  = 0.0;
-        PIN(lmr)     = 0.0;
-        PIN(ls)      = 0.0;
-        PIN(tr_spread) = 0.0;
-        if(ctx->r_n >= 2) {
-          float n  = (float)ctx->r_n;
-          float tr = ctx->tr_sum / n;
-          PIN(tr)  = tr;  // reported either way, so a rejected fit still says what it was
-          // a fit that lands outside the window it was taken over is not an
-          // exponential this test can see
-          if(tr > 5.0 * period && tr < t1) {
-            PIN(tr)        = tr;
-            PIN(slip_n)    = 1.0 / tr;
-            PIN(lmr)       = ctx->lm_sum / n;
-            PIN(ls)        = PIN(l) + PIN(lmr);
-            PIN(tr_spread) = (ctx->tr_max - ctx->tr_min) / tr;
-            tr_ok          = 1.0;
-          }
+      if(ctx->r_edge >= 1 + 2 * (int)CLAMP(PIN(rot_cycles), 1.0, ROT_EDGES / 2)) {
+        ctx->rd_rung = ctx->rung;
+        ctx->rd_hi   = hi;
+        ctx->rd_t1   = t1;
+        ctx->rd_per  = period;
+        ctx->rdone   = 1;
+
+        if(PIN(lad_top) > 0.0 && ctx->rung < nrung) {  // next rung
+          ctx->rung++;
+          ctx->r_edge = 0;
+          ctx->r_t    = 0.0;
+        } else {
+          PIN(timer)  = 0.0;
+          PIN(state)  = 1.5;
+          PIN(d_cmd)  = 0.0;
+          PIN(en_out) = 0.0;
         }
-        PIN(tr_ok)  = tr_ok;
-        PIN(timer)  = 0.0;
-        PIN(state)  = 1.5;
-        PIN(d_cmd)  = 0.0;
-        PIN(en_out) = 0.0;
       }
       break;
     }
