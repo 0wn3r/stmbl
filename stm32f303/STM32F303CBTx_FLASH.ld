@@ -119,6 +119,7 @@ SECTIONS
     _sramfunc = .;
     *comps/emf.o(.text.rt_func)
     *comps/term.o(.text.rt_func)
+    *comps/dq.o(.text.rt_func)
     *(.text.mod)
     . = ALIGN(4);
     _eramfunc = .;
