@@ -136,6 +136,7 @@ typedef union {
     float unused1;  // was the f3 observer's obs_vel
     float pwm_freq;  // PWM and rt rate the image was built for [Hz]
     float link_to;  // f3 rt ticks spent in link timeout since its boot (ls0.timeout)
+    float hv_temp_ok;  // io0.hv_temp_ok: 0 never read, 1 live, 2 held (decaying)
   } pins;
   float data[sizeof(struct f3_state_data_temp) / 4];
 } f3_state_data_t;

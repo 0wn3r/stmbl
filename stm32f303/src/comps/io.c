@@ -44,7 +44,7 @@ HAL_PIN(v);
 HAL_PIN(w);
 //dclink voltage
 HAL_PIN(udc);
-// the link for the duty division (hv0, svm0): 0.5 IIR, about 1.4 ticks, so
+// the link for the duty division (hv0) and ls0.pwm_volt: 0.5 IIR, about 1.4 ticks, so
 // sag on acceleration and rise on regen reach the duty within ~100 us
 // instead of udc's 1.3 ms (0.05 IIR, kept for display and trips)
 HAL_PIN(udc_duty);
@@ -239,9 +239,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(hv_temp_ok)        = 0.0;
   ctx->sbrake_ok         = 0;
   ctx->sbrake_ticks      = 0;
-  ctx->lo_u              = 0;
-  ctx->lo_v              = 0;
-  ctx->lo_w              = 0;
+  // no previous tick yet: long enough that the first one is not flagged
+  ctx->lo_u              = 0x7FFFFFFF;
+  ctx->lo_v              = 0x7FFFFFFF;
+  ctx->lo_w              = 0x7FFFFFFF;
   PIN(recon)             = 1.0;
   PIN(recon_phase)       = 0.0;
 
@@ -341,14 +342,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     // others down): with no neutral the three sum to zero. At most one phase
     // is at the top at a time, so at most one is rebuilt.
 #ifdef PWM_INVERT
-    int32_t lo_u = (int32_t)LL_TIM_OC_GetCompareCH3(TIM8);
-    int32_t lo_v = (int32_t)LL_TIM_OC_GetCompareCH2(TIM8);
-    int32_t lo_w = (int32_t)LL_TIM_OC_GetCompareCH1(TIM8);
+    int32_t lo_u = (int32_t)PWM_U;
+    int32_t lo_v = (int32_t)PWM_V;
+    int32_t lo_w = (int32_t)PWM_W;
 #else
     int32_t arr  = (int32_t)LL_TIM_GetAutoReload(TIM8);
-    int32_t lo_u = arr - (int32_t)LL_TIM_OC_GetCompareCH3(TIM8);
-    int32_t lo_v = arr - (int32_t)LL_TIM_OC_GetCompareCH2(TIM8);
-    int32_t lo_w = arr - (int32_t)LL_TIM_OC_GetCompareCH1(TIM8);
+    int32_t lo_u = arr - (int32_t)PWM_U;
+    int32_t lo_v = arr - (int32_t)PWM_V;
+    int32_t lo_w = arr - (int32_t)PWM_W;
 #endif
     PIN(recon_phase) = 0.0;
     if(PIN(recon) > 0.0) {
@@ -389,6 +390,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->fault = HV_VOLT_ERROR;
     }
 
+    // named RMS, but a filtered peak: iabs above 95 % of the range for IO_ERR_TICKS
     if(err_filter(&(ctx->overcurrent_error), IO_ERR_TICKS, 0.001, PIN(iabs) > ABS_MAX_CURRENT * 0.95)) {
       ctx->fault = HV_OVERCURRENT_RMS;
     }
@@ -408,6 +410,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(sbrake_on)    = 0.0;
       ctx->sbrake_ticks = 0;
       if(!ctx->enabled) {  //rising edge of enable
+        // a break while idle is not this enable's: clear it and re-arm the
+        // second shutdown here, nrt may not have run since. A comparator
+        // still active keeps MOE off, which the check below reports.
+        WRITE_REG(TIM8->SR, ~TIM8_BRK_FLAGS);
+        LL_TIM_EnableIT_BRK(TIM8);
         //set timer master out enable
         LL_TIM_EnableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
@@ -434,7 +441,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         if(!LL_TIM_IsEnabledAllOutputs(TIM8) || (TIM8->SR & TIM8_BRK_FLAGS)) {
           ctx->fault = HV_OVERCURRENT_HW;
         }
-      } else {
+      }
+      if(ctx->fault != NO_ERROR) {  // also a fault pin trip found just above
         ctx->fault_pin_error = 0;
         // a software trip (oc_lim, temperature, voltage, fault pin) takes the
         // bridge off in this tick too, not only the driver enable: MOE off
@@ -495,7 +503,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->enabled = 0;
       // a trip during braking stays reported until the request goes away,
       // so the f4 sees it and drops the request instead of retrying
-      if(PIN(sbrake) <= 0.0) {
+      // the offset fault is found once at boot, so it stays until reset
+      if(PIN(sbrake) <= 0.0 && ctx->fault != HV_CURRENT_OFFSET_FAULT) {
         ctx->fault = NO_ERROR;
       }
       ctx->sbrake_ticks = 0;
