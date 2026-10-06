@@ -1,6 +1,8 @@
 # induction motor, open loop V/f, no feedback needed.
 # replaces uf for new configs. speed: vf0.vel_cmd [rad/s mech]
 # set vf0.u_n (phase peak V at vf0.vel_n), u_boost, i_stall
+# encoder slip control: link vf_enc instead (or vf0.vel_fb = <rotor speed>,
+# vf0.enc 1, vf0.slip_max (0 = 2 * slip_n); tune vf0.enc_kp / enc_ki.
 load adc
 load fault
 load hv
@@ -58,6 +60,11 @@ vf0.uq = hv0.uq_fb
 vf0.dc_volt = hv0.dc_volt
 vf0.pwm_volt = hv0.pwm_volt
 vf0.dc_hold = conf0.high_dc_volt
+# standstill boost: covers the dead time drop (no compensation in volt
+# mode) plus r * the magnetizing current, so the encoder path (enc 1) starts
+# from rest on the slip frequency alone. 12 V on the spindle (IM06B50GC1,
+# drop ~8.7 V); set it in the config for other motors
+vf0.u_boost = 12
 angle0.src = 3
 angle0.vel_cmd = vf0.vel_e
 hv0.d_cmd = vf0.u_cmd
