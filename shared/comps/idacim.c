@@ -60,6 +60,7 @@ HAL_PINA(lad_tr, 4);  // rung's tr [s]
 HAL_PINA(lad_sp, 4);  // rung's tr spread
 HAL_PIN(i_min);       // *parameter*, lowest current any test level may use; under it the dead time distorts the voltage [A]
 HAL_PIN(knee);        // *parameter*, 1 = run the ladder for i_knee/tr_sat, from 0.4 test_cur to test_cur (unless lad_top is set)
+HAL_PIN(lad_auto);    // lad_top the knee wrote, cleared on the next run, 0 = none
 HAL_PIN(knee_i);      // acim_flux0.i_knee from the ladder's tr, 0 = not fitted [A]
 HAL_PIN(knee_tr_sat); // acim_flux0.tr_sat from the ladder's tr
 HAL_PIN(knee_tr);     // tr at id_n from the same fit [s]
@@ -504,7 +505,7 @@ static void knee_fit(struct idacim_pin_ctx_t *pins) {
     // looked for (spindle, 6 Oct: 0.32-1.03 on 1.9-4.8 A steps, where the
     // main test's 8 A step held 0.15), so it is listed, not fitted
     float lo = lad_lo(pins) * PINA(lad_i, k);
-    if(PINA(lad_lm, k) > 0.0 && PINA(lad_tr, k) > 0.0 && lo >= PIN(i_min) && PINA(lad_sp, k) <= KNEE_SP_MAX) {
+    if(PINA(lad_lm, k) > 0.0 && PINA(lad_tr, k) > 0.0 && lo >= 0.999 * PIN(i_min) && PINA(lad_sp, k) <= KNEE_SP_MAX) {
       float sp = MAX(PINA(lad_sp, k), 0.05);
       pi[n]    = 0.5 * (1.0 + lad_lo(pins)) * PINA(lad_i, k);
       pt[n]    = PINA(lad_tr, k);
@@ -929,9 +930,14 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   switch((int)(PIN(state) * 10.0 + 0.5)) {
     case 0:
+      // hv0.r and l go back to safe defaults: nothing after this may use
+      // them as measured
       PIN(r)       = 0.1;
       PIN(l)       = 0.001;
       PIN(drop)    = 0.0;
+      PIN(r_ok)    = 0.0;
+      PIN(l_ok)    = 0.0;
+      PIN(tr_ok)   = 0.0;
       PIN(out_rev) = 0.0;
       PIN(cur_bw)  = 1.0;
       break;
@@ -945,6 +951,13 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(PIN(test_cur) < 2.0 * PIN(i_min)) {
         printf("<font color='red'># idacim0.test_cur %f A puts the rotor test's lower step under idacim0.i_min %f A</font>\n", PIN(test_cur), PIN(i_min));
       }
+      // a ladder the knee wrote is redone from this run's test_cur, or
+      // dropped with knee 0; one set by hand (lad_top changed) stays
+      if(PIN(lad_auto) > 0.0 && PIN(lad_top) == PIN(lad_auto)) {
+        PIN(lad_top) = 0.0;
+        PIN(lad_bot) = 0.0;
+      }
+      PIN(lad_auto) = 0.0;
       if(PIN(knee) > 0.0 && PIN(lad_top) <= 0.0) {
         PIN(lad_ratio) = 0.7;
         PIN(lad_bot)   = MAX(0.4 * PIN(test_cur), PIN(i_min) / 0.7);
@@ -955,6 +968,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(lad_top) = 0.0;
           PIN(lad_bot) = 0.0;
         }
+        PIN(lad_auto) = PIN(lad_top);
       }
       PIN(state)    = 1.1;
       PIN(timer)    = 0.0;
@@ -1079,8 +1093,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("nothing below is measured, do not append it\n");
         printf("check that idacim0.test_cur (%f) is under conf0.max_ac_cur\n", PIN(test_cur));
       }
-      // the standstill test ends here; the pole pair spin turns the rotor and
-      // runs only when asked for. walk on only if r worked: hv0.r is this pin
+      // the standstill test ends here; spin goes on to the rotating test
+      // (4.0), the pole pair test (2.0) runs only when set by hand. walk on
+      // only if r worked: hv0.r is this pin
       if(PIN(r_ok) <= 0.0) {
         PIN(state) = 0.0;
       } else if(PIN(spin) > 0.0) {
@@ -1098,6 +1113,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(q_cmd)    = 0.0;
       PIN(com_pos)  = 0.0;
       PIN(cmd_mode) = 0.0;
+      PIN(pp)       = 0.0;  // the filter starts from this run's first reading
 
       printf("Measure polepairs\n");
       printf("<font color='green'>unblock the rotor, it will move</font>\n");
@@ -1111,6 +1127,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         break;
       }
       memset(ctx, 0, sizeof(struct idacim_ctx_t));
+      PIN(sw_n)  = 0.0;  // a stall before the sweep reports no points, not the last run's
       PIN(state) = 4.1;
       printf("Rotating test: open loop field at %f A d, up to %f rad/s mech\n", PIN(id_n) > 0.0 ? PIN(id_n) : PIN(test_cur), 2.0 * M_PI * PIN(n_freq) * MIN(2.0 * PIN(rot_vel), 0.9) / PIN(n_pp));
       printf("<font color='green'>the rotor turns: unblock it, no load on the shaft</font>\n");
@@ -1196,7 +1213,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         if(PIN(r_known) > 0.0) {
           // the drop is read at the top dwell, which has to be near its command
           if(PIN(tmp2) > PIN(test_cur) * 0.5) {
-            PIN(r)    = PIN(r_known);
+            PIN(r)      = PIN(r_known);
+            PIN(r_bias) = 0.0;
             PIN(drop) = MAX(0.75 * (PIN(tmp3) - PIN(r) * PIN(tmp2)), 0.0);
             r_ok      = 1.0;
           }
@@ -1587,7 +1605,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos) = mod(PIN(com_pos));
 
       if(ABS(PIN(vel_fb)) > 0.1) {
-        PIN(pp) = PIN(pp) * 0.995 + PIN(test_vel) / PIN(vel_fb) * 0.005;
+        float pp_m = PIN(test_vel) / PIN(vel_fb);
+        PIN(pp)    = PIN(pp) != 0.0 ? PIN(pp) * 0.995 + pp_m * 0.005 : pp_m;
       }
 
       PIN(timer) += period;
