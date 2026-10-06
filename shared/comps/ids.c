@@ -3,6 +3,21 @@
 #include "defines.h"
 #include "angle.h"
 
+/**
+ * id_pid (comp ids): tunes pos_bw, vel_bw and vel_d one at a time on a
+ * trapezoid profile between min_pos and max_pos. Each step raises the
+ * parameter by step while the cycle cost (tracking error) stays under
+ * kt x the best; a worse cost cuts it by kd and moves to the next one.
+ *
+ * The first cycle after enable is a warm-up and is not scored: it holds the
+ * enable, an ACIM's field build and the integrators settling. The profile
+ * starts at pos_fb, so there is no jump. Each score averages rep cycles.
+ *
+ * With good feedforward the tracking cost goes to almost nothing and stops
+ * limiting the gains, so a step also fails when the feedback torque's noise
+ * (fb_torque above NOISE_HZ, rms) goes over fb_max x max_torque, or the
+ * torque command peaks over PEAK_MAX x max_torque.
+ */
 HAL_COMP(ids);
 
 HAL_PIN(en);
@@ -20,6 +35,7 @@ HAL_PIN(max_vel);
 HAL_PIN(max_acc);
 
 HAL_PIN(pos);
+HAL_PIN(pos_fb);  // pid0.pos_fb: the profile starts where the rotor is
 HAL_PIN(vel);
 HAL_PIN(acc);
 HAL_PIN(pos_cmd);
@@ -44,12 +60,31 @@ HAL_PIN(kd);
 HAL_PINA(params, 3);
 HAL_PINA(max_params, 3);
 
+HAL_PIN(torque);      // pid0.torque_cmd
+HAL_PIN(fb_torque);   // pid0.fb_torque_cmd
+HAL_PIN(max_torque);  // pid0.max_torque
+HAL_PIN(fb_max);      // noise limit, fraction of max_torque
+HAL_PIN(noise);       // last score: fb_torque noise, rms [Nm]
+HAL_PIN(peak);        // last score: peak |torque| [Nm]
+
 HAL_PIN(target);
 HAL_PIN(cost);
 HAL_PIN(min_cost);
 HAL_PIN(auto_step);
 
 HAL_PIN(timer);
+
+#define NOISE_HZ 50.0  // fb_torque above this counts as noise [Hz]
+#define PEAK_MAX 0.95  // torque peak limit, fraction of max_torque
+
+struct ids_ctx_t {
+  int warm;        // the warm-up cycle is over
+  int n;           // cycles in the current score
+  float t;         // time in the current score [s]
+  float fb_lp;     // fb_torque low pass
+  float noise_sq;  // integral of the noise squared
+  float peak;
+};
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   //struct ids_ctx_t * ctx = (struct ids_ctx_t *)ctx_ptr;
@@ -75,8 +110,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(max_pos) = 10.0;
 
   PIN(param) = 0.0;
-  PIN(step)  = 0.25;
+  PIN(step)  = 0.1;
   PIN(rep)   = 2.0;
+  PIN(fb_max) = 0.05;
 
   PIN(auto_step) = 1.0;
 }
@@ -113,7 +149,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  //struct ids_ctx_t * ctx = (struct ids_ctx_t *)ctx_ptr;
+  struct ids_ctx_t *ctx = (struct ids_ctx_t *)ctx_ptr;
   struct ids_pin_ctx_t *pins = (struct ids_pin_ctx_t *)pin_ptr;
 
   if(PIN(en) <= 0.0) {
@@ -128,8 +164,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(vel)     = 0.0;
 
       PIN(param) = 0.0;
-      PIN(step)  = 0.1;
-      PIN(rep)   = 1.0;
+      PIN(timer) = 0.0;
+      // follow the rotor while idle, so the profile starts without a step
+      PIN(pos)     = PIN(pos_fb);
+      PIN(pos_cmd) = mod(PIN(pos));
+      PIN(target)  = PIN(max_pos);
 
       PIN(pos_bw)     = 10.0;
       PIN(vel_bw)     = 100.0;
@@ -142,7 +181,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PINA(max_params, 1) = 1.0;
 
       PIN(min_cost) = (PIN(max_pos) - PIN(min_pos)) * (PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) * 100.0;
-      PIN(cost)     = PIN(min_cost);
+      PIN(cost)     = 0.0;
+      ctx->warm     = 0;
+      ctx->n        = 0;
+      ctx->t        = 0.0;
+      ctx->fb_lp    = 0.0;
+      ctx->noise_sq = 0.0;
+      ctx->peak     = 0.0;
 
       if(PIN(en) > 0.0) {
         PIN(state) = 1.0;
@@ -179,6 +224,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(cost) += PIN(pos_error) * PIN(pos_error) * PIN(ks) * period;
       PIN(cost) += PIN(vel_error) * PIN(vel_error) * PIN(kv) * period;
 
+      ctx->fb_lp += (PIN(fb_torque) - ctx->fb_lp) * LIMIT(2.0 * M_PI * NOISE_HZ * period, 1.0);
+      ctx->noise_sq += (PIN(fb_torque) - ctx->fb_lp) * (PIN(fb_torque) - ctx->fb_lp) * period;
+      ctx->peak = MAX(ctx->peak, ABS(PIN(torque)));
+      ctx->t += period;
 
       PIN(timer) += period;
       if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) + 2.0 * PIN(max_vel) / PIN(max_acc))) {
@@ -190,7 +239,25 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(timer) = 0.0;
       }
 
+      int score = 0;
       if(PIN(timer) == 0.0) {
+        if(!ctx->warm) {  // warm-up cycle: not scored
+          ctx->warm = 1;
+          PIN(cost) = 0.0;
+          ctx->t = ctx->noise_sq = ctx->peak = 0.0;
+        } else if(++ctx->n >= MAX(PIN(rep), 1.0)) {
+          score = 1;
+        }
+      }
+
+      if(score) {
+        PIN(cost) /= ctx->n;
+        PIN(noise) = ctx->t > 0.0 ? sqrtf(ctx->noise_sq / ctx->t) : 0.0;
+        PIN(peak)  = ctx->peak;
+        int noisy  = PIN(max_torque) > 0.0 && (PIN(noise) > PIN(fb_max) * PIN(max_torque) || PIN(peak) > PEAK_MAX * PIN(max_torque));
+        ctx->n = 0;
+        ctx->t = ctx->noise_sq = ctx->peak = 0.0;
+
         PIN(min_cost) = MIN(PIN(cost), PIN(min_cost));
 
         PINA(max_params, 2) = PINA(params, 0) * 2.0;
@@ -200,7 +267,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(min_cost)                 = PIN(cost) * 10.0;
           PIN(param)
           ++;
-        } else if(PIN(cost) > PIN(min_cost) * PIN(kt)) {
+        } else if(noisy || PIN(cost) > PIN(min_cost) * PIN(kt)) {
           PINA(params, (unsigned int)PIN(param)) *= PIN(kd);
           PIN(min_cost) = PIN(cost) * 10.0;
           PIN(param)
@@ -238,6 +305,6 @@ hal_comp_t ids_comp_struct = {
     .frt_start = 0,
     .rt_stop   = 0,
     .frt_stop  = 0,
-    .ctx_size  = 0,  //sizeof(struct ids_ctx_t),
+    .ctx_size  = sizeof(struct ids_ctx_t),
     .pin_count = sizeof(struct ids_pin_ctx_t) / sizeof(struct hal_pin_inst_t),
 };
