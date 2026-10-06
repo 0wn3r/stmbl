@@ -10,6 +10,7 @@ ipm0.iq = hv0.iq_fb
 ipm0.ud = hv0.ud_fb
 ipm0.uq = hv0.uq_fb
 ipm0.dc_volt = hv0.dc_volt
+ipm0.f_sw = hv0.pwm_freq
 ipm0.case_temp = hv0.hv_temp
 ipm0.pos = hv0.pos
 fault0.ipm_temp = ipm0.temp
