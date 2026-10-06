@@ -57,7 +57,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float pos = ctx->buf[(p - 1 + velbuf_size) % velbuf_size];
 
   float old_pos   = ctx->buf[p];
-  float diff_time = ctx->frt_period * velbuf_size;
+  float diff_time = ctx->frt_period * (velbuf_size - 1);
 
   float min_diff = PIN(min_pos_diff);
 
