@@ -45,6 +45,8 @@ HAL_PIN(min_pos);
 HAL_PIN(max_pos);
 HAL_PIN(max_vel);
 HAL_PIN(max_acc);
+HAL_PIN(acc_lim);  // conf0.max_acc: the profile's max_acc is capped at it
+HAL_PIN(vel_lim);  // conf0.max_vel
 
 HAL_PIN(pos);
 HAL_PIN(pos_fb);  // fb_switch0.pos_fb: the profile starts where the rotor is
@@ -235,13 +237,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 12:
+      // the profile stays inside the drive's own limits: pid clamps its p term at conf0.max_acc
+      float p_acc = PIN(acc_lim) > 0.0 ? MIN(PIN(max_acc), PIN(acc_lim)) : PIN(max_acc);
+      float p_vel = PIN(vel_lim) > 0.0 ? MIN(PIN(max_vel), PIN(vel_lim)) : PIN(max_vel);
       PIN(pos) += PIN(vel) * period + PIN(acc) * period * period / 2.0;
       PIN(vel) += PIN(acc) * period;
       float to_go      = PIN(target) - PIN(pos);
-      float time_to_go = sqrtf(2.0 * ABS(to_go) / PIN(max_acc));
-      float acc        = PIN(max_acc) * SIGN(to_go);
+      float time_to_go = sqrtf(2.0 * ABS(to_go) / p_acc);
+      float acc        = p_acc * SIGN(to_go);
       float vel        = acc * time_to_go;
-      vel              = LIMIT(vel, PIN(max_vel));
+      vel              = LIMIT(vel, p_vel);
       acc              = (vel - PIN(vel)) / period;
 
       if(time_to_go < period) {
@@ -254,7 +259,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(acc)   = 0.0;
       }
 
-      PIN(acc) = LIMIT(acc, PIN(max_acc));
+      PIN(acc) = LIMIT(acc, p_acc);
 
       PIN(pos_cmd) = mod(PIN(pos));
       PIN(vel_cmd) = PIN(vel) * PIN(ff);
@@ -273,12 +278,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       }
 
       PIN(timer) += period;
-      if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) + 2.0 * PIN(max_vel) / PIN(max_acc))) {
+      if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / p_vel + 2.0 * p_vel / p_acc)) {
         PIN(target) = PIN(max_pos);
       } else {
         PIN(target) = PIN(min_pos);
       }
-      if(PIN(timer) > 2.0 * (ABS(PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) + 2.0 * PIN(max_vel) / PIN(max_acc))) {
+      if(PIN(timer) > 2.0 * (ABS(PIN(max_pos) - PIN(min_pos)) / p_vel + 2.0 * p_vel / p_acc)) {
         PIN(timer) = 0.0;
       }
 

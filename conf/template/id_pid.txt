@@ -23,6 +23,8 @@ ids0.sat = pid0.sat
 ids0.pos_bw0 = conf0.pos_bw
 ids0.vel_bw0 = conf0.vel_bw
 ids0.vel_d0 = conf0.vel_d
+ids0.acc_lim = conf0.max_acc
+ids0.vel_lim = conf0.max_vel
 
 conf0.max_pos_error = 0
 conf0.max_sat = 10
