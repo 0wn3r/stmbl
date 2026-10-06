@@ -20,6 +20,9 @@ ids0.torque = pid0.torque_cmd
 ids0.fb_torque = pid0.fb_torque_cmd
 ids0.max_torque = conf0.max_force
 ids0.sat = pid0.sat
+ids0.pos_bw0 = conf0.pos_bw
+ids0.vel_bw0 = conf0.vel_bw
+ids0.vel_d0 = conf0.vel_d
 
 conf0.max_pos_error = 0
 conf0.max_sat = 10

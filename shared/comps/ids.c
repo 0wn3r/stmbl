@@ -17,7 +17,9 @@
  * which pid saturates (pid0.sat, or the torque at conf0.max_force) is not
  * scored either: the warm-up runs on, up to SAT_MAX cycles, and a scored
  * cycle is repeated with the same gains. SAT_MAX saturated cycles in a row
- * count as a failed step. The profile
+ * count as a failed step; at a parameter's start value they cut it by kd
+ * and retry, up to CUT_MAX times. The start values are conf0.pos_bw, vel_bw
+ * and vel_d (10, 100 and 10 when they are 0). The profile
  * starts at pos_fb, so there is no jump. Each score averages rep cycles.
  *
  * With good feedforward the tracking cost goes to almost nothing and stops
@@ -84,10 +86,14 @@ HAL_PIN(auto_step);
 
 HAL_PIN(timer);
 HAL_PIN(sat);      // pid0.sat
+HAL_PIN(pos_bw0);  // conf0.pos_bw: start value, 10 when 0
+HAL_PIN(vel_bw0);  // conf0.vel_bw: start value, 100 when 0
+HAL_PIN(vel_d0);   // conf0.vel_d: start value, 10 when 0
 HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 
 #define NOISE_HZ 50.0  // fb_torque above this counts as noise [Hz]
 #define SAT_MAX 5      // saturated cycles in a row before a step fails
+#define CUT_MAX 5      // kd cuts of a saturating start value before moving on
 
 struct ids_ctx_t {
   int warm;        // the warm-up cycle is over
@@ -97,6 +103,7 @@ struct ids_ctx_t {
   float noise_sq;  // integral of the noise squared
   float peak;
   int first;      // the next score is the first of this parameter
+  int cuts;       // kd cuts of this parameter's start value
   int sat_cycle;  // this cycle saturated
   int sat_n;      // saturated cycles in a row
 };
@@ -197,9 +204,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(pos_cmd) = mod(PIN(pos));
       PIN(target)  = PIN(max_pos);
 
-      PIN(pos_bw)     = 10.0;
-      PIN(vel_bw)     = 100.0;
-      PIN(vel_d)      = 10.0;
+      PIN(pos_bw)     = PIN(pos_bw0) > 0.0 ? PIN(pos_bw0) : 10.0;
+      PIN(vel_bw)     = PIN(vel_bw0) > 0.0 ? PIN(vel_bw0) : 100.0;
+      PIN(vel_d)      = PIN(vel_d0) > 0.0 ? PIN(vel_d0) : 10.0;
       PINA(params, 0) = PIN(vel_bw);
       PINA(params, 1) = 1.0 / PIN(vel_d);
       PINA(params, 2) = PIN(pos_bw);
@@ -209,6 +216,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(min_cost) = 0.0;  // the cost to beat: the last kept score
       ctx->first    = 1;
+      ctx->cuts     = 0;
       PIN(cost)     = 0.0;
       ctx->warm     = 0;
       ctx->n        = 0;
@@ -317,12 +325,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PINA(params, k) = PINA(max_params, k);
           ctx->first      = 1;
           PIN(param)++;
+        } else if(ctx->first && sat_fail && ++ctx->cuts < CUT_MAX) {
+          PINA(params, k) *= PIN(kd);  // the start value saturates: cut it, try again
         } else if(ctx->first && noisy) {  // noisy at the start value: cut it
           PINA(params, k) *= PIN(kd);
+          ctx->cuts = 0;
           PIN(param)++;
         } else if(!ctx->first && (noisy || PIN(cost) > PIN(min_cost) * (1.0 - PIN(kg)))) {
           PINA(params, k) /= 1.0 + PIN(step);  // back to the last kept value
           ctx->first = 1;
+          ctx->cuts  = 0;
           PIN(param)++;
         } else {
           PIN(min_cost) = PIN(cost);
