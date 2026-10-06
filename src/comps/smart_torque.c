@@ -33,8 +33,8 @@ static volatile uint8_t txbuf[128];  //tx dma buffer
 static int rxpos; 
 
 static void sendSerial(uint8_t len) {
+  dma_stream_stop(DMA1_Stream4);  // NDTR is read-only while the stream runs
   LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len);
-  dma_stream_stop(DMA1_Stream4);
   LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
 }
 
