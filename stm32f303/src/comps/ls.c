@@ -52,7 +52,7 @@ HAL_PIN(psi);
 HAL_PIN(cur_bw);
 HAL_PIN(cur_ff);
 HAL_PIN(cur_ind);
-HAL_PIN(max_y);
+HAL_PIN(max_y);  // the f4's hv0.max_y, not used on the f3
 HAL_PIN(max_cur);
 HAL_PIN(dac);
 HAL_PIN(drop_k);
@@ -63,6 +63,7 @@ HAL_PIN(drop_knee);
 
 // process data to LS
 HAL_PIN(dc_volt);
+HAL_PIN(udc_duty);  // io0.udc_duty, the link hv0 divides by, for pwm_volt
 HAL_PIN(id_fb);
 HAL_PIN(iq_fb);
 HAL_PIN(ud_fb);
@@ -70,8 +71,9 @@ HAL_PIN(uq_fb);
 
 // state data to LS
 HAL_PIN(hv_temp);
+HAL_PIN(hv_temp_ok);  // io0.hv_temp_ok: 0 never read, 1 live, 2 held
 HAL_PIN(mot_temp);
-HAL_PIN(core_temp);
+HAL_PIN(core_temp);  // not measured, sends 0
 HAL_PIN(fault_in);  //fault code send to f4
 
 // short-circuit braking request for io0: follows the f4's flag, and on a
@@ -101,6 +103,8 @@ HAL_PIN(arr);
 HAL_PIN(dma_pos_cmd);
 HAL_PIN(inc);
 HAL_PIN(window);
+
+_Static_assert(sizeof(f3_config_data_t) / 4 < 32, "conf_seen has a bit per config word");
 
 struct ls_ctx_t {
   uint32_t timeout;
@@ -203,6 +207,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   config.pins.drop_knee = 0.0;
   PIN(v_lead) = 1.5;
   PIN(ramp)   = 1.0;
+  PIN(sbrake_time) = 1.0;
 
   LL_USART_SetRxTimeout(USART3, 16);  // 16 bits timeout
   LL_USART_EnableRxTimeout(USART3);
@@ -222,6 +227,8 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->sbrake_loss = 0;
   ctx->tx_addr     = 0;
   ctx->conf_seen   = 0;
+  ctx->d_tgt = ctx->q_tgt = 0.0;
+  ctx->d_step = ctx->q_step = 0.0;
   ctx->rx_done     = 0;
   ctx->send        = 0;
   PIN(crc_error)   = 0.0;
@@ -229,7 +236,6 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(timeout)     = 0.0;
   PIN(sbrake)      = 0.0;
   PIN(sbrake_arm)  = 0.0;
-  PIN(sbrake_time) = 1.0;
   PIN(idle)        = 0.0;
   PIN(dma_pos_cmd) = 4;
   PIN(inc)         = PWM_RES * 5 / 4800;  // ARR step, 5 at 15 kHz, about 0.1 %
@@ -415,6 +421,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     state.pins.emf_val   = PIN(emf_val);
     state.pins.unused0   = 0.0;
     state.pins.unused1   = 0.0;
+    state.pins.hv_temp_ok = PIN(hv_temp_ok);
     state.pins.pwm_freq  = PWM_FREQ;
     state.pins.link_to   = PIN(timeout);
 
@@ -479,20 +486,20 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // TODO: sin = 0.5
   switch((uint16_t)PIN(phase_mode)) {
     case PHASE_90_3PH:  // 90°
-      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_2 * duty;
+      PIN(pwm_volt) = PIN(udc_duty) * M_SQRT1_2 * duty;
       break;
 
     case PHASE_90_4PH:  // 90°
-      PIN(pwm_volt) = PIN(dc_volt) * duty;
+      PIN(pwm_volt) = PIN(udc_duty) * duty;
       break;
 
     case PHASE_120_3PH:  // 120°
-      PIN(pwm_volt) = PIN(dc_volt) * M_SQRT1_3 * duty;
+      PIN(pwm_volt) = PIN(udc_duty) * M_SQRT1_3 * duty;
       break;
 
     case PHASE_180_2PH:  // 180°
     case PHASE_180_3PH:  // 180°
-      PIN(pwm_volt) = PIN(dc_volt) * duty;
+      PIN(pwm_volt) = PIN(udc_duty) * duty;
       break;
 
     default:
