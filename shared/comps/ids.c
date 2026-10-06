@@ -15,9 +15,10 @@
  *
  * With good feedforward the tracking cost goes to almost nothing and stops
  * limiting the gains, so a step also fails when the feedback torque's noise
- * (fb_torque above NOISE_HZ, rms) goes over fb_max x max_torque, or the
- * torque command peaks over PEAK_MAX x max_torque. max_torque is
- * conf0.max_force; 0 turns both limits off. The limits are printed at the
+ * (fb_torque above NOISE_HZ, rms) goes over fb_max x max_torque. max_torque
+ * is conf0.max_force; 0 turns the limit off. The torque peak is only
+ * reported: it is set by the profile (J x max_acc at the reversals), not by
+ * the gains, so it would fail every step alike. The limit is printed at the
  * start, the last noise and peak with the result.
  */
 HAL_COMP(ids);
@@ -77,7 +78,6 @@ HAL_PIN(auto_step);
 HAL_PIN(timer);
 
 #define NOISE_HZ 50.0  // fb_torque above this counts as noise [Hz]
-#define PEAK_MAX 0.95  // torque peak limit, fraction of max_torque
 
 struct ids_ctx_t {
   int warm;        // the warm-up cycle is over
@@ -139,9 +139,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("ids0.state = 1.2 <font color='green'>to start</font>\n");
       }
       if(PIN(max_torque) > 0.0) {
-        printf("<font color='green'># noise limit %f Nm rms (ids0.fb_max %f x conf0.max_force %f Nm), peak limit %f Nm</font>\n", PIN(fb_max) * PIN(max_torque), PIN(fb_max), PIN(max_torque), PEAK_MAX * PIN(max_torque));
+        printf("<font color='green'># noise limit %f Nm rms (ids0.fb_max %f x conf0.max_force %f Nm)</font>\n", PIN(fb_max) * PIN(max_torque), PIN(fb_max), PIN(max_torque));
       } else {
-        printf("<font color='red'>noise and peak limits off</font>: ids0.max_torque reads 0, set conf0.max_force\n");
+        printf("<font color='red'>noise limit off</font>: ids0.max_torque reads 0, set conf0.max_force\n");
       }
       break;
 
@@ -150,6 +150,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       printf("conf0.vel_bw = %f <font color='green'># append to config</font>\n", PIN(vel_bw));
       printf("conf0.vel_d = %f <font color='green'># append to config</font>\n", PIN(vel_d));
       printf("<font color='green'># last score: noise %f Nm rms, peak %f Nm, of conf0.max_force %f Nm</font>\n", PIN(noise), PIN(peak), PIN(max_torque));
+      if(PIN(max_torque) > 0.0 && PIN(peak) > PIN(max_torque)) {
+        printf("<font color='red'>the profile peaks over conf0.max_force</font>: raise it to the drive's real torque or lower ids0.max_acc\n");
+      }
       printf("done\n");
       PIN(state) = 1.4;
       break;
@@ -262,7 +265,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(cost) /= ctx->n;
         PIN(noise) = ctx->t > 0.0 ? sqrtf(ctx->noise_sq / ctx->t) : 0.0;
         PIN(peak)  = ctx->peak;
-        int noisy  = PIN(max_torque) > 0.0 && (PIN(noise) > PIN(fb_max) * PIN(max_torque) || PIN(peak) > PEAK_MAX * PIN(max_torque));
+        int noisy  = PIN(max_torque) > 0.0 && PIN(noise) > PIN(fb_max) * PIN(max_torque);
         ctx->n = 0;
         ctx->t = ctx->noise_sq = ctx->peak = 0.0;
 
