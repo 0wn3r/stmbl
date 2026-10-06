@@ -28,7 +28,9 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(l_ok);      // 1 = l is a measurement, 0 = it is not
-HAL_PIN(l_freq);    // *parameter*, l test injection frequency [Hz]
+HAL_PIN(l_freq);    // *parameter*, l test injection frequency [Hz], 0 = loop_bw / 2 pi
+HAL_PIN(loop_bw);   // the run's current loop bandwidth, conf0.cur_bw [rad/s], 0 = 1000
+HAL_PIN(l_f);       // *output*, the injection frequency the l test used [Hz]
 HAL_PIN(l_ripple);  // *parameter*, l test injected current, fraction of test_cur
 HAL_PIN(ld);        // d axis inductance at test_cur on d [H]
 HAL_PIN(lq);        // q axis inductance, same bias [H]
@@ -246,8 +248,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(r_known)  = 0.0;
   PIN(dt_ideal) = 0.0;
   PIN(test_cur) = 6.0;
-  // w l ~4.7 ohm on X; higher takes in more of the f3's sampling
-  PIN(l_freq)   = 250.0;
+  // 0: at the current loop's crossover, loop_bw / 2 pi (480 Hz at cur_bw
+  // 3000), where the loop uses l; on Y that reads Ld/Lq ~5% under 250 Hz
+  PIN(l_freq)   = 0.0;
   PIN(l_ripple) = 0.15;
   // the lowest speed where the coast's two halves agree on X; the pp test's
   // field runs at this many electrical rad/s
@@ -386,7 +389,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         if(PIN(l_ok) > 0.0) {
           printf("conf0.l = %f <font color='green'># append to config</font>\n", PIN(ld));
           printf("conf0.lq = %f <font color='green'># append to config</font>\n", PIN(lq));
-          printf("<font color='green'># Ld and Lq at %f A on d, from a %f Hz injection\n", PIN(test_cur), PIN(l_freq));
+          printf("<font color='green'># Ld and Lq at %f A on d, from a %f Hz injection\n", PIN(test_cur), PIN(l_f));
           printf("# (%f V -> %f A on d, %f V -> %f A on q).</font>\n", PIN(l_vd), PIN(l_id), PIN(l_vq), PIN(l_iq));
         } else {
           printf("<font color='red'>l not measured</font>: the injection drew %f A on d and %f A on q\n", PIN(l_id), PIN(l_iq));
@@ -726,7 +729,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(cur_bw)   = 1.0;
       PIN(com_pos)  = 0.0;
 
-      float f = CLAMP(PIN(l_freq), 20.0, 0.2 / period);
+      float f = PIN(l_freq) > 0.0 ? PIN(l_freq) : (PIN(loop_bw) > 0.0 ? PIN(loop_bw) : 1000.0) / (2.0 * M_PI);
+      f       = CLAMP(f, 20.0, 0.2 / period);
+      // a multiple of 1 / L_MEASURE, so the window holds whole cycles
+      f        = MAX(roundf(f * L_MEASURE), 1.0) / L_MEASURE;
+      PIN(l_f) = f;
       float w = 2.0 * M_PI * f;
       ctx->l_th += w * period;
       if(ctx->l_th > 2.0 * M_PI) {
