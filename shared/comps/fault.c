@@ -372,7 +372,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   int stop_edge = powered(last_state) && !powered(ctx->state) && ctx->state != HARD_FAULT && ctx->state != LED_TEST;
   int fallback  = 0;  // regenerative stop given up: short brake instead
   if(stop_edge) {
-    if(PIN(rstop_en) > 0.0 && rstop_safe(ctx->fault) && PIN(rstop_time) > 0.0) {
+    // not out of PHASING: commutation is not found yet, so the bridge must
+    // not be driven again for a regenerative stop or the hold
+    if(PIN(rstop_en) > 0.0 && rstop_safe(ctx->fault) && PIN(rstop_time) > 0.0 && last_state != PHASING) {
       ctx->rstop_timer = PIN(rstop_time);
     } else {
       fallback = 1;
