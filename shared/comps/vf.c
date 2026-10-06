@@ -45,7 +45,7 @@
 *   encoder this measures the swing directly, to find the damping law that
 *   an estimate can then replace. k_vel 0 = off.
 *   vel_src 1 uses an estimate instead, no encoder: the air gap torque
-*   1.5 * (u * i_act - r * |i|^2) / synchronous speed over `j` is the rotor
+*   1.5 * (u * i_act - r * |i|^2) / signed synchronous speed over `j` is the rotor
 *   acceleration; less the field's own acceleration (the ramp, stall
 *   prevention, slip, damp), high passed at damp_hz and integrated (leaky at
 *   damp_hz), it gives the swing of the rotor against the field, `w_est`. Needs `j` (conf0.j) and `r` (conf0.r).
@@ -212,7 +212,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->v_lp += (dv - ctx->v_lp) * k_hp;
     float w = dv - ctx->v_lp;  // measured swing
 
-    float w_s    = MAX(ABS(vel + slip), 5.0);  // synchronous speed [rad/s mech]
+    // signed synchronous speed: the air gap power over it is the torque with
+    // its sign, so the estimate is the same in reverse
+    float w_f    = vel + slip;
+    float w_s    = (w_f < 0.0 ? -1.0 : 1.0) * MAX(ABS(w_f), 5.0);  // [rad/s mech]
     float torque = 1.5 * (u * i_act - PIN(r) * (id * id + iq * iq)) / w_s;
     // rotor acceleration less field acceleration, both [rad/s^2 mech]
     float acc_f = (vel + slip + PIN(damp) - ctx->vel_f) / period;
@@ -229,7 +232,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       w = ctx->w_est;
     }
     ctx->w_lp += (w - ctx->w_lp) * k_lp;
-    damp = LIMIT(PIN(k_damp) * ctx->d_lp + PIN(k_vel) * ctx->w_lp, 0.05 * MAX(PIN(vel_n), 0.1));
+    // i_act is positive motoring either way, so its swing moves the field in
+    // the direction of rotation: times the sign of vel, like the slip
+    float dir = vel < 0.0 ? -1.0 : 1.0;
+    damp = LIMIT(PIN(k_damp) * ctx->d_lp * dir + PIN(k_vel) * ctx->w_lp, 0.05 * MAX(PIN(vel_n), 0.1));
   } else {
     ctx->d_lp = 0.0;
     ctx->v_lp  = 0.0;
