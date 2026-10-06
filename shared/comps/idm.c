@@ -22,7 +22,7 @@ HAL_PIN(max_vel);
 HAL_PIN(max_acc);
 
 HAL_PIN(pos);
-HAL_PIN(pos_fb);      // pid0.pos_fb: the profile starts where the rotor is
+HAL_PIN(pos_fb);      // fb_switch0.pos_fb: the profile starts where the rotor is
 HAL_PIN(pos_cmd);
 HAL_PIN(vel_cmd);
 HAL_PIN(acc_cmd);
