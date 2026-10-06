@@ -16,7 +16,9 @@
  * With good feedforward the tracking cost goes to almost nothing and stops
  * limiting the gains, so a step also fails when the feedback torque's noise
  * (fb_torque above NOISE_HZ, rms) goes over fb_max x max_torque, or the
- * torque command peaks over PEAK_MAX x max_torque.
+ * torque command peaks over PEAK_MAX x max_torque. max_torque is
+ * conf0.max_force; 0 turns both limits off. The limits are printed at the
+ * start, the last noise and peak with the result.
  */
 HAL_COMP(ids);
 
@@ -35,7 +37,7 @@ HAL_PIN(max_vel);
 HAL_PIN(max_acc);
 
 HAL_PIN(pos);
-HAL_PIN(pos_fb);  // pid0.pos_fb: the profile starts where the rotor is
+HAL_PIN(pos_fb);  // fb_switch0.pos_fb: the profile starts where the rotor is
 HAL_PIN(vel);
 HAL_PIN(acc);
 HAL_PIN(pos_cmd);
@@ -62,7 +64,7 @@ HAL_PINA(max_params, 3);
 
 HAL_PIN(torque);      // pid0.torque_cmd
 HAL_PIN(fb_torque);   // pid0.fb_torque_cmd
-HAL_PIN(max_torque);  // pid0.max_torque
+HAL_PIN(max_torque);  // conf0.max_force
 HAL_PIN(fb_max);      // noise limit, fraction of max_torque
 HAL_PIN(noise);       // last score: fb_torque noise, rms [Nm]
 HAL_PIN(peak);        // last score: peak |torque| [Nm]
@@ -136,12 +138,18 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("the motor will move\n");
         printf("ids0.state = 1.2 <font color='green'>to start</font>\n");
       }
+      if(PIN(max_torque) > 0.0) {
+        printf("<font color='green'># noise limit %f Nm rms (ids0.fb_max %f x conf0.max_force %f Nm), peak limit %f Nm</font>\n", PIN(fb_max) * PIN(max_torque), PIN(fb_max), PIN(max_torque), PEAK_MAX * PIN(max_torque));
+      } else {
+        printf("<font color='red'>noise and peak limits off</font>: ids0.max_torque reads 0, set conf0.max_force\n");
+      }
       break;
 
     case 13:
       printf("conf0.pos_bw = %f <font color='green'># append to config</font>\n", PIN(pos_bw));
       printf("conf0.vel_bw = %f <font color='green'># append to config</font>\n", PIN(vel_bw));
       printf("conf0.vel_d = %f <font color='green'># append to config</font>\n", PIN(vel_d));
+      printf("<font color='green'># last score: noise %f Nm rms, peak %f Nm, of conf0.max_force %f Nm</font>\n", PIN(noise), PIN(peak), PIN(max_torque));
       printf("done\n");
       PIN(state) = 1.4;
       break;
