@@ -36,6 +36,10 @@
 * follows the flux command through the rotor flux lag tr, so integral gain
 * ki on that lag rings with damping 1 / (2 sqrt(ki tr)); 2.5 / tr gives
 * about 0.3 (spindle: 28; 150 limit cycled, 30 was clean). 50 without tr.
+* Keep the speed loop at vel_bw about 40 or below: above that, iq ripple
+* moves the duty, the trim moves the flux, and the two loops oscillate at
+* the base speed edge (spindle, vel_bw 74: 11 Hz). A slower ki does not fix
+* it: ki 5 still oscillates and leaves the flux low after an acceleration.
 */
 
 HAL_COMP(acim_fw);
