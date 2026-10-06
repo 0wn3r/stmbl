@@ -13,7 +13,11 @@
  * cut by kd instead.
  *
  * The first cycle after enable is a warm-up and is not scored: it holds the
- * enable, an ACIM's field build and the integrators settling. The profile
+ * enable, an ACIM's field build and the integrators settling. A cycle in
+ * which pid saturates (pid0.sat, or the torque at conf0.max_force) is not
+ * scored either: the warm-up runs on, up to SAT_MAX cycles, and a scored
+ * cycle is repeated with the same gains. SAT_MAX saturated cycles in a row
+ * count as a failed step. The profile
  * starts at pos_fb, so there is no jump. Each score averages rep cycles.
  *
  * With good feedforward the tracking cost goes to almost nothing and stops
@@ -79,8 +83,11 @@ HAL_PIN(min_cost);
 HAL_PIN(auto_step);
 
 HAL_PIN(timer);
+HAL_PIN(sat);      // pid0.sat
+HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 
 #define NOISE_HZ 50.0  // fb_torque above this counts as noise [Hz]
+#define SAT_MAX 5      // saturated cycles in a row before a step fails
 
 struct ids_ctx_t {
   int warm;        // the warm-up cycle is over
@@ -89,7 +96,9 @@ struct ids_ctx_t {
   float fb_lp;     // fb_torque low pass
   float noise_sq;  // integral of the noise squared
   float peak;
-  int first;  // the next score is the first of this parameter
+  int first;      // the next score is the first of this parameter
+  int sat_cycle;  // this cycle saturated
+  int sat_n;      // saturated cycles in a row
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -154,6 +163,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       printf("conf0.vel_bw = %f <font color='green'># append to config</font>\n", PIN(vel_bw));
       printf("conf0.vel_d = %f <font color='green'># append to config</font>\n", PIN(vel_d));
       printf("<font color='green'># last score: noise %f Nm rms, peak %f Nm, of conf0.max_force %f Nm</font>\n", PIN(noise), PIN(peak), PIN(max_torque));
+      if(PIN(skipped) > 0.0) {
+        printf("<font color='green'># %i saturated cycles were not scored</font>\n", (int)PIN(skipped));
+      }
       if(PIN(max_torque) > 0.0 && PIN(peak) > PIN(max_torque)) {
         printf("<font color='red'>the profile peaks over conf0.max_force</font>: raise it to the drive's real torque or lower ids0.max_acc\n");
       }
@@ -203,6 +215,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->t        = 0.0;
       ctx->fb_lp    = 0.0;
       ctx->noise_sq = 0.0;
+      ctx->sat_cycle = 0;
+      ctx->sat_n     = 0;
+      PIN(skipped)   = 0.0;
       ctx->peak     = 0.0;
 
       if(PIN(en) > 0.0) {
@@ -244,6 +259,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->noise_sq += (PIN(fb_torque) - ctx->fb_lp) * (PIN(fb_torque) - ctx->fb_lp) * period;
       ctx->peak = MAX(ctx->peak, ABS(PIN(torque)));
       ctx->t += period;
+      if(PIN(sat) > 0.0 || (PIN(max_torque) > 0.0 && ABS(PIN(torque)) >= 0.99 * PIN(max_torque))) {
+        ctx->sat_cycle = 1;
+      }
 
       PIN(timer) += period;
       if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) + 2.0 * PIN(max_vel) / PIN(max_acc))) {
@@ -255,12 +273,30 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(timer) = 0.0;
       }
 
-      int score = 0;
+      int score = 0, sat_fail = 0;
       if(PIN(timer) == 0.0) {
-        if(!ctx->warm) {  // warm-up cycle: not scored
-          ctx->warm = 1;
+        int sat = ctx->sat_cycle;
+        ctx->sat_cycle = 0;
+        ctx->sat_n     = sat ? ctx->sat_n + 1 : 0;
+        if(sat) {
+          PIN(skipped)++;
+        }
+        if(!ctx->warm) {  // warm-up: not scored, runs on while pid saturates
+          if(!sat || ctx->sat_n >= SAT_MAX) {
+            ctx->warm  = 1;
+            ctx->sat_n = 0;
+          }
           PIN(cost) = 0.0;
           ctx->t = ctx->noise_sq = ctx->peak = 0.0;
+        } else if(sat && ctx->sat_n < SAT_MAX) {  // drop it, same gains again
+          ctx->n    = 0;
+          PIN(cost) = 0.0;
+          ctx->t = ctx->noise_sq = ctx->peak = 0.0;
+        } else if(sat) {  // saturates every time: these gains fail
+          ctx->sat_n = 0;
+          sat_fail   = 1;
+          score      = 1;
+          ctx->n     = MAX(ctx->n, 1);
         } else if(++ctx->n >= MAX(PIN(rep), 1.0)) {
           score = 1;
         }
@@ -270,7 +306,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(cost) /= ctx->n;
         PIN(noise) = ctx->t > 0.0 ? sqrtf(ctx->noise_sq / ctx->t) : 0.0;
         PIN(peak)  = ctx->peak;
-        int noisy  = PIN(max_torque) > 0.0 && PIN(noise) > PIN(fb_max) * PIN(max_torque);
+        int noisy  = sat_fail || (PIN(max_torque) > 0.0 && PIN(noise) > PIN(fb_max) * PIN(max_torque));
         ctx->n = 0;
         ctx->t = ctx->noise_sq = ctx->peak = 0.0;
 
