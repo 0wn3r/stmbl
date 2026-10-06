@@ -24,6 +24,18 @@
 *
 * With `i_knee` > 0 both stop growing below i_knee and stay at their
 * plateau (1 + sat); i_knee 0 is a straight line down to zero flux.
+*
+* At low induction the iron's permeability falls again (the foot of the B-H
+* curve): on the spindle the secant lmr was flat from 9 to 19 A and 11% lower
+* at 6.7 A (idacim sweep, 6 Oct). With `i_dip` > 0 both fall below it:
+*
+*     y       = (i_dip - |i_mr|) / i_dip, clamped 0..1
+*     tr_act  = ... * (1 - lmr_dip * y)
+*     lmr_act = ... * (1 - lmr_dip * y)
+*
+* tr is Lr / Rr and Lr moves with Lm, so the same factor applies to both.
+* i_dip 0 (default) or lmr_dip 0 leaves it out.
+*
 * The model, slip, psi and torque run on tr_act and lmr_act. tr changes about
 * twice as much as the secant lmr, so the two gains are separate; 0 (default)
 * or i_n 0 keeps both constant. `id`/`iq` are normally the measured
@@ -118,6 +130,8 @@ HAL_PIN(lmr_ki);     // *parameter*, lmr trim rate from the q voltage [1/s], 0 =
 HAL_PIN(r);          // *parameter*, stator resistance [ohm], conf0.r, for the lmr trim
 HAL_PIN(lmr_est);    // *output*, lmr at rated flux, lmr or trimmed
 HAL_PIN(u_res);      // *output*, q voltage residual [V]
+HAL_PIN(i_dip);      // *parameter*, lmr and tr fall below this i_mr [A], 0 = no dip; keep below i_knee
+HAL_PIN(lmr_dip);    // *parameter*, fraction lmr and tr lose at zero flux, (1 - lmr_dip * y)
 
 struct acim_flux_ctx_t {
   float w;    // last synchronous speed
@@ -154,7 +168,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->acc += ((w - ctx->w) / period / pp - ctx->acc) * CLAMP(2.0 * M_PI * 5.0 * period, 0.0, 1.0);
   ctx->w   = w;
   PIN(acc) = ctx->acc;
-  float k_l = MAX(1.0 + PIN(lmr_sat) * x, 0.1);
+  // low induction dip, on lmr and tr alike
+  float y   = PIN(i_dip) > 0.0 ? CLAMP((PIN(i_dip) - ABS(i_mr)) / PIN(i_dip), 0.0, 1.0) : 0.0;
+  float k_d = MAX(1.0 - PIN(lmr_dip) * y, 0.1);
+  float k_l = MAX(1.0 + PIN(lmr_sat) * x, 0.1) * k_d;
 
   float lmr_n = MAX(PIN(lmr), 0.0);
   float lmr_r = lmr_n;  // rated lmr, trimmed
@@ -172,7 +189,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
   PIN(lmr_est) = lmr_r;
   float lmr  = lmr_r * k_l;
-  float k_tr = MAX(1.0 + PIN(tr_sat) * x, 0.1);
+  float k_tr = MAX(1.0 + PIN(tr_sat) * x, 0.1) * k_d;
 
   float tr = tr_n;
   if(PIN(tr_ki) > 0.0 || PIN(tr_ks) > 0.0) {
