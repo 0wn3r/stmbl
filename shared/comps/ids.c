@@ -13,10 +13,10 @@
  * cut by kd instead.
  *
  * The first cycle after enable is a warm-up and is not scored: it holds the
- * enable, an ACIM's field build and the integrators settling. A cycle in
- * which pid saturates (pid0.sat, or the torque at conf0.max_force) is not
- * scored either: the warm-up runs on, up to SAT_MAX cycles, and a scored
- * cycle is repeated with the same gains. SAT_MAX saturated cycles in a row
+ * enable, an ACIM's field build and the integrators settling, and runs on
+ * while pid saturates (pid0.sat, or the torque at conf0.max_force), up to
+ * WARM_MAX cycles. A saturated cycle after that is not scored either: it
+ * is repeated with the same gains. SAT_MAX saturated cycles in a row
  * count as a failed step; at a parameter's start value they cut it by kd
  * and retry, up to CUT_MAX times. The start values are conf0.pos_bw, vel_bw
  * and vel_d (10, 100 and 10 when they are 0). The profile
@@ -93,6 +93,7 @@ HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 
 #define NOISE_HZ 50.0  // fb_torque above this counts as noise [Hz]
 #define SAT_MAX 5      // saturated cycles in a row before a step fails
+#define WARM_MAX 25    // warm-up cycles at most while pid saturates
 #define CUT_MAX 5      // kd cuts of a saturating start value before moving on
 
 struct ids_ctx_t {
@@ -290,7 +291,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(skipped)++;
         }
         if(!ctx->warm) {  // warm-up: not scored, runs on while pid saturates
-          if(!sat || ctx->sat_n >= SAT_MAX) {
+          if(!sat || ctx->sat_n >= WARM_MAX) {
             ctx->warm  = 1;
             ctx->sat_n = 0;
           }
