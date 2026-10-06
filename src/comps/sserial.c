@@ -76,6 +76,9 @@ static volatile uint8_t txbuf[128];  //tx dma buffer
 static uint16_t address;             //current address pointer
 static int rxpos;                    //read pointer for rx ringbuffer
 static uint32_t timeout;
+static uint32_t crc_bad;  // process data packets in a row with a bad crc
+// bad packets in a row that keep the last good command; one more drops it
+#define CRC_BAD_HOLD 2
 static lbp_t lbp;
 static const char name[] = LBPCardName;
 static unit_no_t unit;
@@ -572,13 +575,14 @@ static uint8_t crc8(uint8_t *addr, uint8_t len) {
 
 static void send(uint8_t len, uint8_t docrc) {
   timeout = 0;
+  // NDTR only takes a write while the stream is off (RM0090 10.5.6)
+  dma_stream_stop(DMA1_Stream4);
   if(docrc) {
     txbuf[len] = crc8((uint8_t *)txbuf, len);
     LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len + 1);
   } else {
     LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len);
   }
-  dma_stream_stop(DMA1_Stream4);
   LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
 }
 
@@ -679,7 +683,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_InitStructure.MemoryOrM2MDstIncMode          = LL_DMA_MEMORY_INCREMENT;
   DMA_InitStructure.PeriphOrM2MSrcDataSize = LL_DMA_PDATAALIGN_BYTE;
   DMA_InitStructure.MemoryOrM2MDstDataSize     = LL_DMA_MDATAALIGN_BYTE;
-  DMA_InitStructure.Mode               = LL_DMA_PRIORITY_LOW;
+  DMA_InitStructure.Mode               = LL_DMA_MODE_NORMAL;
   DMA_InitStructure.Priority           = LL_DMA_PRIORITY_HIGH;
   DMA_InitStructure.FIFOMode           = LL_DMA_FIFOMODE_DISABLE;
   DMA_InitStructure.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
@@ -834,12 +838,13 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
         if(crc_reuest(discovery.output + 1)) {
           //send buffer
-          LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, discovery.input + 1);
-          dma_stream_stop(DMA1_Stream4);
-          LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
           txbuf[discovery.input] = crc8((uint8_t *)txbuf, discovery.input);
+          dma_stream_stop(DMA1_Stream4);
+          LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, discovery.input + 1);
+          LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
           //send(discovery.input, 1);
           timeout = 0;
+          crc_bad = 0;
           //set output pins
 
           PIN(pos_cmd)   = data_out.pos_cmd;
@@ -850,17 +855,21 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(out3)      = data_out.out_3;
           PIN(enable)    = data_out.enable;
         } else {
+          // bad packet: count it and keep the last good command for up to
+          // CRC_BAD_HOLD packets. Zeroing enable on every one dropped
+          // fault0.en on a single bad packet. The RPC header resets the
+          // timeout, so a run of bad packets is caught here, not there.
           PIN(crc_error)
           ++;
-          PIN(connected) = 0;
-          PIN(error)     = 1;
-          PIN(pos_cmd)   = 0;
-          PIN(pos_cmd_d) = 0;
-          PIN(out0)      = 0;
-          PIN(out1)      = 0;
-          PIN(out2)      = 0;
-          PIN(out3)      = 0;
-          PIN(enable)    = 0;
+          if(++crc_bad > CRC_BAD_HOLD) {
+            PIN(pos_cmd)   = 0;
+            PIN(pos_cmd_d) = 0;
+            PIN(out0)      = 0;
+            PIN(out1)      = 0;
+            PIN(out2)      = 0;
+            PIN(out3)      = 0;
+            PIN(enable)    = 0;
+          }
         }
         rxpos += discovery.output + 2;
       }
@@ -926,6 +935,9 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(out3)      = 0;
     PIN(enable)    = 0;
     rxpos          = bufferpos;
+  } else if(crc_bad > CRC_BAD_HOLD) {
+    PIN(connected) = 0;
+    PIN(error)     = 1;
   } else {
     PIN(connected) = 1;
     PIN(error)     = 0;

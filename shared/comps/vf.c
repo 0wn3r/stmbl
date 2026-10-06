@@ -31,6 +31,17 @@
 *   passed at damp_hz, so it follows the load but not the rotor swing:
 *   unfiltered, every current swing would move the field and feed the
 *   hunting.
+* - Encoder path (optional, `enc` 1, needs `vel_fb`): slip frequency control.
+*   The field turns at vel_fb + slip, and slip comes from a PI on the speed
+*   error vel - vel_fb (`enc_kp` [1], `enc_ki` [1/s]), clamped to `slip_max`
+*   (mechanical rad/s, 0 = 2 * slip_n). The ramp, stall prevention and
+*   dc_hold still shape `vel`, which becomes the speed reference. The slip
+*   clamp bounds the torque, so the rotor cannot pull out, and the integrator
+*   holds while clamped, and vel stays within slip_max of vel_fb, so a ramp
+*   faster than the motor can follow just slows down. It replaces the slip compensation and the damping
+*   (k_damp, k_vel): the field is tied to the rotor. vel_fb must have the
+*   field's sign and mechanical scale; a reversed encoder runs away against
+*   the clamp, so check vel_fb in open loop first. enc 0 = off.
 * - `vel_e` = (vel + slip) * polecount, synchronous electrical speed for
 *   angle0.vel_cmd, so hv0.vel is right and the f3 extrapolates between packets.
 * - Damping (optional): open loop V/f on a lightly loaded motor hunts, the
@@ -45,7 +56,7 @@
 *   encoder this measures the swing directly, to find the damping law that
 *   an estimate can then replace. k_vel 0 = off.
 *   vel_src 1 uses an estimate instead, no encoder: the air gap torque
-*   1.5 * (u * i_act - r * |i|^2) / synchronous speed over `j` is the rotor
+*   1.5 * (u * i_act - r * |i|^2) / signed synchronous speed over `j` is the rotor
 *   acceleration; less the field's own acceleration (the ramp, stall
 *   prevention, slip, damp), high passed at damp_hz and integrated (leaky at
 *   damp_hz), it gives the swing of the rotor against the field, `w_est`. Needs `j` (conf0.j) and `r` (conf0.r).
@@ -83,7 +94,11 @@ HAL_PIN(ud);         // *input*, hv0.ud_fb
 HAL_PIN(uq);         // *input*, hv0.uq_fb
 HAL_PIN(dc_volt);    // *input*, hv0.dc_volt
 HAL_PIN(pwm_volt);   // *input*, hv0.pwm_volt [V peak], 0 = no voltage cap
-HAL_PIN(duty);       // *parameter*, voltage cap as a fraction of pwm_volt
+HAL_PIN(duty);
+HAL_PIN(enc);        // *parameter*, 1 = slip frequency control on vel_fb, 0 = open loop
+HAL_PIN(enc_kp);     // *parameter*, slip per speed error [1]
+HAL_PIN(enc_ki);     // *parameter*, slip integral gain [1/s]
+HAL_PIN(slip_max);   // *parameter*, slip clamp [rad/s mech], 0 = 2 * slip_n       // *parameter*, voltage cap as a fraction of pwm_volt
 
 HAL_PIN(vel);        // *output*, stator frequency, less slip [rad/s mech]
 HAL_PIN(vel_e);      // *output*, synchronous electrical speed [rad/s], to angle0.vel_cmd
@@ -104,6 +119,8 @@ struct vf_ctx_t {
   float t_lp;  // relative acceleration low pass at damp_hz, high pass
   float w_est; // speed swing estimate, leaky integral of the torque swing
   float vel_f; // last field speed vel + slip + damp, for the field acceleration
+  float s_i;   // encoder path: slip integral [rad/s mech]
+  int enc_on;  // encoder path ran last tick
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -128,6 +145,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(j)         = 0.0;
   PIN(r)         = 0.0;
   PIN(duty)      = 0.9;
+  PIN(enc)       = 0.0;
+  PIN(enc_kp)    = 0.25;
+  PIN(enc_ki)    = 5.0;
+  PIN(slip_max)  = 0.0;
   PIN(damp_hz)    = 3.0;
   PIN(damp_lp_hz) = 20.0;
 }
@@ -191,11 +212,40 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     slip = LIMIT(PIN(slip_n) * ctx->i_lp / PIN(cur_n), 2.0 * PIN(slip_n)) * SIGN(vel);
   }
 
+  // encoder path: the field runs at the rotor speed plus a slip from a speed
+  // PI, so the speed follows vel without the slip model and the rotor
+  // cannot pull out of the field
+  int enc    = PIN(enc) > 0.0;
+  float base = vel;  // field speed less slip: the reference open loop, the rotor with the encoder
+  if(enc && PIN(en) > 0.0) {
+    float s_max = PIN(slip_max) > 0.0 ? PIN(slip_max) : 2.0 * PIN(slip_n);
+    if(!ctx->enc_on) {  // switched on while running: start from the open loop slip
+      ctx->s_i = LIMIT(slip, s_max);
+    }
+    float e     = vel - PIN(vel_fb);
+    float s_p   = PIN(enc_kp) * e;
+    float s     = s_p + ctx->s_i + PIN(enc_ki) * e * period;
+    if(ABS(s) < s_max || s * e < 0.0) {  // integrate unless that winds up against the clamp
+      ctx->s_i += PIN(enc_ki) * e * period;
+    }
+    ctx->s_i = LIMIT(ctx->s_i, s_max);
+    slip     = LIMIT(s_p + ctx->s_i, s_max);
+    base     = PIN(vel_fb);
+    // the reference stays within slip_max of the rotor: on the clamp the ramp
+    // follows the rotor's acceleration instead of running away from it
+    vel = CLAMP(vel, base - s_max, base + s_max);
+  } else {
+    ctx->s_i = 0.0;
+  }
+  ctx->enc_on = enc && PIN(en) > 0.0;
+
   float boost = 0.0;
   if(PIN(boost_vel) > 0.0) {
-    boost = PIN(u_boost) * MAX(1.0 - ABS(vel) / PIN(boost_vel), 0.0);
+    // on the rotor speed with the encoder: it starts from standstill with the
+    // field at slip only, so the boost must not fade with the reference
+    boost = PIN(u_boost) * MAX(1.0 - ABS(base) / PIN(boost_vel), 0.0);
   }
-  float u_cmd = PIN(u_n) * ABS(vel + slip) / MAX(PIN(vel_n), 0.1) + boost;
+  float u_cmd = PIN(u_n) * ABS(base + slip) / MAX(PIN(vel_n), 0.1) + boost;
   float u_max = CLAMP(PIN(duty), 0.0, 1.0) * PIN(pwm_volt);
   float u_lim = 0.0;
   if(PIN(pwm_volt) > 0.0 && u_cmd > u_max) {
@@ -212,11 +262,14 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->v_lp += (dv - ctx->v_lp) * k_hp;
     float w = dv - ctx->v_lp;  // measured swing
 
-    float w_s    = MAX(ABS(vel + slip), 5.0);  // synchronous speed [rad/s mech]
+    // signed synchronous speed: the air gap power over it is the torque with
+    // its sign, so the estimate is the same in reverse
+    float w_f    = base + slip;
+    float w_s    = (w_f < 0.0 ? -1.0 : 1.0) * MAX(ABS(w_f), 5.0);  // [rad/s mech]
     float torque = 1.5 * (u * i_act - PIN(r) * (id * id + iq * iq)) / w_s;
     // rotor acceleration less field acceleration, both [rad/s^2 mech]
-    float acc_f = (vel + slip + PIN(damp) - ctx->vel_f) / period;
-    ctx->vel_f  = vel + slip + PIN(damp);
+    float acc_f = (base + slip + PIN(damp) - ctx->vel_f) / period;
+    ctx->vel_f  = base + slip + PIN(damp);
     float a_rel = PIN(j) > 0.0 ? torque / PIN(j) - acc_f : 0.0;
     ctx->t_lp += (a_rel - ctx->t_lp) * k_hp;
     if(PIN(j) > 0.0) {
@@ -229,7 +282,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       w = ctx->w_est;
     }
     ctx->w_lp += (w - ctx->w_lp) * k_lp;
-    damp = LIMIT(PIN(k_damp) * ctx->d_lp + PIN(k_vel) * ctx->w_lp, 0.05 * MAX(PIN(vel_n), 0.1));
+    // i_act is positive motoring either way, so its swing moves the field in
+    // the direction of rotation: times the sign of vel, like the slip
+    float dir = vel < 0.0 ? -1.0 : 1.0;
+    damp = enc ? 0.0 : LIMIT(PIN(k_damp) * ctx->d_lp * dir + PIN(k_vel) * ctx->w_lp, 0.05 * MAX(PIN(vel_n), 0.1));
   } else {
     ctx->d_lp = 0.0;
     ctx->v_lp  = 0.0;
@@ -245,7 +301,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(stall) = stall;
   PIN(damp)  = damp;
   PIN(w_est) = ctx->w_est;
-  PIN(vel_e) = (vel + slip + damp) * MAX(PIN(polecount), 1.0);
+  PIN(vel_e) = (base + slip + damp) * MAX(PIN(polecount), 1.0);
   PIN(u_cmd) = u_cmd;
   PIN(u_lim) = u_lim;
 }

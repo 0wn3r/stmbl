@@ -15,6 +15,7 @@ linrev0.fb_in = linrev0.cmd_out
 linrev0.fb_d_in = linrev0.cmd_d_out
 sserial0.index_clear = idx_home0.index_clear
 linrev0.rev_clear = sserial0.index_clear
+linrev0.abs_neg = conf0.mot_fb_rev
 sserial0.pos_fb = linrev0.fb_out
 sserial0.vel_fb = linrev0.fb_d_out
 sserial0.pos_advance = 0.0008
