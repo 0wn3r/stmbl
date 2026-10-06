@@ -6,8 +6,11 @@
 /**
  * id_pid (comp ids): tunes pos_bw, vel_bw and vel_d one at a time on a
  * trapezoid profile between min_pos and max_pos. Each step raises the
- * parameter by step while the cycle cost (tracking error) stays under
- * kt x the best; a worse cost cuts it by kd and moves to the next one.
+ * parameter by step while each raise cuts the cycle cost (tracking error)
+ * by at least kg. A raise that gains less, or goes over the noise limit, is
+ * taken back and the search moves to the next parameter, so it stops where
+ * more gain stops paying. Noisy already at its start value, a parameter is
+ * cut by kd instead.
  *
  * The first cycle after enable is a warm-up and is not scored: it holds the
  * enable, an ACIM's field build and the integrators settling. The profile
@@ -57,7 +60,7 @@ HAL_PIN(ff);
 HAL_PIN(kp);
 HAL_PIN(ks);
 HAL_PIN(kv);
-HAL_PIN(kt);
+HAL_PIN(kg);  // least cost cut a raise has to give
 HAL_PIN(kd);
 
 HAL_PINA(params, 3);
@@ -86,6 +89,7 @@ struct ids_ctx_t {
   float fb_lp;     // fb_torque low pass
   float noise_sq;  // integral of the noise squared
   float peak;
+  int first;  // the next score is the first of this parameter
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -101,7 +105,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(kp) = 1.0;
   PIN(ks) = 0.0;
   PIN(kv) = 1.0;
-  PIN(kt) = 1.2;
+  PIN(kg) = 0.05;
   PIN(kd) = 0.7;
 
   PIN(ff) = 1.0;
@@ -191,7 +195,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PINA(max_params, 0) = PIN(cur_bw) / 2.0;
       PINA(max_params, 1) = 1.0;
 
-      PIN(min_cost) = (PIN(max_pos) - PIN(min_pos)) * (PIN(max_pos) - PIN(min_pos)) / PIN(max_vel) * 100.0;
+      PIN(min_cost) = 0.0;  // the cost to beat: the last kept score
+      ctx->first    = 1;
       PIN(cost)     = 0.0;
       ctx->warm     = 0;
       ctx->n        = 0;
@@ -269,22 +274,24 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->n = 0;
         ctx->t = ctx->noise_sq = ctx->peak = 0.0;
 
-        PIN(min_cost) = MIN(PIN(cost), PIN(min_cost));
-
         PINA(max_params, 2) = PINA(params, 0) * 2.0;
 
-        if(PINA(params, (int)PIN(param)) > PINA(max_params, (int)PIN(param))) {
-          PINA(params, (int)PIN(param)) = PINA(max_params, (int)PIN(param));
-          PIN(min_cost)                 = PIN(cost) * 10.0;
-          PIN(param)
-          ++;
-        } else if(noisy || PIN(cost) > PIN(min_cost) * PIN(kt)) {
-          PINA(params, (unsigned int)PIN(param)) *= PIN(kd);
-          PIN(min_cost) = PIN(cost) * 10.0;
-          PIN(param)
-          ++;
+        int k = (int)PIN(param);
+        if(PINA(params, k) > PINA(max_params, k)) {
+          PINA(params, k) = PINA(max_params, k);
+          ctx->first      = 1;
+          PIN(param)++;
+        } else if(ctx->first && noisy) {  // noisy at the start value: cut it
+          PINA(params, k) *= PIN(kd);
+          PIN(param)++;
+        } else if(!ctx->first && (noisy || PIN(cost) > PIN(min_cost) * (1.0 - PIN(kg)))) {
+          PINA(params, k) /= 1.0 + PIN(step);  // back to the last kept value
+          ctx->first = 1;
+          PIN(param)++;
         } else {
-          PINA(params, (unsigned int)PIN(param)) *= 1.0 + PIN(step);
+          PIN(min_cost) = PIN(cost);
+          ctx->first    = 0;
+          PINA(params, k) *= 1.0 + PIN(step);
         }
 
         PIN(cost) = 0.0;
