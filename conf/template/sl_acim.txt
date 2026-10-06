@@ -3,8 +3,6 @@
 # meaningful here: the encoder angle is the rotor's, not the flux's.
 # Set in the config: sl_seq0.i_f (about acim_foc0.id_n),
 # sl_seq0.align_time (about 3 * acim_flux0.tr), sl_seq0.w_hand, obs0.bw.
-# Optional, f3 commutates from its own observer once handed over:
-# hv0.obs_mode = sl_seq0.f3_mode
 # Optional, with a spindle encoder: sl_seq0.vel_enc = <encoder speed,
 # e.g. vel1.vel>, sl_seq0.enc_tol 1 (multiple of acim_flux0.slip_max);
 # then acim_flux0.tr_ks 1 trims tr from the slip error in steady holds.
