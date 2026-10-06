@@ -22,8 +22,9 @@ HAL_PIN(timer);
 HAL_PIN(r);
 HAL_PIN(l);
 HAL_PIN(l_ok);    // 1 = l is a measurement, 0 = it is not
-HAL_PIN(l_freq_a);  // *parameter*, leakage test, lower injection frequency [Hz]
-HAL_PIN(l_freq_b);  // *parameter*, leakage test, upper injection frequency [Hz]
+HAL_PIN(l_freq_a);  // *parameter*, leakage test, lower injection frequency [Hz], 0 = 0.75 loop_bw / 2 pi
+HAL_PIN(l_freq_b);  // *parameter*, leakage test, upper injection frequency [Hz], 0 = 1.5 loop_bw / 2 pi
+HAL_PIN(loop_bw);   // the run's current loop bandwidth, conf0.cur_bw [rad/s], 0 = 1000
 HAL_PIN(l_ripple);  // *parameter*, injected current, fraction of test_cur
 HAL_PIN(l_za);      // |Z| at l_freq_a [ohm]
 HAL_PIN(l_zb);      // |Z| at l_freq_b [ohm]
@@ -238,11 +239,13 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(test_cur)                 = 8.0;
   PIN(i_min)                    = 4.0;
   PIN(test_vel)                 = 50.0;
-  // A pair either side of the current loop's crossover (cur_bw / 2 pi, about
-  // 160 Hz). The leakage has no plateau on a cage rotor, so this is the band
-  // conf0.l has to describe, not the kHz an LCR meter defaults to.
-  PIN(l_freq_a)                 = 120.0;
-  PIN(l_freq_b)                 = 240.0;
+  // 0: a pair either side of the current loop's crossover f_c = loop_bw /
+  // 2 pi, at 0.75 and 1.5 f_c (120/240 Hz at cur_bw 1000, 360/720 at 3000).
+  // The leakage has no plateau on a cage rotor (spindle, 6 Oct: 0.93 mH at
+  // 120/240 Hz, 0.75 at 360/720), so this is the band conf0.l has to
+  // describe, not the kHz an LCR meter defaults to.
+  PIN(l_freq_a)                 = 0.0;
+  PIN(l_freq_b)                 = 0.0;
   PIN(l_ripple)                 = 0.15;
   // tr is 50 to 150 ms on a few kW motor. Each level's settled value is
   // read over its last quarter, so 1.5 s puts that 7.6 tr out even at
@@ -1279,8 +1282,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos)  = 0.0;
       PIN(q_cmd)    = 0.0;
 
-      float fa = CLAMP(PIN(l_freq_a) * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
-      float fb = CLAMP(PIN(l_freq_b) * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
+      float f_c = (PIN(loop_bw) > 0.0 ? PIN(loop_bw) : 1000.0) / (2.0 * M_PI);
+      float fa  = PIN(l_freq_a) > 0.0 ? PIN(l_freq_a) : 0.75 * f_c;
+      float fb  = PIN(l_freq_b) > 0.0 ? PIN(l_freq_b) : 1.5 * f_c;
+      // every window (L_BLOCK and the settles are multiples of it) has to
+      // hold whole cycles, or the dc bias leaks into the demodulation
+      // (simulated: 119.4/238.7 Hz read l 10% high): multiples of 1/L_BLOCK
+      fa        = MAX(roundf(fa * L_BLOCK), 1.0) / L_BLOCK;
+      fb        = MAX(roundf(fb * L_BLOCK), 1.0) / L_BLOCK;
+      fa        = CLAMP(fa * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
+      fb        = CLAMP(fb * (float)(1 << ctx->l_up), 20.0, 0.2 / period);
       float f  = ctx->l_fi == 0 ? fa : fb;
       float w  = 2.0 * M_PI * f;
       ctx->l_th += w * period;

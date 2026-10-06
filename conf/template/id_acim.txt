@@ -21,4 +21,5 @@ idacim0.uq_fb = hv0.uq_fb
 idacim0.iq_fb = hv0.iq_fb
 idacim0.pwm_volt = hv0.pwm_volt
 idacim0.dc_volt = hv0.dc_volt
+idacim0.loop_bw = conf0.cur_bw
 idacim0.vel_fb = vel1.vel
