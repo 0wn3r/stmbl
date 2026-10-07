@@ -54,6 +54,7 @@ HAL_PIN(cur_ff);
 HAL_PIN(cur_ind);
 HAL_PIN(max_y);  // the f4's hv0.max_y, not used on the f3
 HAL_PIN(max_cur);
+HAL_PIN(oc_cur);  // the f4's max_cur before fault0.scale, for io0's trip (0 from an older f4: io0 then trips at ABS_MAX_CURRENT only)
 HAL_PIN(dac);
 HAL_PIN(drop_k);
 HAL_PIN(emf_run);
@@ -198,6 +199,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   config.pins.cur_ind = 0.0;
   config.pins.max_y   = 0.0;
   config.pins.max_cur = 0.0;
+  config.pins.oc_cur  = 0.0;
   config.pins.dac     = 0.0;
   config.pins.drop_k  = 0.0;
   config.pins.lq      = 0.0;
@@ -333,6 +335,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(cur_ind) = config.pins.cur_ind;
       PIN(max_y)   = config.pins.max_y;
       PIN(max_cur) = config.pins.max_cur;
+      PIN(oc_cur)  = config.pins.oc_cur;
       PIN(dac)     = config.pins.dac;
       PIN(drop_k)  = config.pins.drop_k;
       PIN(lq)      = config.pins.lq > 0.0 ? config.pins.lq : config.pins.l;

@@ -114,7 +114,7 @@ typedef union {
     float emf_pp;     // emf0 pole pairs
     float drop_knee;  // dead time compensation curve knee [A], 0 = latched sign
     float unused0;    // was the f3 observer's obs_mode, kept for the layout
-    float unused1;    // was the f3 observer's obs_bw
+    float oc_cur;     // hv0.max_cur before fault0.scale [A], the f3 trip reference (was obs_bw)
   } pins;
   float data[sizeof(struct f3_config_data_temp) / 4];
 } f3_config_data_t;
