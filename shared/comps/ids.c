@@ -30,6 +30,10 @@
  * reported: it is set by the profile (J x max_acc at the reversals), not by
  * the gains, so it would fail every step alike. The limit is printed at the
  * start, the last noise and peak with the result.
+ *
+ * vel_bw is capped at conf0.cur_bw / bw_ratio (7.5: 400 at 3000). Below
+ * the noise limit the cost keeps falling a little with each raise, while
+ * the hiss and the torque peaks grow, so the cap is what stops vel_bw.
  */
 HAL_COMP(ids);
 
@@ -64,6 +68,7 @@ HAL_PIN(pos_bw);
 HAL_PIN(vel_bw);
 HAL_PIN(vel_d);
 HAL_PIN(cur_bw);
+HAL_PIN(bw_ratio);  // vel_bw is capped at cur_bw / bw_ratio, 0 = no cap
 
 HAL_PIN(ff);
 HAL_PIN(kp);
@@ -201,6 +206,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(kg) = 0.05;
   PIN(kd) = 0.7;
 
+  PIN(bw_ratio) = 7.5;  // 400 at cur_bw 3000
+
   PIN(ff) = 1.0;
 
   PIN(max_vel) = 100.0;
@@ -249,6 +256,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("Tune PPI bandwidth and damping\n");
         printf("the motor will move\n");
         printf("ids0.state = 1.2 <font color='green'>to start</font>\n");
+      }
+      if(PIN(cur_bw) > 0.0 && PIN(bw_ratio) > 0.0) {
+        printf("<font color='green'># vel_bw cap %f (conf0.cur_bw %f / ids0.bw_ratio %f)</font>\n", PIN(cur_bw) / PIN(bw_ratio), PIN(cur_bw), PIN(bw_ratio));
+      } else {
+        printf("<font color='red'>vel_bw not capped</font>: conf0.cur_bw or ids0.bw_ratio is 0\n");
       }
       if(PIN(max_torque) > 0.0) {
         printf("<font color='green'># noise limit %f Nm rms (ids0.fb_max %f x conf0.max_force %f Nm)</font>\n", PIN(fb_max) * PIN(max_torque), PIN(fb_max), PIN(max_torque));
@@ -361,7 +373,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PINA(params, 1) = 1.0 / PIN(vel_d);
       PINA(params, 2) = PIN(pos_bw);
 
-      PINA(max_params, 0) = PIN(cur_bw) / 2.0;
+      PINA(max_params, 0) = PIN(cur_bw) > 0.0 && PIN(bw_ratio) > 0.0 ? PIN(cur_bw) / PIN(bw_ratio) : 1e6;
       PINA(max_params, 1) = 1.0;
 
       PIN(min_cost) = 0.0;  // the cost to beat: the last kept score
