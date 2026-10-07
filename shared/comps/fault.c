@@ -130,6 +130,10 @@ struct fault_ctx_t {
   float rstop_timer;
   float rhold_timer;  // after the stop: brake engaging, bridge still holding
   float ipm_temp_error;
+  // a fault taken while already disabled (in a regenerative stop) leaves
+  // SOFT_FAULT in the next tick, before nrt sees the state: rt keeps it here
+  // until nrt has printed it
+  volatile uint32_t fault_print;
 };
 
 // stops after which the bridge may still be used to brake the motor
@@ -205,6 +209,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(rstop_vel)     = 2.0;
   ctx->rstop_timer   = 0.0;
   ctx->rhold_timer   = 0.0;
+  ctx->fault_print   = NO_ERROR;
   PIN(max_ipm_temp)  = 140.0;
   PIN(high_ipm_temp) = 125.0;
 }
@@ -369,6 +374,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(mot_fan) = 0.0;
   }
 
+  if(ctx->state == SOFT_FAULT && last_state != SOFT_FAULT) {
+    ctx->fault_print = ctx->fault;
+  }
+
   int stop_edge = powered(last_state) && !powered(ctx->state) && ctx->state != HARD_FAULT && ctx->state != LED_TEST;
   int fallback  = 0;  // regenerative stop given up: short brake instead
   if(stop_edge) {
@@ -500,6 +509,12 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     }
   }
 
+  uint32_t fault_print = ctx->fault_print;
+  if(fault_print != NO_ERROR) {
+    ctx->fault_print = NO_ERROR;
+    printf("ERROR: Fault %lu: %s\n", fault_print, fault_print < sizeof(fault_string) / sizeof(fault_string[0]) ? fault_string[fault_print] : "unknown");
+  }
+
   //TODO: fix EDGE
   if(EDGE(ctx->state) || PIN(print) > 0.0) {
     PIN(print) = 0.0;
@@ -525,7 +540,9 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         break;
 
       case SOFT_FAULT:
-        printf("ERROR: Fault %lu: %s\n", (uint32_t)ctx->fault, fault_string[(uint32_t)ctx->fault]);
+        if(fault_print == NO_ERROR) {  // not printed just above
+          printf("ERROR: Fault %lu: %s\n", (uint32_t)ctx->fault, fault_string[(uint32_t)ctx->fault]);
+        }
         break;
 
       case HARD_FAULT:
