@@ -73,7 +73,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float diff_pos = minus(pos, old_pos);
   PIN(diff_pos)  = diff_pos;
   PIN(diff_time) = diff_time;
-  PIN(vel)       = diff_pos / diff_time;
+  PIN(vel)       = diff_time > 0.0 ? diff_pos / diff_time : 0.0;  // 0 until the frt part has run
 
   PIN(vel_lp) = PIN(vel) * LP_HZ(PIN(lpf)) + PIN(vel_lp) * (1.0 - LP_HZ(PIN(lpf)));
 }
