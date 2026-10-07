@@ -718,11 +718,42 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(phase)       = 0;
 }
 
-// static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-//   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
-//   //struct sserial_ctx_t *mem = (struct sserial_ctx_t *)ctx_ptr;
-//   PIN(phase) = 0;
-// }
+// pos_fb is computed once per rt period, but the reply goes out whenever
+// LinuxCNC's packet arrives, 0 to 200 us later, so a moving axis reported
+// a position up to one period old (+-0.04 one-sample f-error spikes at
+// 170/s on Y). The rt (after linrev, see rt_prio in sserial.txt) keeps
+// pos_fb, vel_fb and its period; the reply extrapolates by the time since
+// that period started. Two slots, swapped by one word write, as the frt
+// can preempt the rt halfway through a store.
+extern volatile uint32_t rt_tick;  // main.c, DMA2_Stream0_IRQHandler
+static struct {
+  float pos;
+  float vel;
+  uint32_t tick;
+} fb_snap[2];
+static volatile uint32_t fb_snap_i;
+
+static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
+  struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
+  uint32_t i     = fb_snap_i ^ 1;
+  fb_snap[i].pos  = PIN(pos_fb);
+  fb_snap[i].vel  = PIN(vel_fb);
+  fb_snap[i].tick = rt_tick;
+  fb_snap_i       = i;
+}
+
+// time since the rt period of the last snapshot started [s]
+static float fb_age(uint32_t tick) {
+  // the adc dma restarts its count at every rt period: its progress is the
+  // time into the current one
+  uint32_t ndtr  = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
+  uint32_t ticks = rt_tick;
+  if(LL_DMA_IsActiveFlag_TC0(DMA2)) {  // a period started, its irq not yet in
+    ticks++;
+  }
+  float age = (float)(ticks - tick) + (float)(ADC_SAMPLES_IN_RT - ndtr) / (float)ADC_SAMPLES_IN_RT;
+  return CLAMP(age, 0.0, 2.0) / (float)RT_FREQ;
+}
 
 static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
@@ -813,8 +844,9 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         } while(available < discovery.output + 2 && wait_ticks <= max_waste_ticks);
         //TODO: fault handling on timeout...
         //set input pins
-        data_in.pos_fb  = PIN(pos_fb) + PIN(vel_fb) * PIN(pos_advance);
-        data_in.vel_fb  = PIN(vel_fb);
+        uint32_t si     = fb_snap_i;
+        data_in.pos_fb  = fb_snap[si].pos + fb_snap[si].vel * (PIN(pos_advance) + fb_age(fb_snap[si].tick));
+        data_in.vel_fb  = fb_snap[si].vel;
         data_in.current = CLAMP(PIN(current) / (30.0f / 128.0f), -127, 127);
         data_in.in_0    = (PIN(in0) > 0) ? 1 : 0;
         data_in.in_1    = (PIN(in1) > 0) ? 1 : 0;
@@ -949,7 +981,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 const hal_comp_t sserial_comp_struct = {
     .name      = "sserial",
     .nrt       = 0,  //nrt_func,
-    .rt        = 0,
+    .rt        = rt_func,
     .frt       = frt_func,
     .nrt_init  = 0,
     .hw_init   = hw_init,
