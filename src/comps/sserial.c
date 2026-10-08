@@ -76,6 +76,9 @@ static volatile uint8_t txbuf[128];  //tx dma buffer
 static uint16_t address;             //current address pointer
 static int rxpos;                    //read pointer for rx ringbuffer
 static uint32_t timeout;
+static uint32_t crc_bad;  // process data packets in a row with a bad crc
+// bad packets in a row that keep the last good command; one more drops it
+#define CRC_BAD_HOLD 2
 static lbp_t lbp;
 static const char name[] = LBPCardName;
 static unit_no_t unit;
@@ -572,13 +575,14 @@ static uint8_t crc8(uint8_t *addr, uint8_t len) {
 
 static void send(uint8_t len, uint8_t docrc) {
   timeout = 0;
+  // NDTR only takes a write while the stream is off (RM0090 10.5.6)
+  dma_stream_stop(DMA1_Stream4);
   if(docrc) {
     txbuf[len] = crc8((uint8_t *)txbuf, len);
     LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len + 1);
   } else {
     LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, len);
   }
-  dma_stream_stop(DMA1_Stream4);
   LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
 }
 
@@ -679,7 +683,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   DMA_InitStructure.MemoryOrM2MDstIncMode          = LL_DMA_MEMORY_INCREMENT;
   DMA_InitStructure.PeriphOrM2MSrcDataSize = LL_DMA_PDATAALIGN_BYTE;
   DMA_InitStructure.MemoryOrM2MDstDataSize     = LL_DMA_MDATAALIGN_BYTE;
-  DMA_InitStructure.Mode               = LL_DMA_PRIORITY_LOW;
+  DMA_InitStructure.Mode               = LL_DMA_MODE_NORMAL;
   DMA_InitStructure.Priority           = LL_DMA_PRIORITY_HIGH;
   DMA_InitStructure.FIFOMode           = LL_DMA_FIFOMODE_DISABLE;
   DMA_InitStructure.FIFOThreshold      = LL_DMA_FIFOTHRESHOLD_1_2;
@@ -714,11 +718,42 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(phase)       = 0;
 }
 
-// static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-//   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
-//   //struct sserial_ctx_t *mem = (struct sserial_ctx_t *)ctx_ptr;
-//   PIN(phase) = 0;
-// }
+// pos_fb is computed once per rt period, but the reply goes out whenever
+// LinuxCNC's packet arrives, 0 to 200 us later, so a moving axis reported
+// a position up to one period old (+-0.04 one-sample f-error spikes at
+// 170/s on Y). The rt (after linrev, see rt_prio in sserial.txt) keeps
+// pos_fb, vel_fb and its period; the reply extrapolates by the time since
+// that period started. Two slots, swapped by one word write, as the frt
+// can preempt the rt halfway through a store.
+extern volatile uint32_t rt_tick;  // main.c, DMA2_Stream0_IRQHandler
+static struct {
+  float pos;
+  float vel;
+  uint32_t tick;
+} fb_snap[2];
+static volatile uint32_t fb_snap_i;
+
+static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
+  struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
+  uint32_t i     = fb_snap_i ^ 1;
+  fb_snap[i].pos  = PIN(pos_fb);
+  fb_snap[i].vel  = PIN(vel_fb);
+  fb_snap[i].tick = rt_tick;
+  fb_snap_i       = i;
+}
+
+// time since the rt period of the last snapshot started [s]
+static float fb_age(uint32_t tick) {
+  // the adc dma restarts its count at every rt period: its progress is the
+  // time into the current one
+  uint32_t ndtr  = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
+  uint32_t ticks = rt_tick;
+  if(LL_DMA_IsActiveFlag_TC0(DMA2)) {  // a period started, its irq not yet in
+    ticks++;
+  }
+  float age = (float)(ticks - tick) + (float)(ADC_SAMPLES_IN_RT - ndtr) / (float)ADC_SAMPLES_IN_RT;
+  return CLAMP(age, 0.0, 2.0) / (float)RT_FREQ;
+}
 
 static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
@@ -809,8 +844,9 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         } while(available < discovery.output + 2 && wait_ticks <= max_waste_ticks);
         //TODO: fault handling on timeout...
         //set input pins
-        data_in.pos_fb  = PIN(pos_fb) + PIN(vel_fb) * PIN(pos_advance);
-        data_in.vel_fb  = PIN(vel_fb);
+        uint32_t si     = fb_snap_i;
+        data_in.pos_fb  = fb_snap[si].pos + fb_snap[si].vel * (PIN(pos_advance) + fb_age(fb_snap[si].tick));
+        data_in.vel_fb  = fb_snap[si].vel;
         data_in.current = CLAMP(PIN(current) / (30.0f / 128.0f), -127, 127);
         data_in.in_0    = (PIN(in0) > 0) ? 1 : 0;
         data_in.in_1    = (PIN(in1) > 0) ? 1 : 0;
@@ -834,12 +870,13 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
         if(crc_reuest(discovery.output + 1)) {
           //send buffer
-          LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, discovery.input + 1);
-          dma_stream_stop(DMA1_Stream4);
-          LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
           txbuf[discovery.input] = crc8((uint8_t *)txbuf, discovery.input);
+          dma_stream_stop(DMA1_Stream4);
+          LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_4, discovery.input + 1);
+          LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_4);
           //send(discovery.input, 1);
           timeout = 0;
+          crc_bad = 0;
           //set output pins
 
           PIN(pos_cmd)   = data_out.pos_cmd;
@@ -850,17 +887,21 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(out3)      = data_out.out_3;
           PIN(enable)    = data_out.enable;
         } else {
+          // bad packet: count it and keep the last good command for up to
+          // CRC_BAD_HOLD packets. Zeroing enable on every one dropped
+          // fault0.en on a single bad packet. The RPC header resets the
+          // timeout, so a run of bad packets is caught here, not there.
           PIN(crc_error)
           ++;
-          PIN(connected) = 0;
-          PIN(error)     = 1;
-          PIN(pos_cmd)   = 0;
-          PIN(pos_cmd_d) = 0;
-          PIN(out0)      = 0;
-          PIN(out1)      = 0;
-          PIN(out2)      = 0;
-          PIN(out3)      = 0;
-          PIN(enable)    = 0;
+          if(++crc_bad > CRC_BAD_HOLD) {
+            PIN(pos_cmd)   = 0;
+            PIN(pos_cmd_d) = 0;
+            PIN(out0)      = 0;
+            PIN(out1)      = 0;
+            PIN(out2)      = 0;
+            PIN(out3)      = 0;
+            PIN(enable)    = 0;
+          }
         }
         rxpos += discovery.output + 2;
       }
@@ -875,11 +916,13 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         } else {  //address not included in command = cmd+crc
           rxpos += 2;
         }
-        //TODO: causes timeouts...
-        //if((address + (1 << lbp.ds)) < ARRAY_SIZE(sserial_slave)) {  //check if address is valid
-        memcpy((void *)txbuf, &sserial_slave[address], (1 << lbp.ds));
+        //an address past the table reads zeros: the host still gets its reply
+        if((address + (1 << lbp.ds)) <= ARRAY_SIZE(sserial_slave)) {  //check if address is valid
+          memcpy((void *)txbuf, &sserial_slave[address], (1 << lbp.ds));
+        } else {
+          memset((void *)txbuf, 0, (1 << lbp.ds));
+        }
         send((1 << lbp.ds), 1);
-        //}
         if(lbp.ai) {  //auto increment address by datasize
           address += (1 << lbp.ds);
         }
@@ -895,8 +938,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         } else {  //address not included in command = cmd+crc
           rxpos += 1;
         }
-        //TODO: check size
-        if((address + (1 << lbp.ds)) < ARRAY_SIZE(sserial_slave)) {  //check if address is valid
+        if((address + (1 << lbp.ds)) <= ARRAY_SIZE(sserial_slave)) {  //check if address is valid
           for(int i = 0; i < (1 << lbp.ds); i++) {
             sserial_slave[address + i] = rxbuf[(rxpos + i) % sizeof(rxbuf)];
           }
@@ -926,6 +968,9 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(out3)      = 0;
     PIN(enable)    = 0;
     rxpos          = bufferpos;
+  } else if(crc_bad > CRC_BAD_HOLD) {
+    PIN(connected) = 0;
+    PIN(error)     = 1;
   } else {
     PIN(connected) = 1;
     PIN(error)     = 0;
@@ -937,7 +982,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 const hal_comp_t sserial_comp_struct = {
     .name      = "sserial",
     .nrt       = 0,  //nrt_func,
-    .rt        = 0,
+    .rt        = rt_func,
     .frt       = frt_func,
     .nrt_init  = 0,
     .hw_init   = hw_init,

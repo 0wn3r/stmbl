@@ -140,6 +140,11 @@ static uint32_t crc_nak;  // the f3 answered NAK: its CRC over the image is not 
 #define VERIFY_EXTRA 8
 #define VERIFY_LIST 8
 static uint32_t send_verify;
+// FLASH_FAILED: ticks since the f3 bootloader last answered a NOP. A failed
+// update can leave the f3 in its bootloader (it only starts the app after a
+// reset with a valid CRC) or, if it never got there, in its app.
+#define BOOT_QUIET 200  // 40 ms without a bootloader answer: the f3 runs its app
+static uint32_t boot_quiet;
 static volatile struct {
   uint32_t state;  // 0 idle, 1 running, 2 done, 3 no answer
   uint32_t words;  // words read so far
@@ -168,7 +173,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct hv_ctx_t *ctx      = (struct hv_ctx_t *)ctx_ptr;
   struct hv_pin_ctx_t *pins = (struct hv_pin_ctx_t *)pin_ptr;
 
-  //setup uart to f1. uses DMA to transfer to_hv struct.
+  //setup uart to the f3. uses DMA to transfer to_hv struct.
   LL_GPIO_InitTypeDef GPIO_InitStruct;
   LL_USART_InitTypeDef USART_InitStruct;
   LL_DMA_InitTypeDef DMA_InitStructure;
@@ -399,7 +404,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
                 ctx->timeout = 0;
                 ctx->addr++;
               }
-              if(ctx->addr > ((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) / 4) {
+              if(ctx->addr >= (((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) + 3) / 4) {
                 flash_state = CRC_CHECK;
                 crc_wait    = 0;
                 crc_nak     = 0;
@@ -420,6 +425,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
                 ctx->timeout = 0;
                 crc_nak      = 1;
                 flash_state  = FLASH_FAILED;
+                boot_quiet   = 0;
               }
             } else {
               // wrong packet len or slave addr
@@ -430,7 +436,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
             break;
           case FLASH_FAILED:
-
+            if(ctx->from_hv.packet_from_hv.header.slave_addr == 255 && ctx->from_hv.packet_from_hv.header.len == (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4) {
+              boot_quiet = 0;  // the f3 is in its bootloader; ctx->timeout keeps running so fault 9 stays
+            }
             break;
           case VERIFY_FLASH:
             if(ctx->from_hv.packet_from_hv.header.slave_addr == 255 && ctx->from_hv.packet_from_hv.header.len == (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4) {
@@ -458,7 +466,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
                 verify.words = ctx->addr;
                 if(ctx->addr >= verify.total) {
                   verify.state = 2;
-                  flash_state  = SLAVE_IN_APP;
+                  flash_state  = FLASH_FAILED;  // the f3 answered from its bootloader, so it is still there
+                  boot_quiet   = 0;
                 }
               }
             }
@@ -554,6 +563,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case SEND_TO_BOOTLOADER:  // fix
+      ctx->to_hv.packet_to_hv.header.slave_addr = 0;  // the app; FLASH_FAILED left 255 and the bootloader len here
+      ctx->to_hv.packet_to_hv.header.len        = (sizeof(packet_to_hv_t) - sizeof(stmbl_talk_header_t)) / 4;
       ctx->to_hv.packet_to_hv.header.flags.cmd = BOOTLOADER;
       ctx->to_hv.packet_to_hv.flags.buf        = 0x0;
       ctx->to_hv.packet_to_hv.header.flags.counter++;
@@ -593,6 +604,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(ctx->timeout > 60000) {
         ctx->timeout = 0;
         flash_state  = FLASH_FAILED;
+        boot_quiet   = 0;
       }
       break;
 
@@ -608,6 +620,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(ctx->timeout > 10) {
         ctx->timeout = 0;
         flash_state  = FLASH_FAILED;
+        boot_quiet   = 0;
       }
       break;
 
@@ -625,6 +638,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(ctx->timeout > 2000) {
         ctx->timeout = 0;
         flash_state  = FLASH_FAILED;
+        boot_quiet   = 0;
       }
       break;
     case SEND_TO_APP:
@@ -661,9 +675,37 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case FLASH_FAILED:
-      if(ctx->timeout > 10) {
+      // ask the bootloader for a NOP; hv_update and hv_verify work from here
+      ctx->to_hv.packet_to_hv.header.slave_addr = 255;
+      ctx->to_hv.packet_to_hv.header.flags.cmd  = NO_CMD;
+      ctx->to_hv.packet_to_hv.header.flags.counter++;
+      ctx->to_hv.packet_to_hv.header.len        = (sizeof(packet_bootloader_t) - sizeof(stmbl_talk_header_t)) / 4;
+      ctx->to_hv.packet_to_hv.header.conf_addr  = 0;
+      ctx->to_hv.packet_to_hv.header.config.f32 = 0;
+      ctx->to_hv.packet_to_hv_bootloader.addr   = 0;
+      ctx->to_hv.packet_to_hv_bootloader.value  = 0;
+      ctx->to_hv.packet_to_hv_bootloader.cmd    = BOOTLOADER_OPCODE_NOP;
+
+      tx_size = sizeof(packet_bootloader_t);
+
+      if(++boot_quiet > BOOT_QUIET) {
         ctx->timeout = 0;
         flash_state  = SLAVE_IN_APP;
+      } else if(send_verify) {
+        send_verify    = 0;
+        ctx->addr      = 0;
+        ctx->timeout   = 0;
+        verify.words   = 0;
+        verify.bad     = 0;
+        verify.vi_crc  = 0;
+        verify.vi_size = 0;
+        verify.total   = ((uint32_t) & (_binary_obj_hvf3_hvf3_bin_size)) / 4 + VERIFY_EXTRA;
+        verify.state   = 1;
+        flash_state    = VERIFY_FLASH;
+      } else if(send_to_bootloader) {
+        send_to_bootloader = 0;
+        flash_state        = SEND_TO_BOOTLOADER;
+        ctx->timeout       = 0;
       }
       break;
   }
@@ -737,7 +779,7 @@ void send_boot(char *ptr) {
 COMMAND("hv_update", send_boot, "try hv update");
 
 void hv_verify(char *ptr) {
-  if(flash_state == SLAVE_IN_APP) {
+  if(flash_state == SLAVE_IN_APP || flash_state == FLASH_FAILED) {
     send_verify = 1;
   } else {
     printf("hv_verify: busy\n");
@@ -812,6 +854,10 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         last_addr = 0;
         break;
       case FLASH_FAILED:
+        if(last_flash_state == VERIFY_FLASH) {
+          printf("hv_update: the f3 is in its bootloader; hv_update flashes it\n");
+          break;
+        }
         if(crc_nak) {
           printf("hv_update: the f3 bootloader says the app CRC is wrong\n");
         } else if(last_flash_state == CRC_CHECK) {
