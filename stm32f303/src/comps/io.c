@@ -110,6 +110,7 @@ struct io_ctx_t {
   float overcurrent_error;
   float fault_pin_error;
   uint32_t offset_count;
+  uint32_t offset_bad;  // the boot offset check failed: the fault stays until reset
   uint32_t hv_temp;
   uint32_t mot_temp;
   uint32_t fault;
@@ -225,6 +226,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->v_offset          = 0.0;
   ctx->w_offset          = 0.0;
   ctx->fault             = NO_ERROR;
+  ctx->offset_bad        = 0;
   ctx->overtemp_error    = 0;
   ctx->overvoltage_error = 0;
   ctx->overcurrent_error = 0;
@@ -300,7 +302,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->offset_count++;
   } else if(ctx->offset_count < 100 + 100 + 1) {
     if(ABS(ctx->u_offset) > 5.0 || ABS(ctx->v_offset) > 5.0 || ABS(ctx->w_offset) > 5.0) {
-      ctx->fault = HV_CURRENT_OFFSET_FAULT;
+      ctx->fault      = HV_CURRENT_OFFSET_FAULT;
+      ctx->offset_bad = 1;
     }
     ctx->offset_count++;
   } else {
@@ -402,6 +405,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->fault = HV_OVERCURRENT_PEAK;
     }
 
+    // a later trip (an oc from the bad offset itself) must not hide it
+    if(ctx->offset_bad) {
+      ctx->fault = HV_CURRENT_OFFSET_FAULT;
+    }
+
     PIN(fault) = ctx->fault;
 
     if(PIN(hv_en) > 0.0) {
@@ -501,8 +509,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->enabled = 0;
       // a trip during braking stays reported until the request goes away,
       // so the f4 sees it and drops the request instead of retrying
-      // the offset fault is found once at boot, so it stays until reset
-      if(PIN(sbrake) <= 0.0 && ctx->fault != HV_CURRENT_OFFSET_FAULT) {
+      // the offset fault comes back before PIN(fault) next tick (offset_bad)
+      if(PIN(sbrake) <= 0.0) {
         ctx->fault = NO_ERROR;
       }
       ctx->sbrake_ticks = 0;
