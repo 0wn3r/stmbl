@@ -90,10 +90,10 @@ static uint32_t block_bytes;
 //*****************************************************************************
 uint8_t sserial_slave[] = {
     0x0C,
-    0x09,
+    0x0D,
     0x8B,
     0x01,
-    0xA7,
+    0xA9,
     0x01,
     0x00,
     0x00,  // 0..7
@@ -508,53 +508,80 @@ uint8_t sserial_slave[] = {
     0x01,
     0x74,
     0x01,
-    0xAD,
+    0xAF,
     0x01,
-    0x00,
-    0x00,
-    0x30,  // 416..423
+    0xCD,
     0x01,
+    0x00,  // 416..423
+    0x00,
     0x49,
     0x01,
     0x00,
     0x00,
-    0xA0,
+    0x00,
+    0x00,
+    0xA0,  // 424..431
     0x08,
-    0x02,  // 424..431
+    0x02,
     0x00,
     0x00,
     0x00,
     0x00,
     0x00,
+    0x00,  // 432..439
     0x00,
-    0x00,
-    0x7F,  // 432..439
+    0x7F,
     0x43,
-    0xAD,
+    0xAF,
     0x01,
     0x6E,
     0x6F,
-    0x6E,
+    0x6E,  // 440..447
     0x65,
-    0x00,  // 440..447
+    0x00,
     0x66,
     0x61,
     0x75,
     0x6C,
     0x74,
-    0x5F,
+    0x5F,  // 448..455
     0x63,
-    0x6F,  // 448..455
+    0x6F,
     0x64,
+    0x65,
+    0x00,
+    0xA0,
+    0x20,
+    0x10,  // 456..463
+    0x80,
+    0x00,
+    0x00,
+    0x80,
+    0xFF,
+    0x00,
+    0x00,
+    0x80,  // 464..471
+    0x7F,
+    0xCD,
+    0x01,
+    0x6E,
+    0x6F,
+    0x6E,
+    0x65,
+    0x00,  // 472..479
+    0x73,
+    0x63,
+    0x61,
+    0x6C,
     0x65,
     0x00,
 };
 
 const discovery_rpc_t discovery = {
     .ptocp  = 0x018B,
-    .gtocp  = 0x01A7,
+    .gtocp  = 0x01A9,
     .input  = 12,
-    .output = 9,
+    .output = 13,
 };
 
 typedef struct {
@@ -567,8 +594,9 @@ typedef struct {
   uint32_t enable : 1;
   uint32_t index_enable : 1;
   uint32_t padding : 2;
-} sserial_out_process_data_t;  //size:9 bytes
-_Static_assert(sizeof(sserial_out_process_data_t) == 9, "sserial_out_process_data_t size error!");
+  float scale;  // linrev scale from LinuxCNC every packet, 0 = keep the current scale
+} sserial_out_process_data_t;  //size:13 bytes
+_Static_assert(sizeof(sserial_out_process_data_t) == 13, "sserial_out_process_data_t size error!");
 
 typedef struct {
   float pos_fb;
@@ -581,11 +609,9 @@ typedef struct {
   uint32_t fault : 1;
   uint32_t index_enable : 1;
   uint32_t padding : 2;
-  uint8_t fault_code;  // fault0.last_fault, the fault_t that tripped last
+  uint8_t fault_code;  // fault0.last_fault while fault is set, else 0
 } sserial_in_process_data_t;  //size:11 bytes
 _Static_assert(sizeof(sserial_in_process_data_t) == 11, "sserial_in_process_data_t size error!");
-//global name:scale addr:0x12c size:32 dir:0x80
-#define scale_address 300
 //******************************************************************************
 #pragma pack(pop)
 
@@ -887,7 +913,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         data_in.in_2    = (PIN(in2) > 0) ? 1 : 0;
         data_in.in_3    = (PIN(in3) > 0) ? 1 : 0;
         data_in.fault   = (PIN(fault) > 0) ? 1 : 0;
-        data_in.fault_code = CLAMP(PIN(fault_code), 0, 255);
+        data_in.fault_code = data_in.fault ? CLAMP(PIN(fault_code), 0, 255) : 0;  // last_fault outlives the fault
 
         //copy output pins from rx buffer
         for(int i = 0; i < discovery.output; i++) {
@@ -921,6 +947,11 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(out2)      = data_out.out_2;
           PIN(out3)      = data_out.out_3;
           PIN(enable)    = data_out.enable;
+          // in process data: a global only reaches the drive before process
+          // data starts, and hm2 2.9's change check skips round values
+          if(data_out.scale != 0.0f && isfinite(data_out.scale)) {
+            PIN(scale) = data_out.scale;
+          }
         } else {
           // bad packet: count it and keep the last good command for up to
           // CRC_BAD_HOLD packets. Zeroing enable on every one dropped
@@ -979,10 +1010,6 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           }
         }
         rxpos += (1 << lbp.ds) + 1;
-        //update globals
-        float tmp;
-        memcpy(&tmp, &sserial_slave[scale_address], 4);
-        PIN(scale) = tmp;
         if(lbp.ai) {  //auto increment address by datasize
           address += (1 << lbp.ds);
         }
