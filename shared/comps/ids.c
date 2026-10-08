@@ -288,7 +288,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("# against, so a j_lpf set afterwards invalidates the tune.\n");
         printf("# it only pays if the velocity loop crosses near this frequency.\n");
         printf("# with conf0.vel_bw well under %f rad/s there is nothing to correct\n", 2.0 * M_PI * PIN(j_lpf));
-        printf("# and j_lpf only costs phase, so leave it at 0.</font>\n");
+        printf("# and j_lpf only costs phase: set conf0.j_lpf = 0 instead.</font>\n");
         if(PIN(zeta_ring) > 0.0) {
           printf("<font color='green'># and for zv_ip, if you ever wire it up:\n");
           printf("# zv_ip0.natural_frequency = %f\n", PIN(f_ring));
@@ -303,7 +303,8 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // well damped coupling, which is the good case: nothing to compensate.
         printf("<font color='green'>ring died too fast to time</font>: %f half periods at %f rad/s\n", PIN(ring_n), PIN(ring_amp));
         printf("# the coupling is well damped. there is no resonance worth\n");
-        printf("# modelling, so leave conf0.j_lpf at 0.\n");
+        printf("# modelling. the template default is 100, so set it to 0:\n");
+        printf("conf0.j_lpf = 0 <font color='green'># append to config</font>\n");
       } else {
         printf("<font color='red'>no ring found</font>: %f half periods, peak %f rad/s\n", PIN(ring_n), PIN(ring_amp));
         printf("either the coupling is stiff enough that there is nothing here,\n");
