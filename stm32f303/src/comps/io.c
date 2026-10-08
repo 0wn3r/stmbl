@@ -391,9 +391,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       ctx->fault = HV_VOLT_ERROR;
     }
 
-    // named RMS, but a filtered peak: iabs above 95 % of the range for IO_ERR_TICKS
+    // filtered peak: iabs above 95 % of the range for IO_ERR_TICKS
     if(err_filter(&(ctx->overcurrent_error), IO_ERR_TICKS, 0.001, PIN(iabs) > ABS_MAX_CURRENT * 0.95)) {
-      ctx->fault = HV_OVERCURRENT_RMS;
+      ctx->fault = HV_OVERCURRENT_FILTERED;
     }
 
     PIN(oc_lim) = PIN(max_cur) > 0.0 ? CLAMP(PIN(oc_k) * PIN(max_cur), PIN(oc_min), ABS_MAX_CURRENT) : ABS_MAX_CURRENT;
