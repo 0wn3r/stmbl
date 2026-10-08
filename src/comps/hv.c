@@ -715,10 +715,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
   ctx->send_state++;
 
+  // rx is re-armed below only together with a send, and the last good
+  // reply stays in the buffer until then: a paused tick that skipped the
+  // re-arm parsed that stale reply again on every tick, kept ctx->timeout at
+  // 0, and the f4 never saw the loss (bench, X, 8 Oct: fault 6 instead of 9).
+  uint32_t rx_rearm = tx_size;
   if(hv_pause_left > 0.0) {
     hv_pause_left -= period;
     if(flash_state == SLAVE_IN_APP) {
-      tx_size = 0;
+      tx_size  = 0;
+      rx_rearm = 1;
     }
   }
 
@@ -734,7 +740,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     dma_stream_stop(UART_DRV_TX_DMA);
     LL_DMA_SetDataLength(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM, tx_size);
     LL_DMA_EnableStream(UART_DRV_DMA, UART_DRV_TX_DMA_STREAM);
+  }
 
+  if(rx_rearm) {
     // clear uart faults
     PIN(uart_sr) = UART_DRV->SR;
     PIN(uart_dr) = UART_DRV->DR;
