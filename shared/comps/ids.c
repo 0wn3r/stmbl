@@ -44,8 +44,6 @@ HAL_PIN(param);
 HAL_PIN(step);
 HAL_PIN(rep);
 
-HAL_PIN(freq);
-HAL_PIN(amp);
 HAL_PIN(min_pos);
 HAL_PIN(max_pos);
 HAL_PIN(max_vel);

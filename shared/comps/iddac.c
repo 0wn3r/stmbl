@@ -44,7 +44,7 @@ HAL_PIN(pos);       // to hv0.pos
 HAL_PIN(dac);       // to hv0.dac
 HAL_PIN(hv_fault);  // in, hv0.fault
 HAL_PIN(hv_error);  // out, to fault0.hv_error: hv0.fault without the trips we cause
-HAL_PIN(max_cur);   // in, hv0.max_cur
+HAL_PIN(max_cur);   // in, conf0.max_ac_cur
 HAL_PIN(com_pos);   // in, rotor electrical angle (fb_switch0.com_fb), mode 1
 HAL_PIN(mode);      // *parameter*, 0 free axis, 1 loaded or blocked axis
 
