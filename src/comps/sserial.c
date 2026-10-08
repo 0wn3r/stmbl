@@ -90,7 +90,7 @@ static uint32_t block_bytes;
 //*****************************************************************************
 uint8_t sserial_slave[] = {
     0x0C,
-    0x0D,
+    0x0C,
     0x8B,
     0x01,
     0xA9,
@@ -551,17 +551,17 @@ uint8_t sserial_slave[] = {
     0x65,
     0x00,
     0xA0,
-    0x20,
-    0x10,  // 456..463
+    0x18,
+    0x02,  // 456..463
     0x80,
     0x00,
     0x00,
-    0x80,
-    0xFF,
     0x00,
     0x00,
-    0x80,  // 464..471
-    0x7F,
+    0x16,
+    0xB7,
+    0xD1,  // 464..471
+    0x44,
     0xCD,
     0x01,
     0x6E,
@@ -581,7 +581,7 @@ const discovery_rpc_t discovery = {
     .ptocp  = 0x018B,
     .gtocp  = 0x01A9,
     .input  = 12,
-    .output = 13,
+    .output = 12,
 };
 
 typedef struct {
@@ -594,9 +594,15 @@ typedef struct {
   uint32_t enable : 1;
   uint32_t index_enable : 1;
   uint32_t padding : 2;
-  float scale;  // linrev scale from LinuxCNC every packet, 0 = keep the current scale
-} sserial_out_process_data_t;  //size:13 bytes
-_Static_assert(sizeof(sserial_out_process_data_t) == 13, "sserial_out_process_data_t size error!");
+  // linrev scale from LinuxCNC every packet, 0 = keep the current scale.
+  // 24 bit unsigned, 1e-4 per count: hm2's standard sserial module carries
+  // 96 bits per direction (3 registers), so a float does not fit. hm2
+  // writes (u64)(val / ParmMax * (2^24 - 1)); ParmMax 1677.7214f sits
+  // just below 2^24 * 1e-4, so the truncation lands on val * 1e4 exactly
+  // for every multiple of 1e-4 (checked for all 2^24 counts on the host).
+  uint8_t scale[3];
+} sserial_out_process_data_t;  //size:12 bytes
+_Static_assert(sizeof(sserial_out_process_data_t) == 12, "sserial_out_process_data_t size error!");
 
 typedef struct {
   float pos_fb;
@@ -949,8 +955,9 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(enable)    = data_out.enable;
           // in process data: a global only reaches the drive before process
           // data starts, and hm2 2.9's change check skips round values
-          if(data_out.scale != 0.0f && isfinite(data_out.scale)) {
-            PIN(scale) = data_out.scale;
+          uint32_t scale_raw = data_out.scale[0] | (data_out.scale[1] << 8) | (data_out.scale[2] << 16);
+          if(scale_raw) {
+            PIN(scale) = scale_raw / 10000.0f;  // divide: 10 comes out as exactly 10
           }
         } else {
           // bad packet: count it and keep the last good command for up to
