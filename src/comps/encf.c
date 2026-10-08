@@ -24,6 +24,8 @@ HAL_PIN(batt);
 HAL_PIN(req_len);
 
 HAL_PIN(pos_offset);
+HAL_PIN(hold);      // link fault0.en_out: an index re-reference while 1 is held as an offset on pos/turns
+HAL_PIN(hold_off);  // held offset in turns, 0 when none
 
 HAL_PIN(send_step);
 HAL_PIN(crc_ok);
@@ -106,6 +108,10 @@ static uint32_t turns_age;
 static uint32_t last_no_index;
 static int32_t last_sp;
 static uint32_t retake;
+static int64_t last_tot;   // pos/turns as one count, last good frame
+static int32_t last_step;  // its motion over the last good frame
+static int64_t hold_off;   // offset that keeps the output continuous
+static uint32_t have_tot;
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
@@ -194,6 +200,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   last_no_index   = 0;
   last_sp         = 0;
   retake          = 0;
+  hold_off        = 0;
+  have_tot        = 0;
   PIN(freq)       = 1024000;
 }
 
@@ -320,14 +328,49 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // the encoder's own count at pos = pos_offset (abs_pos 0 and just
       // above): pos_offset = 0 reads the encoder's turns on the positive
       // half, and 32768 gives the same pos and turns as before.
-      int32_t off  = (int32_t)PIN(pos_offset) << 6;
-      int32_t x    = sp + off;
-      PIN(pos)     = wrap_bits(x, 22);
-      PIN(turns)   = (int16_t)(uint16_t)(turns_pi + ((x + (1 << 21)) >> 22) - ((off + (1 << 21)) >> 22));
+      int32_t off   = (int32_t)PIN(pos_offset) << 6;
+      int32_t x     = sp + off;
+      int32_t t     = (int16_t)(uint16_t)(turns_pi + ((x + (1 << 21)) >> 22) - ((off + (1 << 21)) >> 22));
+      int32_t xw    = (int32_t)((uint32_t)x << 10) >> 10;
+      int64_t tot   = (int64_t)t * (1 << 22) + xw;
+      uint32_t gap  = turns_age + 1;  // frames since the last good one
+      // While hold (the drive enabled), a re-reference at the index would
+      // step pos and turns by up to a turn and the position loop would pull
+      // the motor back by that much. Keep the output continuous instead: a
+      // step no motion explains (more than 1/32 turn per frame, or during
+      // the re-take frames a change of more than 2^12 counts from the last
+      // frame's motion) goes into hold_off, the frame counts as moving like
+      // the one before. hold_off drops when hold does, so the new reference
+      // shows while disabled, with state 1 for that frame so linrev re-takes
+      // its turns. abs_pos and com_pos stay true for commutation.
+      int32_t release = 0;
+      if(have_tot) {
+        int64_t step = tot - last_tot;
+        int64_t dev  = step - (int64_t)last_step * gap;
+        int64_t lim  = (int64_t)(1 << 17) * gap;
+        int jumped   = step > lim || step < -lim || (retake && (dev > (1 << 12) || dev < -(1 << 12)));
+        if(PIN(hold) > 0.0) {
+          if(jumped) {
+            hold_off -= dev;
+          } else {
+            last_step = step / gap;
+          }
+        } else {
+          release   = hold_off != 0;
+          hold_off  = 0;
+          last_step = jumped ? 0 : step / gap;
+        }
+      }
+      last_tot = tot;
+      have_tot = 1;
+      int64_t out    = tot + hold_off;
+      PIN(pos)       = wrap_bits((uint32_t)out, 22);
+      PIN(turns)     = (int16_t)(uint16_t)((out + (1 << 21)) >> 22);
+      PIN(hold_off)  = (float)hold_off / (float)(1 << 22);
       // absolute only once the re-reference is through: no_index clears a
       // frame before abs_pos jumps, and fb_switch commutates from abs_pos as
       // soon as this reads 3, so hold 1 through the re-take frames
-      PIN(state) = (PIN(index) > 0.0 || retake) ? 1 : 3;
+      PIN(state) = (PIN(index) > 0.0 || retake || release) ? 1 : 3;
 
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = wrap_bits(pos, 10);
