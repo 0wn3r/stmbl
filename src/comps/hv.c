@@ -8,6 +8,7 @@
 #include "dma_util.h"
 #include "hw/hw.h"
 #include "common.h"
+#include <stdio.h>
 #include "main.h"
 #include "ringbuf.h"
 
@@ -68,6 +69,7 @@ HAL_PIN(w_fb);
 HAL_PIN(emf_val);  // emf0 result number emf_sel, from the f3
 HAL_PIN(pwm_freq);  // f3 PWM and rt rate [Hz], 15000 from an f3 that doesn't report it
 HAL_PIN(link_to);  // f3 rt ticks in link timeout since the f3 booted; any rise is a dropout that took the gates off
+HAL_PIN(link_drops);  // f3 dropouts seen while enabled, out; each one faults HV_TIMEOUT_ERROR
 
 // misc
 HAL_PIN(rev);
@@ -93,6 +95,8 @@ struct hv_ctx_t {
   f3_state_data_t state;
   uint32_t addr;
   uint16_t timeout;
+  float link_to_last;  // link_to at the last state word, -1 before the first
+  uint32_t link_err;   // an f3 dropout while enabled, held until en drops
   uint8_t conf_addr;
   uint8_t send_state;
 };
@@ -111,6 +115,11 @@ typedef enum {
 flash_state_t flash_state;
 
 uint32_t send_to_bootloader;
+
+// hv_pause <ms>: stop sending to the f3 for that long, to test what the f3
+// does on its own when the link is lost (gates off, short brake if armed).
+// The f4 sees no replies meanwhile, so it faults HV_TIMEOUT_ERROR too.
+static volatile float hv_pause_left;  // [s]
 
 // CRC_CHECK: an f3 bootloader computes the app CRC inside its timer IRQ
 // (2-3 ms for 74 KB) and answers once that is done, at an offset that
@@ -249,6 +258,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(lq)               = 0;
   PIN(adv)              = 0;
   send_to_bootloader    = 0;
+  hv_pause_left         = 0.0;
+  ctx->link_to_last     = -1.0;
+  ctx->link_err         = 0;
   flash_state           = SLAVE_IN_APP;
   ctx->send_state       = 0;
   PIN(ignore_fault_pin) = 1;
@@ -332,6 +344,22 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               PIN(emf_val)   = ctx->state.pins.emf_val;
               PIN(pwm_freq)  = ctx->state.pins.pwm_freq > 0.0 ? ctx->state.pins.pwm_freq : 15000.0;
               PIN(link_to)   = ctx->state.pins.link_to;
+
+              // The f3 times out after 2 packets (400 us at 5 kHz) and takes
+              // the gates off, the f4 only after 3 ticks without a reply, so
+              // a short dropout can stop the bridge without this side ever
+              // faulting, and the f3 then comes back on its own. A rise in
+              // the f3's count while enabled turns that into a fault here.
+              // The count only falls when the f3 reboots: take it as the new
+              // baseline.
+              if(ctx->link_to_last >= 0.0 && PIN(link_to) > ctx->link_to_last && e > 0.0) {
+                ctx->link_err = 1;
+                PIN(link_drops)++;
+              }
+              ctx->link_to_last = PIN(link_to);
+              if(ctx->link_err) {
+                PIN(fault) = HV_TIMEOUT_ERROR;
+              }
 
               // not measured: P = 3/2 (ud id + uq iq) from the commanded
               // voltages, so inverter losses are left out
@@ -458,6 +486,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(fault) = HV_TIMEOUT_ERROR;
   }
   ctx->timeout++;
+  if(e <= 0.0) {  // fault0 has latched it by now; a new enable starts clean
+    ctx->link_err = 0;
+  }
 
   float d_cmd = PIN(d_cmd);
   float q_cmd = PIN(q_cmd);
@@ -684,6 +715,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
   ctx->send_state++;
 
+  if(hv_pause_left > 0.0) {
+    hv_pause_left -= period;
+    if(flash_state == SLAVE_IN_APP) {
+      tx_size = 0;
+    }
+  }
+
   if(flash_state == CRC_CHECK && tx_size) {
     crc_wait = CRC_LISTEN;
   }
@@ -712,6 +750,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   PIN(state) = flash_state;
 }
+
+void hv_pause(char *ptr) {
+  int ms = 0;
+  if(!ptr || sscanf(ptr, "%i", &ms) != 1 || ms <= 0 || ms > 2000) {
+    printf("usage: hv_pause <ms>, 1 to 2000\n");
+    return;
+  }
+  hv_pause_left = ms * 0.001;
+  printf("not sending to the f3 for %i ms\n", ms);
+}
+COMMAND("hv_pause", hv_pause, "stop sending to the f3 for <ms> (link loss test)");
 
 void send_boot(char *ptr) {
   send_to_bootloader = 1;
