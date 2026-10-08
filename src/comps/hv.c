@@ -529,7 +529,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case SEND_TO_BOOTLOADER:  // fix
-      ctx->to_hv.packet_to_hv.header.slave_addr = 0;  // the app; FLASH_FAILED left 255 here
+      ctx->to_hv.packet_to_hv.header.slave_addr = 0;  // the app; FLASH_FAILED left 255 and the bootloader len here
+      ctx->to_hv.packet_to_hv.header.len        = (sizeof(packet_to_hv_t) - sizeof(stmbl_talk_header_t)) / 4;
       ctx->to_hv.packet_to_hv.header.flags.cmd = BOOTLOADER;
       ctx->to_hv.packet_to_hv.flags.buf        = 0x0;
       ctx->to_hv.packet_to_hv.header.flags.counter++;
