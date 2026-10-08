@@ -56,6 +56,7 @@ HAL_PIN(in1);
 HAL_PIN(in2);
 HAL_PIN(in3);
 HAL_PIN(fault);
+HAL_PIN(fault_code);
 
 HAL_PIN(out0);
 HAL_PIN(out1);
@@ -88,11 +89,11 @@ static uint32_t block_bytes;
 #pragma pack(push, 1)
 //*****************************************************************************
 uint8_t sserial_slave[] = {
-    0x0B,
+    0x0C,
     0x09,
     0x8B,
     0x01,
-    0xA5,
+    0xA7,
     0x01,
     0x00,
     0x00,  // 0..7
@@ -507,20 +508,52 @@ uint8_t sserial_slave[] = {
     0x01,
     0x74,
     0x01,
-    0x00,
-    0x00,
-    0x30,
-    0x01,
-    0x49,  // 416..423
+    0xAD,
     0x01,
     0x00,
+    0x00,
+    0x30,  // 416..423
+    0x01,
+    0x49,
+    0x01,
+    0x00,
+    0x00,
+    0xA0,
+    0x08,
+    0x02,  // 424..431
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x7F,  // 432..439
+    0x43,
+    0xAD,
+    0x01,
+    0x6E,
+    0x6F,
+    0x6E,
+    0x65,
+    0x00,  // 440..447
+    0x66,
+    0x61,
+    0x75,
+    0x6C,
+    0x74,
+    0x5F,
+    0x63,
+    0x6F,  // 448..455
+    0x64,
+    0x65,
     0x00,
 };
 
 const discovery_rpc_t discovery = {
     .ptocp  = 0x018B,
-    .gtocp  = 0x01A5,
-    .input  = 11,
+    .gtocp  = 0x01A7,
+    .input  = 12,
     .output = 9,
 };
 
@@ -548,8 +581,9 @@ typedef struct {
   uint32_t fault : 1;
   uint32_t index_enable : 1;
   uint32_t padding : 2;
-} sserial_in_process_data_t;  //size:10 bytes
-_Static_assert(sizeof(sserial_in_process_data_t) == 10, "sserial_in_process_data_t size error!");
+  uint8_t fault_code;  // fault0.last_fault, the fault_t that tripped last
+} sserial_in_process_data_t;  //size:11 bytes
+_Static_assert(sizeof(sserial_in_process_data_t) == 11, "sserial_in_process_data_t size error!");
 //global name:scale addr:0x12c size:32 dir:0x80
 #define scale_address 300
 //******************************************************************************
@@ -853,6 +887,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         data_in.in_2    = (PIN(in2) > 0) ? 1 : 0;
         data_in.in_3    = (PIN(in3) > 0) ? 1 : 0;
         data_in.fault   = (PIN(fault) > 0) ? 1 : 0;
+        data_in.fault_code = CLAMP(PIN(fault_code), 0, 255);
 
         //copy output pins from rx buffer
         for(int i = 0; i < discovery.output; i++) {
