@@ -28,8 +28,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint8_t q = 0;
   int en    = PIN(index_en) > 0;
 
-  if(en && !ctx->last_en) {  // new request: no crossing against a quadrant from an old one
-    ctx->lastq = 0;
+  if(en && !ctx->last_en) {  // new request: nothing carried over from an old one
+    ctx->lastq   = 0;
+    ctx->waitabs = 0;
   }
   ctx->last_en = en;
 
