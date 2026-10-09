@@ -21,7 +21,9 @@
  * count as a failed step; at a parameter's start value they cut it by kd
  * and retry, up to CUT_MAX times. The start values are conf0.pos_bw, vel_bw
  * and vel_d (10, 100 and 10 when they are 0). The profile
- * starts at pos_fb, so there is no jump. Each score averages rep cycles.
+ * starts at pos_fb, so there is no jump; the stroke is min_pos to max_pos
+ * about that start, and the axis drives back to it at the end. Each score
+ * averages rep cycles.
  *
  * With good feedforward the tracking cost goes to almost nothing and stops
  * limiting the gains, so a step also fails when the feedback torque's noise
@@ -120,11 +122,11 @@ HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 // K is the one quantity the id sequence never measures, and searching for j_lpf
 // against the cost below does not work -- the cost is dominated by the low
 // frequency tracking error, which is exactly the band j_lpf does not act in. So
-// measure it instead. Kick the axis, time the ring, and let the stiffness drop
-// out: the resonance and the anti resonance differ only by the inertia ratio,
-// which id_mot and id_sys already give us.
-//
-//   f_res / f_anti = sqrt(1 + j_sys / j_mot)   =>   j_lpf = f_res / sqrt(...)
+// measure it instead. Kick the axis and time the ring. It is timed in closed
+// loop at the configured gains, where the speed loop holds the motor, so the
+// ring sits at the anti resonance, not at the free resonance
+// sqrt(1 + j_sys / j_mot) above it: a two mass sim of Y (pid.c, vel.c, ids.c,
+// vel_bw 300-500) puts it at 0.79-0.91 of the anti resonance. j_lpf = f_ring.
 //
 // Frequency is the right thing to measure here because it survives a messy
 // excitation: several torque edges superposed at the same mode are still that
@@ -155,6 +157,7 @@ HAL_PIN(j_lpf);      // computed pid0.j_lpf corner [Hz]
 struct ring_t {
   uint8_t armed;      // the 2.2 entry hook has run
   uint8_t spent;      // this dwell's ring has decayed into the noise
+  uint8_t arrived;    // the kick has reached its target, the dwell runs
   int8_t sign;        // last polarity the schmitt trigger latched
   uint16_t n_cross;   // trigger events in this dwell
   uint16_t n_dwell;   // half periods accepted in this dwell
@@ -186,6 +189,8 @@ struct ids_ctx_t {
   int sat_cycle;  // this cycle saturated
   int sat_n;      // saturated cycles in a row
   struct ring_t r;  // ring down estimator, state 2.x
+  float pos0;       // where the gain search started: the stroke is centred on it
+  int home;         // the search is done, the axis drives back to pos0
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -246,7 +251,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
     case 10:
       PIN(state)  = 1.1;
-      PIN(target) = PIN(max_pos);
 
       if(PIN(auto_step) >= 1) {
         PIN(state) = 1.2;
@@ -282,7 +286,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       if(PIN(ring_ok) > 0.0) {
         printf("resonance = %f Hz, damping = %f, from %f half periods\n", PIN(f_ring), PIN(zeta_ring), PIN(ring_n));
         printf("conf0.j_lpf = %f <font color='green'># append to config</font>\n", PIN(j_lpf));
-        printf("<font color='green'># j_lpf is the anti resonance, f_ring / sqrt(1 + j_sys / j_mot).\n");
+        printf("<font color='green'># j_lpf is the anti resonance: the closed loop ring sits at it.\n");
         printf("# above it pid.c drops the load out of the torque model.\n");
         printf("# set it BEFORE id_pid. it changes the plant the gains are tuned\n");
         printf("# against, so a j_lpf set afterwards invalidates the tune.\n");
@@ -294,10 +298,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           printf("# zv_ip0.natural_frequency = %f\n", PIN(f_ring));
           printf("# zv_ip0.damping_ratio = %f</font>\n", PIN(zeta_ring));
         }
-      } else if(PIN(f_ring) > 0.0) {
-        printf("<font color='red'>resonance = %f Hz found, but j_lpf needs the inertia ratio</font>\n", PIN(f_ring));
-        printf("j_mot = %f, j_sys = %f -- run id_mot and id_sys, and check that\n", PIN(j_mot), PIN(j_sys));
-        printf("ids0.j_mot and ids0.j_sys are wired\n");
+        if(PIN(j_sys) <= 0.0) {
+          printf("<font color='red'>conf0.j_sys is 0</font>: j_lpf splits j_sys off, so it does nothing. run id_sys first\n");
+        }
       } else if(PIN(ring_n) > 0.0 && PIN(ring_amp) > PIN(ring_min_amp) * 3.0) {
         // it rang, but it died before there was anything to time. That is a
         // well damped coupling, which is the good case: nothing to compensate.
@@ -363,7 +366,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // follow the rotor while idle, so the profile starts without a step
       PIN(pos)     = PIN(pos_fb);
       PIN(pos_cmd) = mod(PIN(pos));
-      PIN(target)  = PIN(max_pos);
+      ctx->pos0    = PIN(pos);
+      ctx->home    = 0;
+      PIN(target)  = ctx->pos0 + PIN(max_pos);
 
       PIN(pos_bw)     = PIN(pos_bw0) > 0.0 ? PIN(pos_bw0) : 10.0;
       PIN(vel_bw)     = PIN(vel_bw0) > 0.0 ? PIN(vel_bw0) : 100.0;
@@ -402,8 +407,6 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       float r_vmax   = PIN(vel_lim) > 0.0 ? MIN(PIN(max_vel), PIN(vel_lim)) : PIN(max_vel);
       float ring_pos = MAX(PIN(ring_pos), 0.001);
       float dwell    = MAX(PIN(ring_dwell), 0.1);
-      // what the generator needs to get there and stop again, with room to spare
-      float move_t = 2.0 * sqrtf(2.0 * ring_pos / ring_acc) + 2.0 * r_vmax / ring_acc + 0.05;
       float f_max  = MIN(1.0 / period / 20.0, 500.0);
       float f_min  = MAX(2.0 * PIN(ring_hp_hz), 3.0 / dwell);
 
@@ -411,6 +414,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // start where the rotor is, so the first kick is not a lurch
         ctx->r.pos0      = PIN(pos_fb);
         ctx->r.armed     = 1;
+        ctx->r.arrived   = 0;
         ctx->r.sign      = 0;
         ctx->r.n_cross   = 0;
         ctx->r.n_dwell   = 0;
@@ -454,11 +458,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         r_acc    = 0.0;
         PIN(pos) = PIN(target);
         PIN(vel) = 0.0;
+        // the dwell is timed from here, the moment the kick ends: the ring is
+        // largest right after it
+        if(!ctx->r.arrived) {
+          ctx->r.arrived = 1;
+          ctx->r.t       = 0.0;
+        }
       }
 
       PIN(acc)     = LIMIT(r_acc, ring_acc);
       PIN(pos_cmd) = mod(PIN(pos));
-      PIN(vel_cmd) = r_vel * PIN(ff);
+      PIN(vel_cmd) = PIN(vel) * PIN(ff);
       PIN(acc_cmd) = PIN(acc) * PIN(ff);
 
       // The high pass runs the whole time so it is settled by the time a dwell
@@ -471,7 +481,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(ring_sig) = v;
 
       ctx->r.t += period;
-      float dt = ctx->r.t - move_t;
+      float dt = ctx->r.arrived ? ctx->r.t : -1.0;
 
       if(dt < 0.0) {
         // still moving: the move's own transient is not the mode
@@ -506,7 +516,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
 
         if(cross) {
-          if(ctx->r.n_cross > 0) {
+          // the first interval runs from the kick's own end transient, not
+          // from a ring edge: a short half period there seeds the mean and
+          // the agreement filter then rejects every real one
+          if(ctx->r.n_cross > 1) {
             float half = dt - ctx->r.t_last;
             float mean = ctx->r.n_half > 0 ? ctx->r.sum_half / (float)ctx->r.n_half : 0.0;
 
@@ -555,6 +568,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         }
 
         ctx->r.rep++;
+        ctx->r.arrived = 0;
         ctx->r.t       = 0.0;
         ctx->r.t_last  = 0.0;
         ctx->r.sign    = 0;
@@ -586,8 +600,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             // outside what this rate and this high pass can resolve: nothing
             // was measured, and half an answer here is worse than none
             PIN(f_ring) = 0.0;
-          } else if(PIN(j_mot) > 0.0 && PIN(j_sys) > 0.0) {
-            PIN(j_lpf)   = PIN(f_ring) / sqrtf(1.0 + PIN(j_sys) / PIN(j_mot));
+          } else {
+            // timed in closed loop at the configured gains, the speed loop
+            // holds the motor, and the ring sits at the anti resonance (a
+            // two mass sim at vel_bw 300-500 puts it at 0.79-0.91 of it), not at
+            // the free resonance: f_ring is the corner as it stands
+            PIN(j_lpf)   = PIN(f_ring);
             PIN(ring_ok) = 1.0;
           }
 
@@ -626,6 +644,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(vel_cmd) = PIN(vel) * PIN(ff);
       PIN(acc_cmd) = PIN(acc) * PIN(ff);
 
+      if(ctx->home) {
+        // back to where the search started, so repeated runs do not walk the
+        // axis toward a stroke end
+        if(to_go == 0.0) {
+          PIN(acc_cmd) = 0.0;
+          PIN(vel_cmd) = 0.0;
+          PIN(state)   = 1.3;
+        }
+        break;
+      }
+
       PIN(cost) += ABS(PIN(pos_error)) * PIN(kp) * period;
       PIN(cost) += PIN(pos_error) * PIN(pos_error) * PIN(ks) * period;
       PIN(cost) += PIN(vel_error) * PIN(vel_error) * PIN(kv) * period;
@@ -640,9 +669,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(timer) += period;
       if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / p_vel + 2.0 * p_vel / p_acc)) {
-        PIN(target) = PIN(max_pos);
+        PIN(target) = ctx->pos0 + PIN(max_pos);
       } else {
-        PIN(target) = PIN(min_pos);
+        PIN(target) = ctx->pos0 + PIN(min_pos);
       }
       if(PIN(timer) > 2.0 * (ABS(PIN(max_pos) - PIN(min_pos)) / p_vel + 2.0 * p_vel / p_acc)) {
         PIN(timer) = 0.0;
@@ -717,11 +746,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(vel_d)  = 1.0 / PINA(params, 1);
 
       if(PIN(param) > 2.0) {
-        PIN(acc_cmd) = 0.0;
-        PIN(vel_cmd) = 0.0;
-        PIN(param)   = 0.0;
-
-        PIN(state) = 1.3;
+        PIN(param)  = 0.0;
+        ctx->home   = 1;
+        PIN(target) = ctx->pos0;
       }
       break;
   }

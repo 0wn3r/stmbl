@@ -6,8 +6,8 @@
 
 /**
  * id_mot / id_sys (comp idm): j, f, d and o from a back and forth profile
- * between min_pos and max_pos, with each estimate fed back into pid's
- * feedforward.
+ * between min_pos and max_pos about the start position, with each
+ * estimate fed back into pid's feedforward.
  *
  * 1.2: five rounds, speed and acceleration stepping up to max_vel/max_acc.
  * 1.3: J_TIME s at max_vel and max_acc; j, f, d and o adapt on fb_torque.
@@ -20,6 +20,7 @@
  *      f/d split drifts from run to run. With every bin on one side (a
  *      vel_offset over max_vel), f and o can not be told apart: d is fitted
  *      and f takes the rest, o stays as adapted.
+ *      At the end the axis drives back to where the run started.
  */
 HAL_COMP(idm);
 
@@ -95,6 +96,8 @@ struct idm_ctx_t {
   float st[N_LEVELS][2];  // torque sums per level and direction
   float sv[N_LEVELS][2];  // speed sums
   uint32_t n[N_LEVELS][2];
+  float pos0;  // where the run started: the stroke is centred on it, the axis returns to it
+  int home;    // 1.3 is done, the axis drives back to pos0
 };
 
 // least squares T = f sign(v) + d v + o over the bin means
@@ -202,7 +205,6 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 10:
       PIN(state)  = 1.1;
       PIN(timer)  = 0.0;
-      PIN(target) = PIN(min_pos);
 
       if(PIN(auto_step) >= 1) {
         PIN(state) = 1.2;
@@ -279,6 +281,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(fit_rms)      = 0.0;
         memset(ctx, 0, sizeof(struct idm_ctx_t));
         ctx->level = -1;
+        ctx->pos0  = PIN(pos);
+        PIN(target) = ctx->pos0 + PIN(min_pos);
       }
       break;
 
@@ -335,9 +339,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(timer) += period;
       if(PIN(timer) < (ABS(PIN(max_pos) - PIN(min_pos)) / max_vel + 2.0 * max_vel / max_acc)) {
-        PIN(target) = PIN(max_pos);
+        PIN(target) = ctx->pos0 + PIN(max_pos);
       } else {
-        PIN(target) = PIN(min_pos);
+        PIN(target) = ctx->pos0 + PIN(min_pos);
       }
       if(PIN(timer) > 2.0 * (ABS(PIN(max_pos) - PIN(min_pos)) / max_vel + 2.0 * max_vel / max_acc)) {
         PIN(timer) = 0.0;
@@ -364,7 +368,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 13:  // j, d, f
-      max_vel = PIN(max_vel) * (ctx->level >= 0 ? levels[ctx->level] : 1.0);
+      max_vel = PIN(max_vel) * (ctx->level >= 0 && ctx->level < N_LEVELS ? levels[ctx->level] : 1.0);
       PIN(pos) += PIN(vel_cmd) * period + PIN(acc_cmd) * period * period / 2.0;
       PIN(pos_cmd) = mod(PIN(pos));
       PIN(vel_cmd) += PIN(acc_cmd) * period;
@@ -376,11 +380,25 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       acc          = (vel - PIN(vel_cmd)) / period;
       PIN(acc_cmd) = LIMIT(acc, PIN(max_acc));
 
-      if(ABS(PIN(max_pos) - PIN(pos)) < 0.1 && PIN(target) != PIN(min_pos)) {
-        PIN(target) = PIN(min_pos);
+      if(ctx->home) {
+        // back to where the run started, so repeated runs do not walk the
+        // axis toward a stroke end
+        if(time_to_go < period) {
+          PIN(timer)   = 0.0;
+          PIN(acc_cmd) = 0.0;
+          PIN(vel_cmd) = 0.0;
+          PIN(pos)     = PIN(target);
+          PIN(pos_cmd) = mod(PIN(pos));
+          PIN(state)   = 1.4;
+        }
+        break;
+      }
+
+      if(ABS(ctx->pos0 + PIN(max_pos) - PIN(pos)) < 0.1 && PIN(target) != ctx->pos0 + PIN(min_pos)) {
+        PIN(target) = ctx->pos0 + PIN(min_pos);
         ctx->flips++;
-      } else if(ABS(PIN(min_pos) - PIN(pos)) < 0.1 && PIN(target) != PIN(max_pos)) {
-        PIN(target) = PIN(max_pos);
+      } else if(ABS(ctx->pos0 + PIN(min_pos) - PIN(pos)) < 0.1 && PIN(target) != ctx->pos0 + PIN(max_pos)) {
+        PIN(target) = ctx->pos0 + PIN(max_pos);
         ctx->flips++;
       }
 
@@ -432,13 +450,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->flips = 0;
       }
       if(ctx->level >= N_LEVELS) {
-        PIN(timer)   = 0.0;
-        PIN(acc_cmd) = 0.0;
-        PIN(vel_cmd) = 0.0;
-        PIN(amp)     = 0.0;
+        PIN(amp) = 0.0;
         fit_fdo(ctx, pins);
-
-        PIN(state) = 1.4;
+        ctx->home   = 1;
+        PIN(target) = ctx->pos0;
       }
       break;
   }
