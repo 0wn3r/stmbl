@@ -66,6 +66,7 @@ HAL_PIN(enable);
 HAL_PIN(index_clear);
 HAL_PIN(index_out);
 HAL_PIN(pos_advance);
+HAL_PIN(pos_extrap);  // 1: pos_fb extrapolated by vel_fb to the reply; 0 for a vel only feedback (sserial_uf)
 
 //TODO: move to ctx
 struct sserial_ctx_t {
@@ -665,6 +666,12 @@ static void send(uint8_t len, uint8_t docrc) {
 
 //TODO: lbp command 0xe6 to set mode
 
+// at load, before the template's pin settings (hw_init runs after them)
+static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
+  struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
+  PIN(pos_extrap)                = 1.0;
+}
+
 static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct sserial_ctx_t * ctx = (struct sserial_ctx_t *)ctx_ptr;
   struct sserial_pin_ctx_t *pins = (struct sserial_pin_ctx_t *)pin_ptr;
@@ -812,9 +819,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 static float fb_age(uint32_t tick) {
   // the adc dma restarts its count at every rt period: its progress is the
   // time into the current one
-  uint32_t ndtr  = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
-  uint32_t ticks = rt_tick;
-  if(LL_DMA_IsActiveFlag_TC0(DMA2)) {  // a period started, its irq not yet in
+  // the period may end (TC set, count reloaded) between the reads: read the
+  // tick and flag on both sides of the count and retry if they differ, else
+  // the old period's count lands on the new period's tick, one period too old
+  uint32_t ticks, ndtr, flag;
+  do {
+    ticks = rt_tick;
+    flag  = LL_DMA_IsActiveFlag_TC0(DMA2);
+    ndtr  = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
+  } while(ticks != rt_tick || flag != LL_DMA_IsActiveFlag_TC0(DMA2));
+  if(flag) {  // a period started, its irq not yet in
     ticks++;
   }
   float age = (float)(ticks - tick) + (float)(ADC_SAMPLES_IN_RT - ndtr) / (float)ADC_SAMPLES_IN_RT;
@@ -911,7 +925,7 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         //TODO: fault handling on timeout...
         //set input pins
         uint32_t si     = fb_snap_i;
-        data_in.pos_fb  = fb_snap[si].pos + fb_snap[si].vel * (PIN(pos_advance) + fb_age(fb_snap[si].tick));
+        data_in.pos_fb  = fb_snap[si].pos + (PIN(pos_extrap) > 0.0 ? fb_snap[si].vel * (PIN(pos_advance) + fb_age(fb_snap[si].tick)) : 0.0);
         data_in.vel_fb  = fb_snap[si].vel;
         data_in.current = CLAMP(PIN(current) / (30.0f / 128.0f), -127, 127);
         data_in.in_0    = (PIN(in0) > 0) ? 1 : 0;
@@ -1053,7 +1067,7 @@ const hal_comp_t sserial_comp_struct = {
     .nrt       = 0,  //nrt_func,
     .rt        = rt_func,
     .frt       = frt_func,
-    .nrt_init  = 0,
+    .nrt_init  = nrt_init,
     .hw_init   = hw_init,
     .rt_start  = 0,
     .frt_start = 0,
