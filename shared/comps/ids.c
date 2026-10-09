@@ -682,7 +682,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
     }
 
-    case 12:
+    case 12: {
       // the profile stays inside the drive's own limits, conf0.max_acc and max_vel
       float p_acc = PIN(acc_lim) > 0.0 ? MIN(PIN(max_acc), PIN(acc_lim)) : PIN(max_acc);
       float p_vel = PIN(vel_lim) > 0.0 ? MIN(PIN(max_vel), PIN(vel_lim)) : PIN(max_vel);
@@ -818,6 +818,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(target) = ctx->pos0;
       }
       break;
+    }
   }
 }
 

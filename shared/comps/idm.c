@@ -147,7 +147,7 @@ static void fit_fdo(struct idm_ctx_t *ctx, struct idm_pin_ctx_t *pins) {
     f = (b[0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (b[1] * a[2][2] - a[1][2] * b[2]) + a[0][2] * (b[1] * a[2][1] - a[1][1] * b[2])) / det;
     d = (a[0][0] * (b[1] * a[2][2] - a[1][2] * b[2]) - b[0] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * b[2] - b[1] * a[2][0])) / det;
     o = (a[0][0] * (a[1][1] * b[2] - b[1] * a[2][1]) - a[0][1] * (a[1][0] * b[2] - b[1] * a[2][0]) + b[0] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])) / det;
-  } else {  // one direction only: T = c + d v, f = (c - o) sign
+  } else if(pos == 0 || neg == 0) {  // one direction only: T = c + d v, f = (c - o) sign
     float mv = 0.0, mt = 0.0, sxx = 0.0, sxy = 0.0;
     for(int i = 0; i < m; i++) {
       mv += vv[i] / m;
@@ -163,6 +163,11 @@ static void fit_fdo(struct idm_ctx_t *ctx, struct idm_pin_ctx_t *pins) {
     d = sxy / sxx;
     o = PIN(offset);
     f = (mt - d * mv - o) * (pos > 0 ? 1.0 : -1.0);
+  } else {
+    // both directions at one speed only (a short stroke): f + d v is all
+    // there is, f and d can not be split. keep them as adapted
+    PIN(fit_n) = 0;
+    return;
   }
   float e = 0.0;
   for(int i = 0; i < m; i++) {
