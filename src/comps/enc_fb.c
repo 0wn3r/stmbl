@@ -26,6 +26,7 @@ HAL_PIN(oquadoff);
 HAL_PIN(qdiff);
 HAL_PIN(error);
 HAL_PIN(amp);
+HAL_PIN(min_amp);  // mot fb error below this amp at standstill
 HAL_PIN(vel);
 HAL_PIN(ccr3);
 HAL_PIN(en_index);
@@ -51,6 +52,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->absoffset                = 0.0;
   PIN(res)                      = 2048.0;
   PIN(ires)                     = 1024.0;
+  PIN(min_amp)                  = 0.25;
 }
 
 static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -214,7 +216,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(abs_pos) = minus(p, ctx->absoffset);
   PIN(index)   = LL_GPIO_IsInputPinSet(FB0_Z_PORT, FB0_Z_PIN);
 
-  if(PIN(amp) > 0.25 || ABS(PIN(vel)) > 0.15) {
+  if(PIN(amp) > PIN(min_amp) || ABS(PIN(vel)) > 0.15) {
     PIN(error) = 0.0;
     PIN(state) = MAX(PIN(state), 1.0);
     PIN(ipos)  = mod(p + ((int)(ir * mod(atan2_fast(s, c) * 4.0 + M_PI) * M_1_PI)) / ir * M_PI / (float)ctx->e_res);
