@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "main.h"
+#include "f4_clock.h"
 #include "commands.h"
 #include "hw/hw.h"
 
@@ -193,6 +194,9 @@ void about(char *ptr) {
   printf("HAL lib... TODO: print version\n");
 #endif
   printf("CPU ID     %lx %lx %lx\n",U_ID[0], U_ID[1], U_ID[2]);
+  if(hse_failed) {
+    printf("clock      HSE failed, running on HSI, hal not started\n");
+  }
   printf("size: %lu crc:%lx\n", version_info.image_size, version_info.image_crc);
   volatile const version_info_t *bt_version_info = (void *)0x08000188;
   printf("######## Bootloader info ########\n");
@@ -248,7 +252,13 @@ int main(void) {
   hal_parse("flashloadconf");
   hal_parse("loadconf");
   hal_parse("relink");
-  hal_parse("start");
+  if(hse_failed) {
+    // on the HSI the rt runs 5x slow and the F3 link and USB cannot work;
+    // leave the hal stopped rather than run it at the wrong rate
+    hal.hal_state = MISC_ERROR;
+  } else {
+    hal_parse("start");
+  }
 
   LL_TIM_EnableCounter(TIM_MASTER);
   LL_TIM_EnableIT_UPDATE(TIM_SLAVE);

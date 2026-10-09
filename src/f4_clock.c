@@ -11,8 +11,10 @@ uint32_t SystemCoreClock = HSI_VALUE;
 const uint8_t AHBPrescTable[16] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 6, 7, 8, 9};
 const uint8_t APBPrescTable[8]  = {0, 0, 0, 0, 1, 2, 3, 4};
 
-#define PLL_M 8    // HSE 8 MHz / 8 = 1 MHz into the PLL
-#define PLL_N 336  // 336 MHz VCO
+uint32_t hse_failed = 0;  // set by clock_init() if the HSE never became ready
+
+#define PLL_M 4    // HSE 8 MHz / 4 = 2 MHz into the PLL (RM0090 6.3.2 recommends 2 MHz for jitter)
+#define PLL_N 168  // 336 MHz VCO
 #define PLL_P 2    // 168 MHz SYSCLK
 #define PLL_Q 7    // 48 MHz USB
 
@@ -36,7 +38,7 @@ void SystemInit(void) {
 // HSE 8 MHz * 336 / 8 / 2 = 168 MHz SYSCLK/HCLK, APB1 42 MHz, APB2 84 MHz,
 // 48 MHz for USB from PLLQ, flash at 5 wait states with prefetch and both
 // caches, regulator scale 1. If the HSE does not start the core stays on
-// the 16 MHz HSI (every baud rate and timer then runs slow).
+// the 16 MHz HSI and hse_failed is set.
 void clock_init(void) {
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
   LL_PWR_SetRegulVoltageScaling(LL_PWR_REGU_VOLTAGE_SCALE1);
@@ -44,6 +46,7 @@ void clock_init(void) {
   LL_RCC_HSE_Enable();
   for(uint32_t t = 0; !LL_RCC_HSE_IsReady(); t++) {
     if(t >= HSE_STARTUP_TIMEOUT) {
+      hse_failed = 1;  // main() leaves the hal stopped, "about" says why
       return;
     }
   }
@@ -51,13 +54,15 @@ void clock_init(void) {
   LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
   LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_2);
   LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_4);
-  LL_RCC_PLL_ConfigDomain_SYS(LL_RCC_PLLSOURCE_HSE, LL_RCC_PLLM_DIV_8, PLL_N, LL_RCC_PLLP_DIV_2);
-  LL_RCC_PLL_ConfigDomain_48M(LL_RCC_PLLSOURCE_HSE, LL_RCC_PLLM_DIV_8, PLL_N, LL_RCC_PLLQ_DIV_7);
+  LL_RCC_PLL_ConfigDomain_SYS(LL_RCC_PLLSOURCE_HSE, LL_RCC_PLLM_DIV_4, PLL_N, LL_RCC_PLLP_DIV_2);
+  LL_RCC_PLL_ConfigDomain_48M(LL_RCC_PLLSOURCE_HSE, LL_RCC_PLLM_DIV_4, PLL_N, LL_RCC_PLLQ_DIV_7);
   LL_RCC_PLL_Enable();
   while(!LL_RCC_PLL_IsReady()) {
   }
 
   LL_FLASH_SetLatency(LL_FLASH_LATENCY_5);
+  while(LL_FLASH_GetLatency() != LL_FLASH_LATENCY_5) {  // RM0090 3.5.1: in effect before the switch
+  }
   LL_FLASH_EnablePrefetch();
   LL_FLASH_EnableInstCache();
   LL_FLASH_EnableDataCache();
@@ -66,4 +71,8 @@ void clock_init(void) {
   while(LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL) {
   }
   SystemCoreClock = HSE_VALUE / PLL_M * PLL_N / PLL_P;
+
+  // RM0090 6.2.7: on an HSE failure the CSS switches to HSI and raises an NMI
+  // (NMI_Handler) instead of leaving the PLL without a reference
+  LL_RCC_HSE_EnableCSS();
 }
