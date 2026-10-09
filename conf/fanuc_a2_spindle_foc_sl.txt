@@ -68,12 +68,15 @@ ramp0.max_dec = conf0.max_acc
 ramp0.en_delay = 0.01
 fault0.en = ramp0.en_out
 pid0.pos_en = 0
-# load: id_sys 6 Oct (rotating idacim 9 Oct:
-# friction 0.76 Nm at 123-172 rad/s)
+# load: id_sys 9 Oct on the encoder, 30 to 300
+# rad/s (idm0.max_vel 300, +-1000 rad). The fit
+# holds over that range; above 300 rad/s d is
+# extrapolated (0.88 Nm at 300 rad/s). conf0.j
+# already holds the belt driven spindle.
 conf0.j_sys = 0
-conf0.f = 0.674
-conf0.d = 0.000079
-conf0.o = 0.0097
+conf0.f = 0.499160
+conf0.d = 0.001283
+conf0.o = 0.003052
 # no encoder: feedback ready, speed from obs0
 fault0.fb_ready = 1
 fault0.mot_fb_error = 0
