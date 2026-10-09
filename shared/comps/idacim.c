@@ -590,7 +590,9 @@ static void knee_fit(struct idacim_pin_ctx_t *pins) {
 // stator sees r id_n + j w ls id_n, so that voltage gives id_n with the ls
 // this test read. ls is lmr's chord over test_cur/2..test_cur, so id_n is
 // best when test_cur is near it. Slip at active current iq is iq / (tr i_mr)
-// electrical, and the boost covers r id_n where the emf is still small.
+// electrical, and the boost covers r id_n where the emf is still small,
+// plus the dead time drop: V/f runs in volt mode with no compensation
+// (spindle, 9 Oct: r id_n alone, 3.7 V, stalled; 12 V started).
 static void vf_set(struct idacim_pin_ctx_t *pins) {
   float u  = PIN(n_volt) * 0.8164966;  // line to line rms to phase peak
   float we = 2.0 * M_PI * PIN(n_freq);
@@ -605,7 +607,7 @@ static void vf_set(struct idacim_pin_ctx_t *pins) {
   PIN(iq_n)         = iq;
   PIN(vf_u_n)       = u;
   PIN(vf_vel_n)     = we / pp;
-  PIN(vf_boost)     = r * id;
+  PIN(vf_boost)     = r * id + PIN(drop);
   PIN(vf_boost_vel) = CLAMP(3.0 * r / ls, 0.02 * we, 0.2 * we) / pp;  // where w ls is 3 r
   PIN(vf_slip_n)    = iq / (PIN(tr) * id) / pp;
   PIN(vf_cur_n)     = iq;
@@ -847,7 +849,13 @@ static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) 
   printf("acim_foc0.id_n = %f <font color='green'># append to config</font>\n", id_n);
   printf("acim_flux0.i_n = %f <font color='green'># append to config</font>\n", id_n);
   printf("acim_flux0.lmr = %f <font color='green'># append to config, secant at id_n</font>\n", lmr);
-  printf("acim_flux0.lmr_sat = %f <font color='green'># append to config</font>\n", sat);
+  if(knee_ok || PIN(rot_enc) <= 0.0) {
+    printf("acim_flux0.lmr_sat = %f <font color='green'># append to config</font>\n", MAX(sat, 0.0));
+  } else {
+    // the fallback line runs through the dip and does not fit the config's
+    // knee and dip, which stay
+    printf("<font color='green'># acim_flux0.lmr_sat %f from the fallback line, not to append</font>\n", sat);
+  }
   if(knee_ok) {
     printf("acim_flux0.i_knee = %f <font color='green'># append to config, lmr and tr flat below it</font>\n", ik);
     printf("acim_flux0.tr_sat = %f <font color='green'># append to config, tr follows the secant lmr</font>\n", sat);
