@@ -147,6 +147,10 @@ struct idacim_ctx_t {
   float l_th;       // injection phase
   float l_amp;      // injection voltage amplitude
   float v_re, v_im, i_re, i_im;
+  float v_dc, i_dc, s_dc, c_dc;  // leakage window: sums for the dc removal
+  float pp_raw;     // pole pair test: the ratio before rounding
+  uint32_t pp_n;    // pole pair test: samples, and those the rotor turned in
+  uint32_t pp_turn;
   // rotor step
   uint16_t r_edge;      // edges seen in this rung, the first comes from another level
   uint16_t r_n;         // edges that produced a fit (nrt)
@@ -591,7 +595,8 @@ static void knee_fit(struct idacim_pin_ctx_t *pins) {
 // this test read. ls is lmr's chord over test_cur/2..test_cur, so id_n is
 // best when test_cur is near it. Slip at active current iq is iq / (tr i_mr)
 // electrical, and the boost covers r id_n where the emf is still small,
-// plus the dead time drop: V/f runs in volt mode with no compensation
+// plus the dead time loss: V/f runs in volt mode with no compensation, and a
+// rotating vector loses the square wave's fundamental, 4/pi of the per phase drop
 // (spindle, 9 Oct: r id_n alone, 3.7 V, stalled; 12 V started).
 static void vf_set(struct idacim_pin_ctx_t *pins) {
   float u  = PIN(n_volt) * 0.8164966;  // line to line rms to phase peak
@@ -607,7 +612,7 @@ static void vf_set(struct idacim_pin_ctx_t *pins) {
   PIN(iq_n)         = iq;
   PIN(vf_u_n)       = u;
   PIN(vf_vel_n)     = we / pp;
-  PIN(vf_boost)     = r * id + PIN(drop);
+  PIN(vf_boost)     = r * id + 4.0 / M_PI * PIN(drop);  // square wave loss, fundamental
   PIN(vf_boost_vel) = CLAMP(3.0 * r / ls, 0.02 * we, 0.2 * we) / pp;  // where w ls is 3 r
   PIN(vf_slip_n)    = iq / (PIN(tr) * id) / pp;
   PIN(vf_cur_n)     = iq;
@@ -1125,6 +1130,8 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos)  = 0.0;
       PIN(cmd_mode) = 0.0;
       PIN(pp)       = 0.0;  // the filter starts from this run's first reading
+      ctx->pp_n     = 0;
+      ctx->pp_turn  = 0;
 
       printf("Measure polepairs\n");
       printf("<font color='green'>unblock the rotor, it will move</font>\n");
@@ -1151,9 +1158,14 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case 24:
-      printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
-      if(PIN(out_rev) > 0.0) {
-        printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+      // a slipping rotor, or no vel_fb, reads a ratio off any integer
+      if(PIN(pp) >= 1.0 && ABS(ctx->pp_raw - PIN(pp)) < 0.15 && ctx->pp_turn > 0.8 * ctx->pp_n) {
+        printf("conf0.polecount = %f <font color='green'># append to config</font>\n", PIN(pp));
+        if(PIN(out_rev) > 0.0) {
+          printf("conf0.out_rev = 1 <font color='green'># append to config</font>\n");
+        }
+      } else {
+        printf("<font color='red'>pole pair read failed</font>: ratio %f, rotor turned for %f of the time (check vel_fb, or a load on the shaft)\n", ctx->pp_raw, ctx->pp_n > 0 ? (float)ctx->pp_turn / (float)ctx->pp_n : 0.0);
       }
       printf("done\n");
       PIN(state) = 3.0;
@@ -1321,18 +1333,28 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           ctx->l_t     = 0.0;
           ctx->l_n     = 0;
           ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
+          ctx->v_dc = ctx->i_dc = ctx->s_dc = ctx->c_dc = 0.0;
         }
       } else {
         ctx->v_re += v * sn;
         ctx->v_im += v * cs;
         ctx->i_re += i * sn;
         ctx->i_im += i * cs;
+        ctx->v_dc += v;
+        ctx->i_dc += i;
+        ctx->s_dc += sn;
+        ctx->c_dc += cs;
         ctx->l_n++;
         float n = MAX((float)ctx->l_n, 1.0);
+        // take the dc bias out with the mean times the reference sums (as
+        // idpmsm), and end the window on a sample count, not float time
+        float vm = ctx->v_dc / n, im = ctx->i_dc / n;
+        float vr = ctx->v_re - vm * ctx->s_dc, vi = ctx->v_im - vm * ctx->c_dc;
+        float ir = ctx->i_re - im * ctx->s_dc, ii = ctx->i_im - im * ctx->c_dc;
         if(ctx->l_stage == 1 && ctx->l_t >= L_BLOCK) {
           // size the amplitude to the ripple asked for: enough signal, and
           // never so much that a phase current crosses zero
-          float i1 = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float i1 = 2.0 / n * sqrtf(ir * ir + ii * ii);
           float k  = i1 > 0.001 ? target / i1 : 4.0;
           ctx->l_amp *= CLAMP(k, 0.25, 4.0);
           ctx->l_amp = CLAMP(ctx->l_amp, 0.2, PIN(pwm_volt) / 4.0);
@@ -1340,14 +1362,15 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           ctx->l_t = 0.0;
           ctx->l_n = 0;
           ctx->v_re = ctx->v_im = ctx->i_re = ctx->i_im = 0.0;
+          ctx->v_dc = ctx->i_dc = ctx->s_dc = ctx->c_dc = 0.0;
           if(ctx->l_block >= L_BLOCKS) {
             ctx->l_stage = 2;
           }
-        } else if(ctx->l_stage == 2 && ctx->l_t >= L_MEASURE) {
+        } else if(ctx->l_stage == 2 && ctx->l_n >= (uint32_t)(MAX(roundf(L_MEASURE * f), 1.0) / f / period + 0.5)) {
           // the f3 holds each 5 kHz command for a whole tick, which scales the
           // applied fundamental by sin(pi f T) / (pi f T); take it back out
-          float v1  = 2.0 / n * sqrtf(ctx->v_re * ctx->v_re + ctx->v_im * ctx->v_im);
-          float i1  = 2.0 / n * sqrtf(ctx->i_re * ctx->i_re + ctx->i_im * ctx->i_im);
+          float v1  = 2.0 / n * sqrtf(vr * vr + vi * vi);
+          float i1  = 2.0 / n * sqrtf(ir * ir + ii * ii);
           float x   = M_PI * f * period;
           float zoh = sinf(x) / x;
           float z   = i1 > 0.001 ? v1 * zoh / i1 : 0.0;
@@ -1623,7 +1646,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(com_pos) += PIN(test_vel) * period;
       PIN(com_pos) = mod(PIN(com_pos));
 
+      ctx->pp_n++;
       if(ABS(PIN(vel_fb)) > 0.1) {
+        ctx->pp_turn++;
         float pp_m = PIN(test_vel) / PIN(vel_fb);
         PIN(pp)    = PIN(pp) != 0.0 ? PIN(pp) * 0.995 + pp_m * 0.005 : pp_m;
       }
@@ -1636,7 +1661,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           PIN(out_rev) = 1.0;
           PIN(pp) *= -1.0;
         }
-        PIN(pp) = (int)(PIN(pp) + 0.5);
+        ctx->pp_raw = PIN(pp);
+        PIN(pp)     = (int)(PIN(pp) + 0.5);
 
         PIN(en_out)   = 0.0;
         PIN(d_cmd)    = 0.0;
