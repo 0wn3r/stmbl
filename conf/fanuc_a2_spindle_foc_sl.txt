@@ -1,7 +1,20 @@
 # Fanuc alpha 2 induction spindle motor, fan cooled
-# [plate] 19 A rms S1 (26.9 A pk), 2.2 kW S1,
-#   2 pole pairs, base 2352 rpm, max 8000 rpm,
-#   155 V at 78.4 Hz (input set for idacim)
+# [plate] A06B-0852-B190#3000, delta, 4 poles
+#   (2 pole pairs), S1 2.2 kW 19 A rms (26.9 pk),
+#   S2 15 min / S3 60 % 3.7 kW 27 A rms, 14.0 Nm,
+#   base 1500 rpm, max 8000 rpm, J 0.0078 kgm2,
+#   110-216 V, overload 120 % of 30 min, 1 min
+# idacim input: 155 V at 78.4 Hz (2352 rpm)
+# original Fanuc amp: SPM-5.5 A06B-6078-H206#H500,
+#   27 A rms, 200-230 V in; parameters (FS16i,
+#   B-65160E/02 app. C, units not recorded):
+#   4020 max speed 8000, 4100 power base 1750,
+#   4101 100, 4102 base speed 2352, 4103 flux
+#   down start 2352, 4104/4105 cur P 1300,
+#   4106/4107 cur I 1500, 4108 300, 4110 585,
+#   4111 22, 4112 783, 4113 slip 450, 4114 high
+#   speed slip comp 10, 4115 dead time comp 2,
+#   motor model code 103
 # [id] idacim 9 Oct 2026, 16 A, standstill +
 #   rotating test, motor at about 30 C
 # checked 9 Oct 2026, no cutting load:
