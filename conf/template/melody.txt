@@ -6,9 +6,11 @@
 # ## How It Works
 #
 # `melody0` sits between the field current and hv: `melody0.in` takes
-# `fb_switch0.id` (what `pmsm` links to `hv0.d_cmd`) and `hv0.d_cmd` takes
-# `melody0.out`, which is `in` plus the tone. The tone makes the stator hum
-# without torque (with the commutation offset right).
+# `pmsm_ttc0.id` (what `pmsm` links to `hv0.d_cmd`: the phasing current plus
+# the MTPA d current) and `hv0.d_cmd` takes `melody0.out`, which is `in` plus
+# the tone. rt_prio 9.5 runs it after pmsm_ttc (9) and before hv (10). The
+# tone makes the stator hum without torque (with the commutation offset
+# right).
 #
 # `melody0.en = fault0.en_pid`: nothing plays unless the drive is enabled and
 # past phasing, so the tone never switches the bridge on.
@@ -36,7 +38,7 @@
 # configs that drive `hv0.d_cmd` from anything else (acim, dc).
 #
 load melody
-melody0.rt_prio = 6
-melody0.in = fb_switch0.id
+melody0.rt_prio = 9.5
+melody0.in = pmsm_ttc0.id
 melody0.en = fault0.en_pid
 hv0.d_cmd = melody0.out
