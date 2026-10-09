@@ -80,6 +80,11 @@ HAL_PIN(brake_timer);
 // fault. sbrake_en also arms the f3 to brake on its own on a link loss.
 HAL_PIN(sbrake_en);
 HAL_PIN(sbrake_time);  // [s], default 1
+// SOFT_FAULT is held at least this long [s] before en 0 may clear it, so a
+// fault taken while en is already 0 (a trip in a regenerative stop, hold or
+// short brake) reaches LinuxCNC: the 1 kHz sserial packet sampled the one
+// tick it used to last about one time in five. Default 0.02.
+HAL_PIN(fault_hold);
 HAL_PIN(sbrake);       // request to hv0.sbrake, out
 
 // Regenerative stop: on the same edge, if the feedback and the f3 link still
@@ -129,6 +134,7 @@ struct fault_ctx_t {
   float sbrake_timer;
   float rstop_timer;
   float rhold_timer;  // after the stop: brake engaging, bridge still holding
+  float fault_hold_timer;
   float ipm_temp_error;
   // a fault taken while already disabled (in a regenerative stop) leaves
   // SOFT_FAULT in the next tick, before nrt sees the state: rt keeps it here
@@ -204,6 +210,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(fan_hv_temp)   = 60.0;
   PIN(fan_mot_temp)  = 60.0;
   PIN(sbrake_time)   = 1.0;
+  PIN(fault_hold)    = 0.02;
+  ctx->fault_hold_timer = 0.0;
   ctx->sbrake_timer  = 0.0;
   PIN(rstop_time)    = 1.0;
   PIN(rstop_vel)     = 2.0;
@@ -271,7 +279,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
 
     case SOFT_FAULT:
-      if(PIN(en) <= 0.0) {
+      if(PIN(en) <= 0.0 && ctx->fault_hold_timer <= 0.0) {
         ctx->state = DISABLED;
       }
       break;
@@ -375,6 +383,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   if(ctx->state == SOFT_FAULT && last_state != SOFT_FAULT) {
+    ctx->fault_hold_timer = PIN(fault_hold);
     ctx->fault_print = ctx->fault;
   }
 
@@ -476,6 +485,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   PIN(warn_timer)  = MAX(PIN(warn_timer) - period, 0.0);
+  ctx->fault_hold_timer = MAX(ctx->fault_hold_timer - period, 0.0);
   PIN(error_timer) = MAX(PIN(error_timer) - period, 0.0);
   if (ctx->state == DELAYED_ENABLED || ctx->state == DELAYED_DISABLED) {
     PIN(brake_timer) = MAX(PIN(brake_timer) - period, 0.0);
