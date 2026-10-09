@@ -21,9 +21,8 @@ enc_fb0.ires = 32 # sin/cos interpolation
 fb_switch0.mot_pos = enc_fb0.ipos
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
-# amp 0.28-0.36 vs enc_fb's 0.25 trip: false
-# encoder faults at standstill, so not wired
-fault0.mot_fb_error = 0
+# amp0 0.40-0.54 after gain vs enc_fb0.min_amp
+# 0.25 (tested standstill to 838 rad/s)
 # drive: STMBL on a water cooled IM06B50GC1 bridge
 # (600 V 50 A) in place of the stock IKCM30F60GD;
 # ocdac map, current limits and ipm model are for
