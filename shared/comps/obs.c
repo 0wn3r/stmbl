@@ -68,7 +68,7 @@ HAL_PIN(pos_chk);    // *input*, encoder angle to compare with while commutating
 HAL_PIN(pos);        // *output*, flux angle in the feedback frame [rad electrical]
 HAL_PIN(pos_c);      // *output*, pos - vel * adv, the angle to commutate with, angle0.pos_obs
 HAL_PIN(vel);        // *output*, synchronous speed [rad/s electrical]
-HAL_PIN(vel_m);      // *output*, rotor speed [rad/s mechanical], (vel - slip) / polecount
+HAL_PIN(vel_m);      // *output*, rotor speed [rad/s mechanical], (vel - slip) / polecount, slip with the loop's lag
 HAL_PIN(ed);         // *output*, d emf in the observer's frame [V]
 HAL_PIN(eq);         // *output*, q emf [V]
 HAL_PIN(err);        // *output*, angle error the loop sees [rad]
@@ -80,6 +80,7 @@ struct obs_ctx_t {
   float id_old, iq_old;
   float did, diq;
   float ok_time;
+  float s_e, s_v;  // slip through a copy of the tracking loop
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -102,6 +103,7 @@ static void rt_start(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->id_old = ctx->iq_old = 0.0;
   ctx->did = ctx->diq = 0.0;
   ctx->ok_time        = 0.0;
+  ctx->s_e = ctx->s_v = 0.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -154,14 +156,22 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
   float ok = ctx->ok_time > 0.05 ? 1.0 : 0.0;
 
+  // vel picks up a slip step only through the tracking loop, so vel_m takes
+  // the slip through a copy of that loop. Taken straight, a step in iq dips
+  // vel_m for about 1 / bw, pid asks for more iq, and with little flux (deep
+  // field weakening) that positive feedback rings at about the observer bw.
   if(PIN(track) > 0.0) {
-    pos = PIN(pos_ref);
-    vel = PIN(vel_ref);
+    pos       = PIN(pos_ref);
+    vel       = PIN(vel_ref);
+    ctx->s_e  = 0.0;
+    ctx->s_v  = PIN(slip);
   } else {
     float bw = MAX(PIN(bw), 0.0);
     vel += bw * bw * err * period;
     vel = LIMIT(vel, MAX(PIN(max_vel), 1.0));
     pos = mod(pos + (vel + 1.4 * bw * err) * period);
+    ctx->s_e += (PIN(slip) - ctx->s_v - 1.4 * bw * ctx->s_e) * period;
+    ctx->s_v += bw * bw * ctx->s_e * period;
   }
 
   PIN(ed)      = ed;
@@ -169,7 +179,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(err)     = err;
   PIN(ok)      = ok;
   PIN(vel)     = vel;
-  PIN(vel_m)   = (vel - PIN(slip)) / MAX(PIN(polecount), 1.0);
+  PIN(vel_m)   = (vel - ctx->s_v) / MAX(PIN(polecount), 1.0);
   // compare this tick's estimate, before the step to the next tick
   PIN(pos_err) = delta;
   PIN(chk_err) = minus(PIN(pos), mod(PIN(pos_chk) + PIN(vel_ref) * PIN(adv)));
