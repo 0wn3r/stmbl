@@ -220,7 +220,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(ff) = 1.0;
 
   PIN(max_vel) = 100.0;
-  PIN(max_acc) = 1000.0;
+  PIN(max_acc) = 500.0;  // Y 9 Oct: 1000 peaked at 95 % of max_force, 500 at 53 %, same gains
   PIN(min_pos) = -10.0;
   PIN(max_pos) = 10.0;
 
