@@ -339,9 +339,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     // shunt carries nothing during the dead time, so the phase reads low and the loop
     // pushes harder. That is a torque reversal at speed. Raising min_off
     // costs output voltage; instead rebuild the phase from the other two,
-    // which are always valid (a phase at the top of the range forces the
-    // others down): with no neutral the three sum to zero. At most one phase
-    // is at the top at a time, so at most one is rebuilt.
+    // which are valid nearly always (a phase at the top of the range forces
+    // the others down): with no neutral the three sum to zero.
 #ifdef PWM_INVERT
     int32_t lo_u = (int32_t)PWM_U;
     int32_t lo_v = (int32_t)PWM_V;
@@ -357,9 +356,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       int bad_u = lo_u < ADC_CUR_WINDOW_TICKS || ctx->lo_u < PWM_DEADTIME_TICKS;
       int bad_v = lo_v < ADC_CUR_WINDOW_TICKS || ctx->lo_v < PWM_DEADTIME_TICKS;
       int bad_w = lo_w < ADC_CUR_WINDOW_TICKS || ctx->lo_w < PWM_DEADTIME_TICKS;
-      // if more than one is flagged (a spread wider than min_off leaves room
-      // for, which hv.c prevents), rebuild the one with the shortest pulse
-      // and leave the rest alone
+      // Two phases are flagged together only when both sit within the window
+      // of the top, i.e. right at the voltage limit: at the default min_off
+      // about 0.2 % of the electrical turn on the full pwm_volt circle,
+      // none at 95 % of it. hv.c does not prevent it. Then the one with the
+      // shortest pulse is rebuilt from the other, which is marginal but the
+      // better of the two, and the other is left as sampled.
       if(bad_u && (!bad_v || lo_u <= lo_v) && (!bad_w || lo_u <= lo_w)) {
         PIN(iu)          = -(PIN(iv) + PIN(iw));
         PIN(recon_phase) = 1.0;
