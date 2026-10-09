@@ -139,7 +139,8 @@ HAL_PIN(lpf);    // 1 = measure the ring (2.x) instead of tuning (1.x), set by i
 HAL_PIN(j_mot);  // *input*, motor inertia [kgm^2], conf0.j
 HAL_PIN(j_sys);  // *input*, load inertia [kgm^2], conf0.j_sys
 
-HAL_PIN(ring_pos);      // *parameter*, excitation move size [rad]
+HAL_PIN(ring_pos);      // *parameter*, excitation move size at ring_vel 0 [rad]
+HAL_PIN(ring_vel);      // *parameter*, cruise speed the ring is timed at [rad/s], 0 = twitch from standstill
 HAL_PIN(ring_acc);      // *parameter*, excitation acceleration [rad/s^2], 0 = max_acc
 HAL_PIN(ring_dwell);    // *parameter*, measuring window after each kick [s]
 HAL_PIN(ring_reps);     // *parameter*, kick + dwell pairs to average
@@ -158,6 +159,7 @@ struct ring_t {
   uint8_t armed;      // the 2.2 entry hook has run
   uint8_t spent;      // this dwell's ring has decayed into the noise
   uint8_t arrived;    // the kick has reached its target, the dwell runs
+  uint8_t home;       // all dwells done, the axis drives back to pos0
   int8_t sign;        // last polarity the schmitt trigger latched
   uint16_t n_cross;   // trigger events in this dwell
   uint16_t n_dwell;   // half periods accepted in this dwell
@@ -226,6 +228,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(auto_step) = 1.0;
 
   PIN(ring_pos)     = 0.2;
+  PIN(ring_vel)     = 20.0;
   PIN(ring_acc)     = 0.0;  // 0 = fall back to max_acc
   PIN(ring_dwell)   = 1.0;
   PIN(ring_reps)    = 4.0;
@@ -274,7 +277,11 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 20:
       PIN(state) = 2.1;
       printf("Measure the coupling resonance for pid0.j_lpf\n");
-      printf("the motor will twitch %f rad, %f times\n", PIN(ring_pos), PIN(ring_reps));
+      if(PIN(ring_vel) > 0.0) {
+        printf("the axis will move back and forth at %f rad/s, %f times\n", PIN(ring_vel), PIN(ring_reps));
+      } else {
+        printf("the motor will twitch %f rad, %f times\n", PIN(ring_pos), PIN(ring_reps));
+      }
       if(PIN(auto_step) >= 1) {
         PIN(state) = 2.2;
       } else {
@@ -313,7 +320,7 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         printf("either the coupling is stiff enough that there is nothing here,\n");
         printf("or the mode is faster than this loop rate can time (a period\n");
         printf("measurement needs about 20 samples per cycle),\n");
-        printf("or the kick was too small: raise ids0.ring_acc or ids0.ring_pos.\n");
+        printf("or the kick was too small: raise ids0.ring_acc or ids0.ring_vel.\n");
         printf("if the mode is slower than ids0.ring_hp_hz (%f Hz) the high pass\n", PIN(ring_hp_hz));
         printf("ate it -- drop that. put ids0.ring_sig on a scope wave to see\n");
         printf("what the detector is working with.\n");
@@ -407,6 +414,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       float r_vmax   = PIN(vel_lim) > 0.0 ? MIN(PIN(max_vel), PIN(vel_lim)) : PIN(max_vel);
       float ring_pos = MAX(PIN(ring_pos), 0.001);
       float dwell    = MAX(PIN(ring_dwell), 0.1);
+      // Kicked from standstill, Coulomb friction sticks the load within a
+      // cycle or two and the ring is gone before it can be timed (Y, 9 Oct:
+      // 2 half periods). Kicked at the end of an acceleration while cruising,
+      // friction is a constant force and the ring runs free. Each leg
+      // accelerates to ring_vel, cruises for the dwell, then turns round, so
+      // the axis goes back and forth between pos0 and pos0 + one leg.
+      float r_cv     = PIN(ring_vel) > 0.0 ? MIN(PIN(ring_vel), r_vmax) : 0.0;
+      if(r_cv > 0.0) {
+        r_vmax   = r_cv;
+        ring_pos = 4.0 * (r_cv * r_cv / ring_acc + r_cv * (dwell + 0.1));  // never reached: the leg turns at the dwell's end
+      }
       float f_max  = MIN(1.0 / period / 20.0, 500.0);
       float f_min  = MAX(2.0 * PIN(ring_hp_hz), 3.0 / dwell);
 
@@ -415,6 +433,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->r.pos0      = PIN(pos_fb);
         ctx->r.armed     = 1;
         ctx->r.arrived   = 0;
+        ctx->r.home      = 0;
         ctx->r.sign      = 0;
         ctx->r.n_cross   = 0;
         ctx->r.n_dwell   = 0;
@@ -458,12 +477,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         r_acc    = 0.0;
         PIN(pos) = PIN(target);
         PIN(vel) = 0.0;
-        // the dwell is timed from here, the moment the kick ends: the ring is
-        // largest right after it
-        if(!ctx->r.arrived) {
-          ctx->r.arrived = 1;
-          ctx->r.t       = 0.0;
+        if(ctx->r.home) {
+          PIN(acc_cmd) = 0.0;
+          PIN(vel_cmd) = 0.0;
+          PIN(state)   = 2.3;
+          break;
         }
+      }
+      // the dwell is timed from the moment the kick ends, at rest on the
+      // target or at cruise speed heading for it: the ring is largest then
+      int at_end = r_cv > 0.0 ? (ABS(PIN(vel)) >= 0.999 * r_cv && (PIN(vel) > 0.0) == (r_to_go > 0.0)) : (r_ttg < period);
+      if(at_end && !ctx->r.arrived && !ctx->r.home) {
+        ctx->r.arrived = 1;
+        ctx->r.t       = 0.0;
       }
 
       PIN(acc)     = LIMIT(r_acc, ring_acc);
@@ -585,8 +611,9 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         PIN(target) = ctx->r.pos0 + ((ctx->r.rep & 1) ? -ring_pos : ring_pos);
 
         if((float)ctx->r.rep >= MAX(PIN(ring_reps), 1.0)) {
-          PIN(acc_cmd) = 0.0;
-          PIN(vel_cmd) = 0.0;
+          // back to where it started, then 2.3
+          ctx->r.home  = 1;
+          PIN(target)  = ctx->r.pos0;
           PIN(ring_n)  = (float)ctx->r.n_half;
 
           if(ctx->r.n_half >= 6 && ctx->r.sum_half > 0.0) {
@@ -608,8 +635,6 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             PIN(j_lpf)   = PIN(f_ring);
             PIN(ring_ok) = 1.0;
           }
-
-          PIN(state) = 2.3;
         }
       }
       break;
