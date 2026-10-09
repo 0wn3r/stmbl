@@ -104,7 +104,7 @@ HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 #define WARM_MAX 25    // warm-up cycles at most while pid saturates
 #define CUT_MAX 5      // kd cuts of a saturating start value before moving on
 #define RING_VEL_B 1.5 // second cruise speed, x ring_vel
-#define RING_AGREE 0.1 // the two speeds' rings agree within this fraction
+#define RING_AGREE 0.15 // the two speeds' rings agree within this (Y: ~10 % run to run, ripple hits 20-25 %)
 
 
 // ---------------------------------------------------------------------------
@@ -437,7 +437,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // decay, and where it lands on the ring the detector times it instead
       // (Y at 20 rad/s: 15 Hz, 18-22 Hz at 10 and 30). So the legs alternate
       // in pairs between ring_vel and RING_VEL_B x ring_vel, each speed is
-      // timed on its own, and a result needs the two to agree: a mode stays
+      // timed on its own, and a result needs the two to agree within RING_AGREE: a mode stays
       // put when the speed changes, ripple moves with it.
       float r_cv = PIN(ring_vel) > 0.0 ? MIN(PIN(ring_vel), r_vmax / RING_VEL_B) : 0.0;
       int grp    = r_cv > 0.0 ? (ctx->r.rep >> 1) & 1 : 0;
