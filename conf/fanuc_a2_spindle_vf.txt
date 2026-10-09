@@ -5,11 +5,11 @@
 # [id] idacim 9 Oct 2026, 16 A, standstill +
 #   rotating test, motor at about 30 C
 # checked 9 Oct 2026, no cutting load:
-# runs to 75 rad/s,
-# then hunts and trips fault 15 near 100 rad/s,
-# so 8000 rpm is out of reach open loop here
-# (k_damp 0.5/1.5, k_vel tried). Use vf_enc, or
-# tune vf0.k_damp on the loaded machine.
+# 20 to 838 rad/s (8000 rpm) and back, peak 22 A,
+# no fault, with the speed estimate damping below.
+# Without it the rotor hunts at ~9 Hz from about
+# 75 rad/s (fault 15); k_damp alone holds to 75,
+# k_vel 1.5 hunts at 50, 1.0 runs the whole range.
 # variant: open loop V/f, no encoder needed.
 # speed: vf0.vel_cmd [rad/s mech]; enable: fault0.en
 # V/f set from the standstill idacim (plate pins)
@@ -43,4 +43,7 @@ vf0.acc = 97.5 # 65% of the belt's 150
 vf0.dec = 97.5
 vf0.r = conf0.r
 vf0.j = conf0.j
+# damping from the estimated rotor swing
+vf0.vel_src = 1 # estimate, no encoder
+vf0.k_vel = 1.0
 fault0.en = 0 # set 1 to run
