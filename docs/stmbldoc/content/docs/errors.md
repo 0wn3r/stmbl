@@ -23,7 +23,7 @@ weight: 7
 
 The current firmware does not use the hard fault state, so all LEDs blinking is not expected.
 
-Count the number of blinks of the red LED. Each number indicates a different class of faults. The LED blinks N times (300ms on, 300ms off), then pauses for another 600ms before the code repeats. Servoterm also prints the fault as `ERROR: Fault N: <text>`.
+Count the number of blinks of the red LED. Each number indicates a different class of faults. The LED blinks N times (300ms on, 300ms off), then pauses for another 600ms before the code repeats. Servoterm also prints the fault as `ERROR: Fault N: <text>`. With LinuxCNC over smart serial, the `fault_code` pin of the `stbl` remote reads N while the fault is set (see [LinuxCNC](/docs/getting_started/linuxcnc.md)).
 
 
  | LED Blink Times | Error                                 | Possible Solution                                          |

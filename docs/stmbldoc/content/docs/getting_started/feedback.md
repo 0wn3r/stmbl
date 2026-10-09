@@ -279,7 +279,7 @@ The encoder battery (+6 V and 0 V) is wired on the encoder side as in the Fanuc 
 link fanuc_fb0
 ```
 
-The template sets `conf0.mot_fb_res = 1048576` and commutation from the encoder. Run [id_pmsm](/docs/getting_started/tuning.md) and append the `conf0.mot_fb_offset` and `conf0.com_fb_offset` lines it prints.
+The template sets `conf0.mot_fb_res = 1048576`, commutation from the encoder and `encf0.hold = fault0.en_out` (see below). Run [id_pmsm](/docs/getting_started/tuning.md) and append the `conf0.mot_fb_offset` and `conf0.com_fb_offset` lines it prints.
 
 ### Check
 
@@ -289,7 +289,7 @@ The template sets `conf0.mot_fb_res = 1048576` and commutation from the encoder.
 
 ### Battery loss and the index
 
-After a battery loss the encoder starts un-indexed (`encf0.index` 1, `encf0.state` 1). Until the motor crosses the encoder's index, the drive commutates from the commutation track plus `conf0.com_fb_offset`, so it can run. At the first index crossing the encoder re-references its position and turn count: the position jumps by up to one motor turn, and the two directions of travel give positions one turn apart. Re-home the machine after a battery loss.
+After a battery loss the encoder starts un-indexed (`encf0.index` 1, `encf0.state` 1). Until the motor crosses the encoder's index, the drive commutates from the commutation track plus `conf0.com_fb_offset`, so it can run. At the first index crossing the encoder re-references its position and turn count: the position jumps by up to one motor turn, and the two directions of travel give positions one turn apart. If that happens while the drive is enabled, `encf` holds the jump as an offset on `encf0.pos` and `encf0.turns` (shown on `encf0.hold_off`, in turns), so the position loop does not pull the motor back by up to a turn. The offset is dropped when the drive is disabled, and the new reference then shows, with `encf0.state` 1 for one frame so `linrev` takes the new turns. Commutation (`abs_pos`, `com_pos`) is never offset. Re-home the machine after a battery loss.
 
 ### Multiturn position for LinuxCNC
 
@@ -303,6 +303,8 @@ linrev0.abs_state = encf0.state
 ```
 
 `link sserial` sets `linrev0.abs_neg = conf0.mot_fb_rev`, so a reversed motor feedback is handled.
+
+[conf/fanuc_a3-3000.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a3-3000.txt) is a complete example: a Fanuc alpha 3/3000 axis with this encoder, the multiturn position and LinuxCNC over smart serial.
 
 `encf0.pos_offset` (1/65536 turn) shifts the position and the point where `turns` steps; leave it at 0 and take the offset in LinuxCNC.
 

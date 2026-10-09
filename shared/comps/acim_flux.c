@@ -27,7 +27,7 @@
 *
 * At low induction the iron's permeability falls again (the foot of the B-H
 * curve): on the spindle the secant lmr was flat from 9 to 19 A and 11% lower
-* at 6.7 A (idacim sweep, 6 Oct). With `i_dip` > 0 both fall below it:
+* at 6.7 A (idacim sweep, 6 Oct). With `i_dip` > 0 both change below it:
 *
 *     y       = (i_dip - |i_mr|) / i_dip, clamped 0..1
 *     lmr_act = ... * (1 - lmr_dip * y)

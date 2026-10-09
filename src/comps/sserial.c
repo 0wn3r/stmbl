@@ -34,7 +34,7 @@
 
 /**
 * ## Brief
-* The `sserial` component makes the drive a Mesa smart serial (sserial / LBP) remote, so LinuxCNC's hostmot2 driver can talk to it like a Mesa daughter card (card name `stbl`). LinuxCNC sends position and velocity commands, 4 digital outputs, enable and index enable; the drive answers with position and velocity feedback, current, 4 digital inputs, fault and index enable. On the F4 board it is loaded by `conf/template/sserial.txt` (and `sserial_dummy.txt`), which feeds `sserial0.pos_cmd` / `pos_cmd_d` through `linrev0` and `vel_int0` into the controller, links `fault0.en = sserial0.enable`, `sserial0.pos_fb = linrev0.fb_out`, sets `sserial0.pos_advance = 0.0002`, `sserial0.current = hv0.iq_fb` and `io0.clock_scale = sserial0.clock_scale`.
+* The `sserial` component makes the drive a Mesa smart serial (sserial / LBP) remote, so LinuxCNC's hostmot2 driver can talk to it like a Mesa daughter card (card name `stbl`). LinuxCNC sends position and velocity commands, 4 digital outputs, enable, index enable and the `linrev` scale; the drive answers with position and velocity feedback, current, 4 digital inputs, fault, index enable and a fault code. On the F4 board it is loaded by `conf/template/sserial.txt` (and `sserial_dummy.txt`), which feeds `sserial0.pos_cmd` / `pos_cmd_d` through `linrev0` and `vel_int0` into the controller, links `fault0.en = sserial0.enable`, `sserial0.fault_code = fault0.last_fault`, `linrev0.scale = sserial0.scale`, `sserial0.pos_fb = linrev0.fb_out`, sets `sserial0.pos_advance = 0.0002`, `sserial0.current = hv0.iq_fb` and `io0.clock_scale = sserial0.clock_scale`.
 *
 * ## Component Explanation
 *
@@ -51,22 +51,22 @@
 * - Each frt cycle looks at the LBP command byte at the ring buffer read position and handles at most one packet once enough bytes are there:
 * - Local read: cookie (`0x5a`), status (always 0), card name `stbl`; unknown commands answer 0.
 * - Local write: acknowledged with a 0 byte; `0xFF` (reset) and `0xFC` are skipped.
-* - RPC: unit number, discovery (PTOC at 0x018B, GTOC at 0x01A5, 11 input bytes, 9 output bytes) and process data.
-* - Memory read / write: reads and writes of the descriptor table (`sserial_slave[]`), with optional address and auto increment, which LinuxCNC uses to read the pin descriptors and to write the global parameter `scale`. After every write the float at address 300 is copied to the `scale` pin. A read past the end of the table returns zeros (so the host still gets its reply), a write past it is ignored.
+* - RPC: unit number, discovery (PTOC at 0x018B, GTOC at 0x01A9, 12 input bytes, 12 output bytes; there are no global parameters) and process data.
+* - Memory read / write: reads and writes of the descriptor table (`sserial_slave[]`), with optional address and auto increment, which LinuxCNC uses to read the pin descriptors. A read past the end of the table returns zeros (so the host still gets its reply), a write past it is ignored.
 * - Unknown packets are not consumed; the buffer is flushed by the timeout below.
 *
 * 4. **Process data** (`frt`):
 * - The component starts handling the process data request when all but 5 bytes are in, then busy-waits (at most the time of those 5 bytes) for the rest, so the reply can be sent with little delay.
-* - Data from LinuxCNC (9 bytes): `pos_cmd` float (rad), `vel_cmd` float (rad/s), bits out0..out3, enable, index_enable.
-* - Data to LinuxCNC (1 status byte, always 0, then 10 bytes):
+* - Data from LinuxCNC (12 bytes): `pos_cmd` float (rad), `vel_cmd` float (rad/s), bits out0..out3, enable, index_enable, then `scale` as a 24 bit unsigned count of 1e-4 (0 to about 1677.72). A float does not fit, because hm2's standard sserial module carries 96 bits per direction. A `scale` of 0 keeps the current `scale` pin, any other value sets it, in every good packet.
+* - Data to LinuxCNC (1 status byte, always 0, then 11 bytes):
 * ```c
 * pos_fb  = snap.pos + snap.vel * (pos_advance + age); // float, rad, latency compensation
 * vel_fb  = snap.vel;                                  // float, rad/s
 * current = CLAMP(current / (30.0 / 128.0), -127, 127); // int8, about 0.234 A per LSB, +-30 A
 * ```
-* followed by the bits in0..in3 (`> 0`), fault (`> 0`) and index_enable.
+* followed by the bits in0..in3 (`> 0`), fault (`> 0`) and index_enable, and the byte `fault_code`: the `fault_code` pin (clamped to 0..255) while fault is set, else 0. The template feeds it `fault0.last_fault`, which keeps its value after the fault is gone, so the byte is gated by the fault bit.
 * - `snap` is the last rt snapshot. `age` is the time since the rt period of that snapshot started (from the rt tick count and the progress of the ADC DMA in the current period, clamped to 0..2 rt periods), so the reported position is extrapolated to the moment the reply is sent, which is up to one rt period after the snapshot. `pos_advance` adds a fixed lead on top.
-* - If the request CRC-8 is correct, the reply (with its CRC-8) is sent and `pos_cmd`, `pos_cmd_d` (= vel_cmd), `out0`..`out3` and `enable` are updated. If not, no reply is sent and `crc_error` is incremented; the last good command is kept for up to 2 bad packets in a row. From the 3rd bad packet in a row `pos_cmd`, `pos_cmd_d`, `out0`..`out3` and `enable` are set to 0 and `connected = 0`, `error = 1`, until a packet with a correct CRC arrives.
+* - If the request CRC-8 is correct, the reply (with its CRC-8) is sent and `pos_cmd`, `pos_cmd_d` (= vel_cmd), `out0`..`out3` and `enable` (and `scale`, see above) are updated. If not, no reply is sent and `crc_error` is incremented; the last good command is kept for up to 2 bad packets in a row. From the 3rd bad packet in a row `pos_cmd`, `pos_cmd_d`, `out0`..`out3` and `enable` are set to 0 and `connected = 0`, `error = 1`, until a packet with a correct CRC arrives.
 *
 * 5. **Index handling**:
 * - `index_out` follows the index_enable bit from LinuxCNC. The index_enable bit sent back is 0 while `index_clear > 0`, otherwise it echoes the request. In the template, `idx_home0` does the actual homing to the encoder index.
@@ -78,7 +78,7 @@
 * - `available` shows the number of unread bytes in the ring buffer. `phase` counts frt cycles 0..3; on every 4th cycle `clock_scale` is set to 0.9 if more than 5 bytes are waiting, 1.1 if 1 to 4 bytes are waiting, else it stays 1.0. `io0` uses this to lengthen or shorten its timer period by one count, so the drive's frt cycle locks to the request rate of the LinuxCNC servo thread.
 *
 * {{% hint warning %}}
-* The fault/status byte is always 0.
+* The status byte in front of the data is always 0; the fault code is in the `fault_code` byte of the process data.
 * {{% /hint %}}
 */
 
@@ -95,7 +95,7 @@ HAL_PIN(pos_cmd_d);   // *output*, Velocity command from LinuxCNC (rad/s)
 HAL_PIN(pos_fb);      // *input*, Position feedback sent to LinuxCNC, sampled in rt and extrapolated to the reply time (rad)
 HAL_PIN(vel_fb);      // *input*, Velocity feedback sent to LinuxCNC (rad/s)
 HAL_PIN(current);     // *input*, Current sent to LinuxCNC (A, int8 with 30/128 A per LSB, +-30 A)
-HAL_PIN(scale);       // *output*, Global parameter scale written by LinuxCNC
+HAL_PIN(scale);       // *output*, Scale from LinuxCNC process data (1e-4 steps), a received 0 keeps the last value
 
 HAL_PIN(clock_scale); // *output*, Frt clock trim request for io0: 0.9, 1.0 or 1.1
 HAL_PIN(available);   // *output*, Unread bytes in the RX ring buffer

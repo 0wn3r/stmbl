@@ -11,7 +11,7 @@
 
 /**
 * ## Brief
-* `encf` reads Fanuc serial absolute encoders (tested with the Aa64 type, A860-360) on the FB0 connector of the F4 board. It is loaded by `conf/template/fanuc_fb0.txt` (used e.g. by `conf/fanuc_a6-2000.txt`), which links `encf0.pos`/`abs_pos`/`state` to `fb_switch0.mot_*` and `encf0.com_pos` to `fb_switch0.com_pos`/`com_abs_pos`.
+* `encf` reads Fanuc serial absolute encoders (tested with the Aa64 type, A860-360) on the FB0 connector of the F4 board. It is loaded by `conf/template/fanuc_fb0.txt` (used e.g. by `conf/fanuc_a6-2000.txt`), which links `encf0.pos`/`abs_pos`/`state` to `fb_switch0.mot_*` and `encf0.com_pos` to `fb_switch0.com_pos`/`com_abs_pos`, and sets `encf0.hold = fault0.en_out`.
 *
 * ## Component Explanation
 *
@@ -34,7 +34,8 @@
 * - `pos` is the 22 bit count shifted by `pos_offset * 64` (so `pos_offset` is in 1/65536 turn) and wrapped as a 22 bit count to [-pi, pi). The offset applies in every state; `pos_offset` = 0 gives `pos = abs_pos`.
 * - The encoder steps its own turn count where its unsigned count wraps (`abs_pos` = 0), half a turn away from the +-pi wrap. `encf` keeps a turn count referenced to the +-pi wrap of `abs_pos` (the encoder's count, + 1 on the negative half) and takes it from the encoder only while `abs_pos` is more than a quarter turn from 0, so a few counts of mismatch at the encoder's own step cannot glitch it. `turns` is then shifted so that it steps exactly where `pos` wraps and equals the encoder's count at `pos = pos_offset`. `pos_offset` = 32768 puts the wrap of `pos` at the encoder's own step.
 * - The count is taken from the encoder at once, whatever the position, after more than 10 frames without a valid frame (and at start), for 3 frames after the un-indexed bit changes, and on a jump of `pos` of more than 1/32 turn between two frames. This follows the encoder when it re-references its position and turns at the first index after a battery loss (it clears the un-indexed bit one frame before the count jumps).
-* - `state = 1` while the encoder reports un-indexed and during those 3 re-take frames, else 3. An encoder that is indexed at power up reads 3 from the first frame; after the first index crossing `state` reads 3 from the frame after the re-reference, so `fb_switch` does not switch commutation to `abs_pos` from the old count.
+* - `hold` > 0 (the template links `fault0.en_out`, so while the drive is enabled): a re-reference at the index would step `pos` and `turns` by up to a turn, and the position loop would pull the motor back by that much. Instead, a step that motion does not explain (more than 1/32 turn per frame, or during the re-take frames a change of more than 2^12 counts, 1/1024 turn, from the previous frame's motion) is added to an offset, output on `hold_off` in turns, which is added to `pos` and `turns` so they stay continuous. The offset is dropped when `hold` goes to 0, so the new reference shows while the drive is disabled. `abs_pos` and `com_pos` are never offset and stay true for commutation.
+* - `state = 1` while the encoder reports un-indexed, during those 3 re-take frames and for the frame in which a held offset is dropped (so `linrev` re-takes its turns), else 3. An encoder that is indexed at power up reads 3 from the first frame; after the first index crossing `state` reads 3 from the frame after the re-reference, so `fb_switch` does not switch commutation to `abs_pos` from the old count.
 * - Until then `fb_switch` commutates from the commutation track (`com_pos` + `conf0.com_fb_offset`, measured by `id_pmsm`), see `fanuc_fb0.txt`. For a multiturn position link `linrev0.abs_rev = encf0.turns`, `linrev0.abs_pos = encf0.pos`, `linrev0.abs_state = encf0.state`.
 *
 * 5. **Debug output (nrt)**:

@@ -12,16 +12,16 @@
 *
 * 1. **Before you start**:
 * - The motor must already run with a working current loop and commutation (run `id_pmsm`, `id_dc` or `id_acim` first).
-* - The axis travels between `min_pos` and `max_pos` (default -20 and +20 rad, about 3.2 turns each way) at up to `max_vel` (50 rad/s) and `max_acc` (250 rad/s^2). The positions are absolute targets in the feedback position frame; the profile starts at the actual position `pos_fb`, so there is no step at the start. Make sure there is room, or reduce these pins before enabling. The friction fit needs constant speed stretches, so a too short stroke leaves f, d and o as adapted (the console says so).
+* - The axis travels between `min_pos` and `max_pos` (default -20 and +20 rad, about 3.2 turns each way) at up to `max_vel` (50 rad/s) and `max_acc` (250 rad/s^2). The positions are relative to the start position, where the axis stands (`pos_fb`) when the run starts, so there is no step at the start, and the axis drives back to the start position at the end. Make sure there is room, or reduce these pins before enabling. The friction fit needs constant speed stretches, so a too short stroke leaves f, d and o as adapted (the console says so).
 * - At the console, `link id_mot` (or `link id_sys` for the load inertia, which needs `conf0.j` from the motor run already in the config: it sets `pid0.j_mot = conf0.j` and `pid0.j_sys = idm0.inertia`). The template wires `idm0.en = fault0.en_out`, `idm0.pos_fb = fb_switch0.pos_fb`, the trajectory into `pid0.pos_ext_cmd` / `vel_ext_cmd` / `acc_ext_cmd`, the estimates back into `pid0.j_mot`, `pid0.d`, `pid0.f`, `pid0.o`, and `pid0.torque_cmd` / `pid0.fb_torque_cmd` into `torque` / `fb_torque`. It also sets `pid0.j_sys = 0`, `conf0.max_pos_error = 0`, `conf0.max_sat = 10`, `conf0.vel_g = 1`, `idm0.li = 0.005` and uses the soft loop gains `pos_bw`, `vel_bw`, `vel_d` (5, 40, 4) of this component for `pid0` during the test.
 *
 * 2. **Procedure (state machine, `state` pin)**:
-* - `0`: idle. The trajectory follows `pos_fb`. When `en` goes high the rt function resets the `*_sum` / `*_time` / `fit_*` pins and the plateau bins and goes to `1.0`. `en` low returns to `0` from any state.
+* - `0`: idle. The trajectory follows `pos_fb`. When `en` goes high the rt function takes that position as the start position, resets the `*_sum` / `*_time` / `fit_*` pins and the plateau bins and goes to `1.0`. `en` low returns to `0` from any state.
 * - `1.0` -> `1.1` (nrt): with `auto_step >= 1` (default 1.4) it goes straight to `1.2`; otherwise it prints a prompt and waits in `1.1` for `idm0.state = 1.2`.
-* - `1.2`: five ramp-up rounds (`sub_state` 1..5). Round k uses `max_acc * k / 5` and `max_vel * k / 5` and lasts `2 * (|max_pos - min_pos| / v + 2 * v / a)`, going to `max_pos` for the first half and back to `min_pos` for the second (about 22 s with the defaults).
+* - `1.2`: five ramp-up rounds (`sub_state` 1..5). Round k uses `max_acc * k / 5` and `max_vel * k / 5` and lasts `2 * (|max_pos - min_pos| / v + 2 * v / a)`, going to the start position + `max_pos` for the first half and back to the start position + `min_pos` for the second (about 22 s with the defaults).
 * - `1.3`, adaptive phase: 45 s of moves at `max_vel` and `max_acc`, reversing whenever the position is within 0.1 rad of an end point.
 * - `1.3`, speed plateaus: then the speed steps through 0.1, 0.25, 0.5 and 1.0 x `max_vel`, 4 moves (two each way) per level, at `max_acc`. On each constant speed stretch (`|vel_cmd|` within 1 % of the level speed), after 0.2 s of settling, the total torque `torque` and the speed `vel_cmd + vel_offset` are summed into a bin per level and direction; stretches shorter than 0.4 s are dropped. The adaptation keeps running through the plateaus.
-* - At the end of `1.3` f, d and o are fitted (see 4.), then `1.4` (nrt) prints `conf0.j` (or `conf0.j_sys` when `sys > 0`), `conf0.o`, `conf0.d` and `conf0.f` as lines to append to the config, plus the fit's bin count, speed range and residual, and goes to `1.5` (done, the axis is held at its last position).
+* - At the end of `1.3` f, d and o are fitted (see 4.) and the axis drives back to the start position, then `1.4` (nrt) prints `conf0.j` (or `conf0.j_sys` when `sys > 0`), `conf0.o`, `conf0.d` and `conf0.f` as lines to append to the config, plus the fit's bin count, speed range and residual, and goes to `1.5` (done, the axis is held at the start position).
 * - The whole run takes about two minutes with the defaults. Afterwards continue with `id_sys` or `id_pid`.
 *
 * 3. **Trajectory**:
@@ -58,8 +58,8 @@ HAL_PIN(time);  // *output*, total time of state 1.2 (s)
 
 HAL_PIN(freq);  // *parameter*, unused
 HAL_PIN(amp);  // *output*, unused, only cleared to 0
-HAL_PIN(min_pos);  // *parameter*, lower end of the travel, absolute in the feedback frame (rad), default -20
-HAL_PIN(max_pos);  // *parameter*, upper end of the travel (rad), default 20
+HAL_PIN(min_pos);  // *parameter*, lower end of the travel relative to the start position (rad), default -20
+HAL_PIN(max_pos);  // *parameter*, upper end of the travel relative to the start position (rad), default 20
 HAL_PIN(max_vel);  // *parameter*, test velocity, top plateau speed (rad/s), default 50
 HAL_PIN(max_acc);  // *parameter*, test acceleration (rad/s^2), default 250
 

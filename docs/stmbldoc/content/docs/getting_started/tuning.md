@@ -50,7 +50,7 @@ On an STMBL v5 HV board also set the [overcurrent trip threshold](#overcurrent-t
 {{% hint danger %}}
 - Every test current (`idpmsm0.test_cur`, `idacim0.test_cur`, `iddc0.test_cur`, `idtune0.test_cur` and `idtune0.step_cur`) must be below `conf0.max_ac_cur` (default 10 A).
 - Take the load off the shaft for all electrical tests and for `id_mot`. Most tests turn the motor: `id_tune` up to 200 rad/s at its defaults, the ACIM rotating test up to 0.8 x plate speed.
-- `id_mot`, `id_sys` and `id_pid` move the axis between `min_pos` and `max_pos`, absolute positions in the feedback frame: -20 to +20 rad (about 3.2 turns each way) for `id_mot` / `id_sys`, -10 to +10 rad for `id_pid`. Make sure there is room, or reduce these pins first. The profile starts where the rotor is (`pos_fb`), so there is no step at the start, but the first move goes to `max_pos`. `id_lpf` only rocks the axis 0.2 rad about where it stands.
+- `id_mot`, `id_sys` and `id_pid` move the axis between `min_pos` and `max_pos`, relative to where the axis stands when the test starts: -20 to +20 rad (about 3.2 turns each way) for `id_mot` / `id_sys`, -10 to +10 rad for `id_pid`. Make sure there is room, or reduce these pins first. There is no step at the start, the first move goes toward `max_pos`, and at the end the axis drives back to where it started. `id_lpf` moves the axis back and forth at `ids0.ring_vel` (10 rad/s) and 1.5 x that, up to about 15 rad from where it stands at the defaults, and also ends where it started.
 - To stop any test: `fault0.en = 0` (or `disable` / the Disable button). Every id component aborts and returns to state 0 (a finished `id_dac` result stays until reset).
 {{% /hint %}}
 
@@ -242,7 +242,7 @@ Append the printed `conf0.j_sys`, `conf0.o`, `conf0.d`, `conf0.f` (replacing the
 
 ### Coupling Resonance (id_lpf)
 
-Optional, with the load coupled through a compliant coupling or belt. Needs `conf0.j` and `conf0.j_sys`. Run it before `id_pid`: `conf0.j_lpf` changes the plant the gains are tuned against. The axis rocks `ids0.ring_pos` (0.2 rad) to either side of where it stands, `ids0.ring_reps` (4) times, and `ids` times the ring in `vel_error`.
+Optional, with the load coupled through a compliant coupling or belt. Needs `conf0.j` and `conf0.j_sys`. Run it before `id_pid`: `conf0.j_lpf` changes the plant the gains are tuned against. The axis goes back and forth `ids0.ring_reps` (8) times, each leg accelerating to a cruise speed and cruising for `ids0.ring_dwell` (1 s) while `ids` times the ring in `vel_error`. The legs alternate in pairs between `ids0.ring_vel` (10 rad/s) and 1.5 x `ring_vel`, so the axis needs about 1.5 x `ring_vel` x `ring_dwell` (15 rad) of room from where it stands; it ends where it started. Kicked while cruising, friction does not stop the ring the way it does from standstill. The ring is timed at each speed separately and both must agree within 15 %: a coupling resonance stays put when the speed changes, while ripple locked to the speed (cogging, a screw) moves with it. `conf0.j_lpf` is set to the measured ring frequency. `ids0.ring_vel = 0` instead twitches the axis `ids0.ring_pos` (0.2 rad) to either side from standstill.
 
 ```python
 link id_lpf
@@ -251,13 +251,13 @@ start
 fault0.en = 1
 ```
 
-Append the printed `conf0.j_lpf` line. If the ring died too fast to time (a well damped coupling), the console prints `conf0.j_lpf = 0` itself; append that, since the conf template sets 100 Hz. If it reports no ring found, either raise `ids0.ring_acc` or `ids0.ring_pos` and rerun, or set `conf0.j_lpf = 0` by hand. `j_lpf` only pays when `conf0.vel_bw` comes near 2 pi x `j_lpf`. Scope wave 1 shows `ids0.ring_sig`, the signal the detector sees. Details: [ids](/docs/hal_components/ids.md).
+Append the printed `conf0.j_lpf` line. If the ring died too fast to time (a well damped coupling), the console prints `conf0.j_lpf = 0` itself; append that, since the conf template sets 100 Hz. If it reports that the two speeds disagree, speed ripple was timed at one of them: rerun with another `ids0.ring_vel`; `conf0.j_lpf` is left as it is. If it reports no ring found, either raise `ids0.ring_acc` or `ids0.ring_vel` and rerun, or set `conf0.j_lpf = 0` by hand. `j_lpf` only pays when `conf0.vel_bw` comes near 2 pi x `j_lpf`. Scope wave 1 shows `ids0.ring_sig`, the signal the detector sees. Details: [ids](/docs/hal_components/ids.md).
 
 ### Control Loop (id_pid)
 
 Tunes `pos_bw`, `vel_bw`, `vel_d` of the pid loop by moving the axis and searching for the lowest tracking error. Needs `conf0.j` (and `j_sys`, `d`, `f`, `o`, `j_lpf`), `conf0.cur_bw` and `conf0.max_force` in the config. The search starts from the gains already in the config (10 / 100 / 10 where they are 0).
 
-1. The axis moves between `ids0.min_pos` and `ids0.max_pos` (-10 / +10 rad) at up to `ids0.max_vel` (100 rad/s) and `ids0.max_acc` (1000 rad/s^2), capped at `conf0.max_vel` and `conf0.max_acc` when those are set. `vel_bw` is capped at `conf0.cur_bw / ids0.bw_ratio` (7.5: 400 at a `cur_bw` of 3000), since above that the velocity loop mostly amplifies noise; `bw_ratio = 0` removes the cap.
+1. The axis moves between `ids0.min_pos` and `ids0.max_pos` (-10 / +10 rad) at up to `ids0.max_vel` (100 rad/s) and `ids0.max_acc` (500 rad/s^2), capped at `conf0.max_vel` and `conf0.max_acc` when those are set. `vel_bw` is capped at `conf0.cur_bw / ids0.bw_ratio` (7.5: 400 at a `cur_bw` of 3000), since above that the velocity loop mostly amplifies noise; `bw_ratio = 0` removes the cap.
 2. `reset`, then type:
 
 ```python
@@ -267,10 +267,10 @@ start
 fault0.en = 1
 ```
 
-3. It starts by itself with one warm-up cycle, then changes one gain at a time, scoring each step over `ids0.rep` (2) back and forth cycles of 0.8 s (defaults). A step whose torque noise is above `ids0.fb_max` x `conf0.max_force` (5 %) is taken back. Watch `ids0.min_cost` and the gains on the scope.
+3. It starts by itself with one warm-up cycle, then changes one gain at a time, scoring each step over `ids0.rep` (2) back and forth cycles of 1.2 s (defaults). When all three gains are done the axis drives back to where it started. A step whose torque noise is above `ids0.fb_max` x `conf0.max_force` (5 %) is taken back. Watch `ids0.min_cost` and the gains on the scope.
 4. Append the printed `conf0.pos_bw`, `conf0.vel_bw`, `conf0.vel_d`, `fault0.en = 0`, save, `reset`. The console also prints the torque peak; if it went over `conf0.max_force`, raise `max_force` to the drive's real torque or lower `ids0.max_acc`.
 
-Details: [ids](/docs/hal_components/ids.md). Then go on to [LinuxCNC](/docs/getting_started/linuxcnc.md).
+Details: [ids](/docs/hal_components/ids.md). [conf/fanuc_a3-3000.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a3-3000.txt) is an axis tuned this way, with the source of each value marked (`id_mot`, `id_sys`, `id_lpf`, `id_pid`). Then go on to [LinuxCNC](/docs/getting_started/linuxcnc.md).
 
 ## Induction Motor (ACIM)
 
@@ -310,7 +310,7 @@ The V/f set needs all four plate pins and a measured `tr`; otherwise it is skipp
 | `acim_flux0.tr`, `acim_flux0.i_knee`, `acim_flux0.tr_sat` | only if printed: with `idacim0.knee = 1` the tr knee fit replaces the `tr` above |
 
 {{% hint warning %}}
-- The dead time `drop` in the report is information only; it is **not** a value for `hv0.drop_k`.
+- The dead time `drop` in the report is added to the printed `vf0.u_boost` (V/f runs without dead time compensation); it is **not** a value for `hv0.drop_k`.
 - If `l` failed (printed in red, 1 mH used), measure line to line near 150 Hz with an LCR meter and halve it.
 - `tr` is the rotor's at the test temperature: a hot cage reads shorter. Warnings about edge spread or a slow loop suggest more `idacim0.rot_cycles` or a higher `idacim0.rot_bw`.
 - If the report says so, rerun with `idacim0.test_cur` near the printed `id_n`.
@@ -326,9 +326,9 @@ Spins the rotor open loop and measures the flux curve and, with an encoder, the 
 | Append | Notes |
 |---|---|
 | `acim_foc0.id_n` | rated magnetizing current |
-| `acim_flux0.lmr`, `acim_flux0.lmr_sat` | replace the standstill `lmr` |
+| `acim_flux0.lmr`, `acim_flux0.lmr_sat` | replace the standstill `lmr`; with an encoder and a rejected fit `lmr_sat` is only printed as a comment, keep the config's |
 | `acim_flux0.i_n` | `acim_foc` already links it to `acim_foc0.id_n` |
-| `acim_flux0.i_knee`, `acim_flux0.tr_sat`, `acim_flux0.i_dip`, `acim_flux0.lmr_dip` | only if printed (with an encoder and an accepted magnetizing curve fit) |
+| `acim_flux0.i_knee`, `acim_flux0.tr_sat`, `acim_flux0.i_dip`, `acim_flux0.lmr_dip` | only if printed (with an encoder and an accepted magnetizing curve fit). `acim_flux0.tr_dip` is not measured: it defaults to 0 (tr does not change below `i_dip`); `conf/fanuc_a2_spindle_foc_sl.txt` sets it negative because tr rose at low flux on that spindle |
 | `conf0.j` | only with an encoder |
 
 A red message that the rotor did not follow: lower `idacim0.rot_acc` or unload the shaft. Friction is printed as a comment only.
@@ -453,9 +453,11 @@ The same limits as stator (electrical) frequency f_el, in Hz, for any motor at 1
 **Example**, a Fanuc alpha2 spindle (measured on the bench or computed from the formulas above): pp 2, plate 78.4 Hz (2352 rpm), IM06B50GC1, 296 V link, 15 kHz, `id_n` 19 A, ls 14 mH, `lmr` 12.6 mH, `l` 0.92 mH.
 
 - `pwm_volt` = 296 / sqrt(3) x 0.91 = 155 V (computed). Base speed for `acim_fw0.duty_setpoint` 0.8: 0.8 x 155 / (0.014 x 19) = 468 rad/s el = 234 rad/s = 2230 rpm (computed). At the default `duty_setpoint` 0.9 the same formula gives 524 rad/s el = 262 rad/s = 2500 rpm. Measured: duty 0.82 at 246 rad/s (2352 rpm), no load, id 18.8 A.
-- V/f: `u_n` 126.6 V at `vel_n` 246.3; the cap 0.9 x 155 = 140 V is reached near 272 rad/s, 2600 rpm (computed). `u_boost` 3.6 V fades out by `boost_vel` 21 rad/s (200 rpm); rated slip 5.6 rad/s. On the bench V/f has been run only to 140 rad/s.
+- V/f: `u_n` 126.6 V at `vel_n` 246.3; the cap 0.9 x 155 = 140 V is reached near 272 rad/s, 2600 rpm (computed). `u_boost` 12 V, r x `id_n` plus the dead time drop (r x `id_n` alone, 3.7 V, did not start the motor), fades out by `boost_vel` 21 rad/s (200 rpm); rated slip 5.6 rad/s. On the bench V/f ran from 20 to 838 rad/s (8000 rpm) and back, with the speed estimate damping of the example config below; without it the rotor hunted at about 9 Hz from about 75 rad/s.
 - FOC and field weakening: 838 rad/s (8000 rpm) reached in encoder and sensorless mode (measured), flux scale 0.25 / 0.31, id about 5 A, duty peak 0.90, 314 V on the link braking from 838. `p_max` 2200 W gives 2.6 Nm continuous at 838 rad/s, up to 3.1 Nm with the iit0 overload headroom (`iit0.cur_boost` 1.19 on this spindle). f_el 267 Hz there: 56 PWM periods and 19 F4 ticks per electrical period (computed). Above about 7800 rpm the encoder position can jump by 2 counts (measured); the observer's angle error is 0.05 to 0.10 rad at 600 to 800 rad/s (measured). `conf0.max_vel` is 838.
 - Sensorless low end: `w_hand` 30 rad/s (290 rpm), `hyst` 10, so closed loop down to 20 rad/s (190 rpm), I/f below. The emf at 30 rad/s is 60 x 0.0126 x 19 = 14 V, about 5 x `e_min` (computed).
+
+The complete configs for this spindle are in the repository, one per mode: [fanuc_a2_spindle_vf.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a2_spindle_vf.txt) (V/f), [fanuc_a2_spindle_vf_enc.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a2_spindle_vf_enc.txt) (V/f with encoder), [fanuc_a2_spindle_foc_enc.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a2_spindle_foc_enc.txt) (FOC with encoder) and [fanuc_a2_spindle_foc_sl.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a2_spindle_foc_sl.txt) (sensorless FOC). Each lists where its values came from and what was checked on the bench.
 
 ## Sensorless
 

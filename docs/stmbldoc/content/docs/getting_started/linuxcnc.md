@@ -27,7 +27,7 @@ link misc
 
 The `sserial` template makes the drive a smart serial remote with the card name `stbl`. It:
 
-* links `fault0.en = sserial0.enable`, so LinuxCNC enables and disables the drive, and sends the drive fault back to LinuxCNC
+* links `fault0.en = sserial0.enable`, so LinuxCNC enables and disables the drive, and sends the drive fault and its fault number (`sserial0.fault_code = fault0.last_fault`) back to LinuxCNC
 * feeds the position and velocity command from LinuxCNC through `linrev0` and `vel_int0` into the controller, and sends the position from `linrev0` back to LinuxCNC
 * runs `sserial0` with rt_prio 2.3 and frt_prio 2.0, and sets `sserial0.pos_advance = 0.0002`
 * raises fault 1 (CMD_ERROR) if no valid packet arrives for 5 ms (`sserial0.timeout`, 100 frt cycles)
@@ -53,8 +53,9 @@ The `stbl` remote has these pins in LinuxCNC (prefix `hm2_<board>.0.stbl.<port>.
 | `current` | from drive | q-axis current (A, ±30 A range) |
 | `in` | from drive | 4 bits, the first two are `io0.ind0` and `io0.ind1` |
 | `fault` | from drive | drive fault |
+| `fault_code` | from drive | fault number while `fault` is set (the blink count in [Errors](/docs/errors.md)), else 0 |
 | `index_enable` | both | index homing |
-| `scale` | parameter | machine units per motor revolution |
+| `scale` | to drive | machine units per motor revolution |
 
 `index_enable` homes to the encoder index: LinuxCNC sets it, `idx_home0` on the drive clears it when the index is found and resets the revolution count. To use it, uncomment the `xindex` line in the HAL file and the homing settings, including `HOME_USE_INDEX = YES`, in `[JOINT_0]`.
 
@@ -100,7 +101,7 @@ net tool-change-loop iocontrol.0.tool-change => iocontrol.0.tool-changed
 
 ```
 
-`scale` is the number of machine units per motor revolution, for example 5 for a 5 mm pitch ball screw driven directly by the motor (6 in this example). It is sent to the drive as `sserial0.scale` and used by `linrev0`. Do not set `linrev0.scale` on the drive. While the scale is below 0.01 in magnitude (for example 0 before LinuxCNC has set it), the drive ignores the command and the motor does not move.
+`scale` is the number of machine units per motor revolution, for example 5 for a 5 mm pitch ball screw driven directly by the motor (6 in this example). It is sent to the drive in every process data packet, as `sserial0.scale`, and used by `linrev0`. It travels as a 24 bit unsigned number in steps of 0.0001, so it can be 0.0001 to about 1677.7; a 0 leaves the drive's scale as it is. Do not set `linrev0.scale` on the drive. While the scale is below 0.01 in magnitude (for example 0 before LinuxCNC has set it), the drive ignores the command and the motor does not move.
 
 ## INI file
 

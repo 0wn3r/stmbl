@@ -29,12 +29,12 @@
 * - `index` shows the raw level of the Z input. If `indexprint > 0`, the nrt function prints the captured counter value (`cnt = ...`) once per index event.
 *
 * 4. **Signal check and interpolation (rt)**:
-* - If `amp > 0.25` or `|vel| > 0.15`: `error = 0`, `state` is at least 1, and the interpolated position is computed from the analog angle:
+* - If `amp > min_amp` (default 0.25) or `|vel| > 0.15`: `error = 0`, `state` is at least 1, and the interpolated position is computed from the analog angle:
 * ```c
 * ipos = mod(pos + (int)(ires * mod(4 * atan2(sin, cos) + pi) / pi) / ires * pi / res);
 * ```
 * - i.e. the sin/cos phase adds a fine offset of +-half a count, quantised to `ires` steps (default 1024).
-* - Otherwise `error = 1` and `state = 0`. For a plain digital encoder without sin/cos `amp` must be set to a constant > 0.25 (e.g. `enc_fb0.amp = 5` in `conf/haas_spindle_slip_uf.txt`), otherwise the encoder is reported as faulty at standstill.
+* - Otherwise `error = 1` and `state = 0`. For a plain digital encoder without sin/cos `amp` must be set to a constant above `min_amp` (e.g. `enc_fb0.amp = 5` in `conf/haas_spindle_slip_uf.txt`), otherwise the encoder is reported as faulty at standstill.
 *
 * {{% hint warning %}}
 * `oquadoff` and `ccr3` are not used. The `state` drops back to 0 whenever the amplitude/velocity check fails, even after an index was found (the stored index offset is kept).
@@ -58,7 +58,7 @@ HAL_PIN(quad);        // *input*, Analog quadrant (1..4) from adc
 HAL_PIN(oquad);       // *output*, Digital quadrant (1..4) from the A/B levels
 HAL_PIN(oquadoff);    // *parameter*, Not used
 HAL_PIN(qdiff);       // *output*, quad - oquad, +-1 corrects the count
-HAL_PIN(error);       // *output*, 1 if amp is below min_amp and |vel| below 0.15 (mot fb error at standstill)
+HAL_PIN(error);       // *output*, 1 if amp is below min_amp and abs(vel) below 0.15 (mot fb error at standstill)
 HAL_PIN(amp);         // *input*, Analog signal amplitude, > min_amp counts as valid
 HAL_PIN(min_amp);     // *parameter*, Amplitude below which error is set at standstill (default 0.25)
 HAL_PIN(vel);         // *input*, Velocity (rad/s), abs > 0.15 counts as valid

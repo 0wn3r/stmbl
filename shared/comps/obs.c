@@ -41,6 +41,13 @@
 * guess. `track` = 1 copies pos_ref and vel_ref, for a sequencer that hands
 * over to it.
 *
+* `vel_m` is the rotor speed, (vel - slip) / polecount. vel only follows a
+* slip step through the loop, so the slip is passed through a copy of the
+* loop before it is taken off; taken straight, a step in iq would dip vel_m
+* for about 1 / bw, the speed loop would ask for more iq, and with little
+* flux (deep field weakening) that rings at about the observer bw. With
+* `track` = 1 the slip is taken straight.
+*
 * `max_vel` (default 3000 rad/s electrical, 477 Hz) clamps vel. On the F4
 * (5 kHz) that is about 10 samples per electrical period, which is also
 * about where the F4 observer runs out. There is no faster path: an F3

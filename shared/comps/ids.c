@@ -15,7 +15,7 @@
 * - `conf0.cur_bw` should be set: `vel_bw` is capped at `conf0.cur_bw / bw_ratio` (`bw_ratio` default 7.5, so 400 at a `cur_bw` of 3000). If either is 0 there is no cap and the console says so.
 * - `conf0.max_force` should be the drive's real torque: it sets the noise limit (`fb_max` x `max_force`) and the torque saturation test. With 0 the noise limit is off and the console says so.
 * - The search starts from the gains already in the config (`conf0.pos_bw`, `vel_bw`, `vel_d`), or 10, 100 and 10 where they are 0.
-* - The axis travels between `min_pos` and `max_pos` (default -10 and +10 rad) at up to `max_vel` (100 rad/s) and `max_acc` (1000 rad/s^2). The profile is capped at `conf0.max_vel` and `conf0.max_acc` when those are set (> 0). The positions are absolute targets in the feedback position frame; the profile starts at the actual position `pos_fb`, so there is no step at the start.
+* - The axis travels between `min_pos` and `max_pos` (default -10 and +10 rad) at up to `max_vel` (100 rad/s) and `max_acc` (500 rad/s^2). The profile is capped at `conf0.max_vel` and `conf0.max_acc` when those are set (> 0). The positions are relative to the start position, where the axis stands (`pos_fb`) when the search starts, so there is no step at the start, and the axis drives back to the start position when the search is done.
 *
 * 2. **How to run it**:
 * - At the console, `link id_pid`. The template loads `ids` and wires `ids0.en = fault0.en_out`, the trajectory into `pid0.pos_ext_cmd` / `vel_ext_cmd` / `acc_ext_cmd`, `pid0.pos_bw` / `vel_bw` / `vel_d` from this component, `pid0.pos_error` / `vel_error` / `torque_cmd` / `fb_torque_cmd` / `sat` back into it, plus `ids0.cur_bw = conf0.cur_bw`, `ids0.pos_fb = fb_switch0.pos_fb`, `ids0.max_torque = conf0.max_force`, the start values from `conf0.pos_bw` / `vel_bw` / `vel_d` and the limits from `conf0.max_acc` / `max_vel`. It sets `conf0.max_pos_error = 0`, `conf0.max_sat = 10` and `conf0.vel_g = 1`, and puts `pos_cmd`, `vel_cmd`, `min_cost` and the three gains on the scope waves.
@@ -24,9 +24,9 @@
 * - For the coupling resonance, `link id_lpf` instead (it links `id_pid` and sets `ids0.lpf = 1`, `ids0.j_mot = conf0.j`, `ids0.j_sys = conf0.j_sys` and puts `ring_sig` on scope wave 1). Run it before `id_pid`: `j_lpf` changes the plant the gains are tuned against.
 *
 * 3. **Gain search (`state` 1.x)**:
-* - `0`: idle. The trajectory follows `pos_fb`, the gains are reset to the start values, `max_params[0] = cur_bw / bw_ratio` (1e6 when either is 0), `max_params[1] = 1`, and the cost, noise and saturation counters are cleared. When `en` goes high it goes to `1.0` (or `2.0` with `lpf > 0`); `en` low returns to `0` from any state.
-* - `1.0` -> `1.1` (nrt): sets `target = max_pos` and prints the `vel_bw` cap and the noise limit; with `auto_step >= 1` it goes straight to `1.2`, otherwise it waits in `1.1`.
-* - `1.2` (rt): a trapezoidal trajectory (`pos`, `vel`, `acc`) moves to `max_pos` and back to `min_pos` in cycles of `2 * (|max_pos - min_pos| / vel + 2 * vel / acc)`, with `vel` and `acc` the capped profile limits (0.8 s with the defaults). `pos_cmd` is `pos` wrapped to +-pi, `vel_cmd` / `acc_cmd` are scaled by `ff`. Over each cycle it integrates the cost, the rms of `fb_torque` above 50 Hz (`noise`) and the peak of `|torque|` (`peak`):
+* - `0`: idle. The trajectory follows `pos_fb`, which becomes the start position, `target` is set to the start position + `max_pos`, the gains are reset to the start values, `max_params[0] = cur_bw / bw_ratio` (1e6 when either is 0), `max_params[1] = 1`, and the cost, noise and saturation counters are cleared. When `en` goes high it goes to `1.0` (or `2.0` with `lpf > 0`); `en` low returns to `0` from any state.
+* - `1.0` -> `1.1` (nrt): prints the `vel_bw` cap and the noise limit; with `auto_step >= 1` it goes straight to `1.2`, otherwise it waits in `1.1`.
+* - `1.2` (rt): a trapezoidal trajectory (`pos`, `vel`, `acc`) moves to the start position + `max_pos` and back to the start position + `min_pos` in cycles of `2 * (|max_pos - min_pos| / vel + 2 * vel / acc)`, with `vel` and `acc` the capped profile limits (1.2 s with the defaults). `pos_cmd` is `pos` wrapped to +-pi, `vel_cmd` / `acc_cmd` are scaled by `ff`. Over each cycle it integrates the cost, the rms of `fb_torque` above 50 Hz (`noise`) and the peak of `|torque|` (`peak`):
 * ```c
 * cost += (kp * |pos_error| + ks * pos_error^2 + kv * vel_error^2) * period;
 * ```
@@ -35,14 +35,15 @@
 * - if the gain is above its limit it is clamped and the search moves to the next gain. Limits: `vel_bw <= cur_bw / bw_ratio`, `1 / vel_d <= 1` (so `vel_d >= 1`), `pos_bw <= 2 * vel_bw`.
 * - else at the gain's start value: a saturation failure cuts it by `kd` (0.7) and retries, up to 5 times; a noisy score cuts it by `kd` and moves to the next gain; otherwise the score becomes `min_cost` and the gain is multiplied by `1 + step` (`step` default 0.1).
 * - else after a raise: if the score is noisy or `cost > min_cost * (1 - kg)` (`kg` default 0.05, the least cost cut a raise has to give) the raise is taken back (divided by `1 + step`) and the search moves to the next gain; otherwise `min_cost = cost` and the gain is raised again.
-* - When all three gains are done the feedforward outputs are zeroed and the state goes to `1.3`; the nrt function prints the results and goes to `1.4` (done). The trajectory stays where it stopped until `en` goes low.
+* - When all three gains are done the trajectory drives back to the start position without scoring, so repeated runs do not walk the axis toward a stroke end. There the feedforward outputs are zeroed and the state goes to `1.3`; the nrt function prints the results and goes to `1.4` (done). The trajectory stays at the start position until `en` goes low.
 * - With good feedforward the tracking cost gets very small, and below the noise limit it keeps falling a little with each raise of `vel_bw`, so in practice the `cur_bw / bw_ratio` cap is what stops `vel_bw`. The torque peak is only reported: it is set by the profile (J x acceleration at the reversals), not by the gains.
 *
 * 4. **Coupling resonance for `pid0.j_lpf` (`state` 2.x)**:
-* - pid models a compliant coupling by driving `j_mot + j_sys` below `j_lpf` and only `j_mot` above it. The corner belongs at the two-mass anti-resonance. `ids` kicks the axis, times the ring in `vel_error` and gets `j_lpf = f_ring / sqrt(1 + j_sys / j_mot)`, so the coupling stiffness does not need to be known. The gains are not changed: pid runs with the start values (the conf0 gains).
+* - pid models a compliant coupling by driving `j_mot + j_sys` below `j_lpf` and only `j_mot` above it. The corner belongs at the two-mass anti-resonance. `ids` excites the axis, times the ring in `vel_error` and sets `j_lpf = f_ring`, so the coupling stiffness does not need to be known. The ring is timed in closed loop at the configured gains, where the speed loop holds the motor, so it sits at the anti-resonance and not at the free resonance above it. The gains are not changed: pid runs with the start values (the conf0 gains).
 * - `2.0` -> `2.1` (nrt): prints what will happen; with `auto_step >= 1` it goes to `2.2`, otherwise it waits for `ids0.state = 2.2`.
-* - `2.2` (rt): starting at `pos_fb`, the axis is moved `ring_pos` (default 0.2 rad) alternately to either side of the start point, `ring_reps` times (default 4), at `ring_acc` (0 = the capped `max_acc`). After each move, for `ring_dwell` seconds (default 1 s) `vel_error` high passed at `ring_hp_hz` (default 5 Hz, output on `ring_sig`) goes through a Schmitt trigger whose band follows the previous half cycle's peak. Accepted half periods must lie between `max(2 * ring_hp_hz, 3 / ring_dwell)` and `min(rt rate / 20, 500)` Hz, agree with the running mean once 4 are in, and come from peaks above `ring_min_amp` (0.02 rad/s) and the decay gate.
-* - At the end, with at least 6 half periods `f_ring` is their mean frequency and `zeta_ring` the mean log decrement damping; with `j_mot` and `j_sys` both > 0 and `f_ring` in range, `j_lpf` is computed and `ring_ok = 1`. State `2.3` (nrt) prints `conf0.j_lpf` (and `zv_ip0` values), or why nothing usable was found (well damped ring, no ring, missing inertias), and goes to `2.4` (done).
+* - `2.2` (rt): with `ring_vel > 0` (default 10 rad/s) the axis goes back and forth from where it stands (`pos_fb`), `ring_reps` legs in all (default 8). Each leg accelerates at `ring_acc` (0 = the capped `max_acc`) to its cruise speed, the ring is timed while it cruises for `ring_dwell` seconds (default 1 s), then the axis turns round. The legs alternate in pairs between `ring_vel` and 1.5 x `ring_vel` (both cruise speeds are lowered together so that the faster one stays within the capped `max_vel`), so the axis travels up to about 1.5 x `ring_vel` x `ring_dwell` (15 rad with the defaults) plus the acceleration distance from the start. Kicked at the end of an acceleration while cruising, friction is a constant force and the ring runs free; kicked from standstill, Coulomb friction can stop the load before the ring is timed. With `ring_vel = 0` the axis instead moves `ring_pos` (default 0.2 rad) alternately to either side of the start point from standstill, and each dwell starts when it arrives.
+* - During each dwell `vel_error` high passed at `ring_hp_hz` (default 5 Hz, output on `ring_sig`) goes through a Schmitt trigger whose band follows the previous half cycle's peak. Accepted half periods must lie between `max(2 * ring_hp_hz, 3 / ring_dwell)` and `min(rt rate / 20, 500)` Hz, agree with the running mean of the same speed once 4 are in, and come from peaks above `ring_min_amp` (0.02 rad/s) and the decay gate. After the last dwell the axis drives back to the start position.
+* - At the end, `f_ring_a` and `f_ring_b` are the mean ring frequencies at `ring_vel` and at 1.5 x `ring_vel` (each from at least 3 half periods), `f_ring` the mean of all half periods (at least 6) and `zeta_ring` the mean log decrement damping. With `ring_vel > 0`, `f_ring` is set to 0 unless `f_ring_a` and `f_ring_b` agree within 15 % of their mean: a mechanical mode stays put when the speed changes, while speed-locked ripple (cogging, the screw) moves with it. With `f_ring` in range, `j_lpf = f_ring` and `ring_ok = 1`. State `2.3` (nrt) prints `conf0.j_lpf` (and `zv_ip0` values, and a warning when `conf0.j_sys` is 0, since `j_lpf` then does nothing), or why nothing usable was found (the two speeds disagree, well damped ring, no ring), and goes to `2.4` (done).
 * - `j_lpf` only pays if the velocity loop crosses near that frequency; with `conf0.vel_bw` well under `2 pi j_lpf` set `conf0.j_lpf = 0` (conf/template/conf.txt sets 100 Hz).
 *
 * {{% hint warning %}}
@@ -58,10 +59,10 @@ HAL_PIN(param);  // *output*, gain currently searched: 0 vel_bw, 1 1/vel_d, 2 po
 HAL_PIN(step);  // *parameter*, relative gain increase per raise, default 0.1
 HAL_PIN(rep);  // *parameter*, cycles averaged per score, default 2
 
-HAL_PIN(min_pos);  // *parameter*, lower end of the travel (rad), default -10
-HAL_PIN(max_pos);  // *parameter*, upper end of the travel (rad), default 10
+HAL_PIN(min_pos);  // *parameter*, lower end of the travel relative to the start position (rad), default -10
+HAL_PIN(max_pos);  // *parameter*, upper end of the travel relative to the start position (rad), default 10
 HAL_PIN(max_vel);  // *parameter*, test velocity (rad/s), default 100, capped at vel_lim
-HAL_PIN(max_acc);  // *parameter*, test acceleration (rad/s^2), default 1000, capped at acc_lim
+HAL_PIN(max_acc);  // *parameter*, test acceleration (rad/s^2), default 500, capped at acc_lim
 HAL_PIN(acc_lim);  // *input*, conf0.max_acc, caps max_acc and ring_acc when > 0 (rad/s^2)
 HAL_PIN(vel_lim);  // *input*, conf0.max_vel, caps max_vel when > 0 (rad/s)
 
@@ -150,8 +151,8 @@ HAL_PIN(skipped);  // *output*, saturated cycles not scored in this run
 // with ids0.lpf = 1 (link id_lpf), and touches nothing the gain search uses, so
 // it is safe to run on a machine that is already tuned.
 HAL_PIN(lpf);  // *parameter*, 1 = measure the coupling ring (state 2.x) instead of tuning (1.x), set by id_lpf
-HAL_PIN(j_mot);  // *input*, motor inertia, conf0.j (kgm^2)
-HAL_PIN(j_sys);  // *input*, load inertia, conf0.j_sys (kgm^2)
+HAL_PIN(j_mot);  // *input*, motor inertia, conf0.j (kgm^2), not used by the ring measurement
+HAL_PIN(j_sys);  // *input*, load inertia, conf0.j_sys (kgm^2), only for the warning when it is 0
 
 HAL_PIN(ring_pos);  // *parameter*, size of each excitation move with ring_vel 0 (rad), default 0.2
 HAL_PIN(ring_vel);  // *parameter*, cruise speed the ring is timed at (rad/s), 0 = twitch ring_pos from standstill, default 10

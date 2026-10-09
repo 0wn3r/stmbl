@@ -39,7 +39,7 @@ extern volatile uint32_t ADC_DMA_Buffer1[ADC_SAMPLES_IN_RT];
 * - `sin0`/`cos0` and `sin1`/`cos1` are the averages over all 24 groups.
 * - `sin0l`/`cos0l` and `sin1l`/`cos1l` are the last group only, i.e. the newest value, used for sin/cos encoders.
 * - `quad` is the quadrant (1..4) of the last fb0 group, used by the encoder components for interpolation.
-* - `amp0`/`amp1` are low pass filtered (0.9/0.1 per rt period) amplitudes `sqrt(s^2 + c^2)` of the first raw sample of fb0/fb1 in the buffer, without gain and offset. uvw and encoder templates use them to detect a connected feedback.
+* - `amp0`/`amp1` are low pass filtered (0.9/0.1 per rt period) amplitudes `sqrt(s^2 + c^2)` of the last group of fb0/fb1 (the `sin0l`/`cos0l` and `sin1l`/`cos1l` values), so `sin_gain`/`cos_gain` and the offsets apply to them as well. uvw and encoder templates use them to detect a connected feedback.
 *
 * 4. **Scope stream to Servoterm (nrt)**:
 * - `send_step` > 0 enables it. `rt` copies one raw buffer; `nrt` waits `send_step` nrt calls, converts it and sends all 240 samples over USB as 8 waves: 0/1 = fb0 sin/cos (flipped by `res_mode`, 0 at fb1 positions), 2/3 = fb1 sin/cos (0 at fb0 positions), 4 = the flip sign, 5..7 unused.
@@ -57,13 +57,13 @@ HAL_PIN(cos0);       // *output*, fb0 cos, average over the rt period (V)
 HAL_PIN(sin0l);      // *output*, fb0 sin, last group only (V)
 HAL_PIN(cos0l);      // *output*, fb0 cos, last group only (V)
 HAL_PIN(quad);       // *output*, quadrant (1..4) of the last fb0 sin/cos group
-HAL_PIN(amp0);       // *output*, filtered fb0 sin/cos amplitude (V), raw, without gain/offset
+HAL_PIN(amp0);       // *output*, filtered fb0 sin/cos amplitude of the last group (V), after gain/offset
 
 HAL_PIN(sin1);       // *output*, fb1 sin, average over the rt period (V)
 HAL_PIN(cos1);       // *output*, fb1 cos, average over the rt period (V)
 HAL_PIN(sin1l);      // *output*, fb1 sin, last group only (V)
 HAL_PIN(cos1l);      // *output*, fb1 cos, last group only (V)
-HAL_PIN(amp1);       // *output*, filtered fb1 sin/cos amplitude (V), raw, without gain/offset
+HAL_PIN(amp1);       // *output*, filtered fb1 sin/cos amplitude of the last group (V), after gain/offset
 
 HAL_PIN(res_mode);   // *input*, resolver polarity flip every n groups (fb0 only), 0 = off, usually res0.res_mode
 
