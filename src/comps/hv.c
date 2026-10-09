@@ -137,6 +137,7 @@ static uint32_t crc_nak;  // the f3 answered NAK: its CRC over the image is not 
 #define VERIFY_EXTRA 8
 #define VERIFY_LIST 8
 static uint32_t send_verify;
+static volatile uint32_t verify_refused;
 // FLASH_FAILED: a failed update can leave the f3 in its bootloader (it only
 // starts the app after a reset with a valid CRC), in its app if it never got
 // there, or without power. Sends alternate between a bootloader NOP and an
@@ -358,7 +359,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
                 PIN(link_drops)++;
               }
               ctx->link_to_last = PIN(link_to);
-              if(ctx->link_err) {
+              if(ctx->link_err && PIN(fault) == 0.0) {  // a real F3 fault code wins
                 PIN(fault) = HV_TIMEOUT_ERROR;
               }
 
@@ -540,6 +541,13 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       ctx->conf_addr %= sizeof(f3_config_data_t) / 4;
 
+      if(send_verify && e > 0.0) {
+        // bootloader READ packets are a link loss to a running F3 app: it
+        // gates off or short-brakes and fault 9 latches. Only from disabled
+        // (the F3 may be sitting in its bootloader after an F4 reset).
+        send_verify    = 0;
+        verify_refused = 1;
+      }
       if(send_verify) {
         send_verify    = 0;
         ctx->addr      = 0;
@@ -813,6 +821,11 @@ static void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   char c;
   while(rb_getc(&hv_rx_buf, &c)) {
     printf("%c", c);
+  }
+
+  if(verify_refused) {
+    verify_refused = 0;
+    printf("hv_verify: refused, the drive is enabled\n");
   }
 
   static uint32_t verify_shown = 0, verify_tenth = 0;
