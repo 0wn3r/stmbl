@@ -49,7 +49,9 @@ static int app_ok(void) {
 int main(void) {
   extern void *g_pfnVectors;
   SCB->VTOR = (uint32_t)&g_pfnVectors;
-  clock_init();  // the ROM bootloader and the app are entered at 168 MHz
+  // No clock_init(): the bootloader stays on the 16 MHz HSI SystemInit left
+  // it on. It only reads a pin and checks a CRC, AN2606 wants the PLL off
+  // before the jump to the ROM, and the app sets up its own clocks.
 
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA | LL_AHB1_GRP1_PERIPH_CRC);
   // PA13 input with pull up
@@ -59,11 +61,15 @@ int main(void) {
   LL_AHB1_GRP1_ForceReset(LL_AHB1_GRP1_PERIPH_GPIOA);  // reset gpio a
   LL_AHB1_GRP1_ReleaseReset(LL_AHB1_GRP1_PERIPH_GPIOA);
   LL_AHB1_GRP1_DisableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
+  int ok = app_ok();
+  LL_AHB1_GRP1_DisableClock(LL_AHB1_GRP1_PERIPH_CRC);  // AN2606: peripheral clocks off before the jump
 
   void (*SysMemBootJump)(void);
-  if((*((unsigned long *)0x2001C000) == 0xDEADBEEF) || pin || !app_ok()) {  //Memory map, datasheet
-    *((unsigned long *)0x2001C000) = 0xCAFEFEED;                            //Reset bootloader trigger
-    __set_MSP(0x20001000);
+  if((*((unsigned long *)0x2001C000) == 0xDEADBEEF) || pin || !ok) {  //Memory map, datasheet
+    *((unsigned long *)0x2001C000) = 0xCAFEFEED;                      //Reset bootloader trigger
+    // the ROM's own initial stack pointer: AN2606 Table 73 has the ROM use
+    // the first 8 KB of SRAM, and a stack at 0x20001000 grew down over it
+    __set_MSP(*((uint32_t *)0x1FFF0000));
     //Point the PC to the System Memory reset vector (+4)
     //AN2606
     //Table 64. Bootloader device-dependent parameters
