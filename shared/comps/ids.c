@@ -103,6 +103,8 @@ HAL_PIN(skipped);  // saturated cycles not scored, for the whole run
 #define SAT_MAX 5      // saturated cycles in a row before a step fails
 #define WARM_MAX 25    // warm-up cycles at most while pid saturates
 #define CUT_MAX 5      // kd cuts of a saturating start value before moving on
+#define RING_VEL_B 1.5 // second cruise speed, x ring_vel
+#define RING_AGREE 0.1 // the two speeds' rings agree within this fraction
 
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,8 @@ HAL_PIN(ring_amp);   // peak of that in the current dwell [rad/s]
 HAL_PIN(ring_n);     // half periods accepted, 0 = nothing was measured
 HAL_PIN(ring_ok);    // 1 = f_ring and j_lpf are usable
 HAL_PIN(f_ring);     // measured resonance [Hz]
+HAL_PIN(f_ring_a);   // the ring timed at ring_vel [Hz]
+HAL_PIN(f_ring_b);   // the ring timed at RING_VEL_B x ring_vel [Hz]
 HAL_PIN(zeta_ring);  // measured damping ratio
 HAL_PIN(j_lpf);      // computed pid0.j_lpf corner [Hz]
 
@@ -163,7 +167,7 @@ struct ring_t {
   int8_t sign;        // last polarity the schmitt trigger latched
   uint16_t n_cross;   // trigger events in this dwell
   uint16_t n_dwell;   // half periods accepted in this dwell
-  uint16_t n_half;    // half periods accepted over all dwells
+  uint16_t n_half[2]; // half periods accepted over all dwells, per cruise speed
   uint16_t n_ln;      // dwells that yielded a log decrement
   uint16_t rep;
   float lp;           // high pass state
@@ -175,7 +179,7 @@ struct ring_t {
   float a_first;      // first and last accepted peak, for the log decrement
   float a_last;
   float pos0;         // the axis parks here between kicks
-  float sum_half;
+  float sum_half[2];
   float sum_ln;
 };
 
@@ -228,10 +232,10 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(auto_step) = 1.0;
 
   PIN(ring_pos)     = 0.2;
-  PIN(ring_vel)     = 20.0;
+  PIN(ring_vel)     = 10.0;
   PIN(ring_acc)     = 0.0;  // 0 = fall back to max_acc
   PIN(ring_dwell)   = 1.0;
-  PIN(ring_reps)    = 4.0;
+  PIN(ring_reps)    = 8.0;
   PIN(ring_hp_hz)   = 5.0;
   PIN(ring_min_amp) = 0.02;
 }
@@ -292,6 +296,9 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     case 23:
       if(PIN(ring_ok) > 0.0) {
         printf("resonance = %f Hz, damping = %f, from %f half periods\n", PIN(f_ring), PIN(zeta_ring), PIN(ring_n));
+        if(PIN(ring_vel) > 0.0) {
+          printf("<font color='green'># %f Hz at %f rad/s, %f Hz at %f rad/s</font>\n", PIN(f_ring_a), PIN(ring_vel), PIN(f_ring_b), PIN(ring_vel) * RING_VEL_B);
+        }
         printf("conf0.j_lpf = %f <font color='green'># append to config</font>\n", PIN(j_lpf));
         printf("<font color='green'># j_lpf is the anti resonance: the closed loop ring sits at it.\n");
         printf("# above it pid.c drops the load out of the torque model.\n");
@@ -308,6 +315,12 @@ static void nrt(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         if(PIN(j_sys) <= 0.0) {
           printf("<font color='red'>conf0.j_sys is 0</font>: j_lpf splits j_sys off, so it does nothing. run id_sys first\n");
         }
+      } else if(PIN(ring_vel) > 0.0 && (PIN(f_ring_a) > 0.0 || PIN(f_ring_b) > 0.0)) {
+        // a ring at one speed only, or a different one at each: speed
+        // locked ripple got timed, not the coupling
+        printf("<font color='red'>the two speeds disagree</font>: %f Hz at %f rad/s, %f Hz at %f rad/s (0 = none)\n", PIN(f_ring_a), PIN(ring_vel), PIN(f_ring_b), PIN(ring_vel) * RING_VEL_B);
+        printf("# speed ripple (cogging, the screw) sits on the ring at one of them.\n");
+        printf("# run again with another ids0.ring_vel. conf0.j_lpf is left as it is.\n");
       } else if(PIN(ring_n) > 0.0 && PIN(ring_amp) > PIN(ring_min_amp) * 3.0) {
         // it rang, but it died before there was anything to time. That is a
         // well damped coupling, which is the good case: nothing to compensate.
@@ -420,10 +433,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       // friction is a constant force and the ring runs free. Each leg
       // accelerates to ring_vel, cruises for the dwell, then turns round, so
       // the axis goes back and forth between pos0 and pos0 + one leg.
-      float r_cv     = PIN(ring_vel) > 0.0 ? MIN(PIN(ring_vel), r_vmax) : 0.0;
+      // Speed locked ripple (cogging, the screw) is forced, so it does not
+      // decay, and where it lands on the ring the detector times it instead
+      // (Y at 20 rad/s: 15 Hz, 18-22 Hz at 10 and 30). So the legs alternate
+      // in pairs between ring_vel and RING_VEL_B x ring_vel, each speed is
+      // timed on its own, and a result needs the two to agree: a mode stays
+      // put when the speed changes, ripple moves with it.
+      float r_cv = PIN(ring_vel) > 0.0 ? MIN(PIN(ring_vel), r_vmax / RING_VEL_B) : 0.0;
+      int grp    = r_cv > 0.0 ? (ctx->r.rep >> 1) & 1 : 0;
       if(r_cv > 0.0) {
-        r_vmax   = r_cv;
-        ring_pos = 4.0 * (r_cv * r_cv / ring_acc + r_cv * (dwell + 0.1));  // never reached: the leg turns at the dwell's end
+        float r_cb = RING_VEL_B * r_cv;
+        ring_pos   = 4.0 * (r_cb * r_cb / ring_acc + r_cb * (dwell + 0.1));  // never reached: the leg turns at the dwell's end
+        r_cv       = grp ? r_cb : r_cv;
+        r_vmax     = r_cv;
       }
       float f_max  = MIN(1.0 / period / 20.0, 500.0);
       float f_min  = MAX(2.0 * PIN(ring_hp_hz), 3.0 / dwell);
@@ -437,7 +459,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->r.sign      = 0;
         ctx->r.n_cross   = 0;
         ctx->r.n_dwell   = 0;
-        ctx->r.n_half    = 0;
+        ctx->r.n_half[0] = 0;
+        ctx->r.n_half[1] = 0;
         ctx->r.n_ln      = 0;
         ctx->r.rep       = 0;
         ctx->r.t         = 0.0;
@@ -448,13 +471,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         ctx->r.spent     = 0;
         ctx->r.a_first   = 0.0;
         ctx->r.a_last    = 0.0;
-        ctx->r.sum_half  = 0.0;
+        ctx->r.sum_half[0] = 0.0;
+        ctx->r.sum_half[1] = 0.0;
         ctx->r.sum_ln    = 0.0;
         PIN(pos)       = ctx->r.pos0;
         PIN(vel)       = 0.0;
         PIN(acc)       = 0.0;
         PIN(target)    = ctx->r.pos0 + ring_pos;
         PIN(f_ring)    = 0.0;
+        PIN(f_ring_a)  = 0.0;
+        PIN(f_ring_b)  = 0.0;
         PIN(zeta_ring) = 0.0;
         PIN(j_lpf)     = 0.0;
         PIN(ring_ok)   = 0.0;
@@ -547,7 +573,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           // the agreement filter then rejects every real one
           if(ctx->r.n_cross > 1) {
             float half = dt - ctx->r.t_last;
-            float mean = ctx->r.n_half > 0 ? ctx->r.sum_half / (float)ctx->r.n_half : 0.0;
+            float mean = ctx->r.n_half[grp] > 0 ? ctx->r.sum_half[grp] / (float)ctx->r.n_half[grp] : 0.0;
 
             // Once the ring has decayed past the gate, latch the count off for
             // the rest of this dwell. Letting it back on lets the noise floor
@@ -563,12 +589,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
             // cycle that produced it has to be a real one. The first four seed
             // the mean, so they are held to the top of the ring where nothing
             // else is big enough to trigger.
-            float gate = (ctx->r.n_half < 4 ? 0.5 : 0.15) * ctx->r.env;
+            float gate = (ctx->r.n_half[grp] < 4 ? 0.5 : 0.15) * ctx->r.env;
 
             if(!ctx->r.spent && half > 0.5 / f_max && half < 0.5 / f_min && ctx->r.pk_prev >= gate &&
-               (ctx->r.n_half < 4 || (half > 0.75 * mean && half < 1.35 * mean))) {
-              ctx->r.sum_half += half;
-              ctx->r.n_half++;
+               (ctx->r.n_half[grp] < 4 || (half > 0.75 * mean && half < 1.35 * mean))) {
+              ctx->r.sum_half[grp] += half;
+              ctx->r.n_half[grp]++;
               ctx->r.n_dwell++;
               ctx->r.a_last = ctx->r.pk;
               if(ctx->r.n_dwell == 1) {
@@ -614,10 +640,26 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           // back to where it started, then 2.3
           ctx->r.home  = 1;
           PIN(target)  = ctx->r.pos0;
-          PIN(ring_n)  = (float)ctx->r.n_half;
+          uint16_t n_all = ctx->r.n_half[0] + ctx->r.n_half[1];
+          float sum_all  = ctx->r.sum_half[0] + ctx->r.sum_half[1];
+          PIN(ring_n)    = (float)n_all;
+          for(int g = 0; g < 2; g++) {
+            if(ctx->r.n_half[g] >= 3 && ctx->r.sum_half[g] > 0.0) {
+              float f = 0.5 * (float)ctx->r.n_half[g] / ctx->r.sum_half[g];
+              if(g) {
+                PIN(f_ring_b) = f;
+              } else {
+                PIN(f_ring_a) = f;
+              }
+            }
+          }
 
-          if(ctx->r.n_half >= 6 && ctx->r.sum_half > 0.0) {
-            PIN(f_ring) = 0.5 * (float)ctx->r.n_half / ctx->r.sum_half;
+          if(n_all >= 6 && sum_all > 0.0) {
+            PIN(f_ring) = 0.5 * (float)n_all / sum_all;
+          }
+          if(PIN(ring_vel) > 0.0 && ABS(PIN(f_ring_a) - PIN(f_ring_b)) > RING_AGREE * 0.5 * (PIN(f_ring_a) + PIN(f_ring_b))) {
+            // the speeds disagree, or one found nothing: speed ripple, not a mode
+            PIN(f_ring) = 0.0;
           }
           if(ctx->r.n_ln > 0) {
             PIN(zeta_ring) = ctx->r.sum_ln / (float)ctx->r.n_ln;
