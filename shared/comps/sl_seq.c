@@ -204,6 +204,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       break;
   }
 
+  if(state != 3) {  // no observer speed to compare: tr_ks must not adapt on the last value
+    PIN(slip_err) = 0.0;
+  }
+
   // speed command for pid: f until the handover, then from the observed speed
   // toward vel_cmd at acc, with the slope as acceleration feedforward, so pid
   // neither sees a step nor has to build the inertia torque on its integrator

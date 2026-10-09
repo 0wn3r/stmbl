@@ -161,7 +161,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // vel_m for about 1 / bw, pid asks for more iq, and with little flux (deep
   // field weakening) that positive feedback rings at about the observer bw.
   if(PIN(track) > 0.0) {
-    pos       = PIN(pos_ref);
+    pos       = frame;  // the feedback frame, like the free running estimate
     vel       = PIN(vel_ref);
     ctx->s_e  = 0.0;
     ctx->s_v  = PIN(slip);
