@@ -15,13 +15,34 @@
 #define TERM_BUF_SIZE 64
 #endif
 
+/**
+* ## Brief
+* `term` is the serial terminal of a board. It runs the command line (every received line goes to `hal_parse`, so HAL commands and pin settings can be typed) and streams up to 8 pins as scope waves to the host (the Servoterm oscilloscope). It is loaded by default as `term0` on both the F4 and the F3. On the F4 it talks over USB. On the F3 (HV board) there is no USB: its terminal bytes travel one per packet over the link to the F4 (`ls` on the F3, `hv` on the F4), and main.c sets `term0.send_step = 0` there, so no wave data is sent. Typical use on the F4 is a config line like `term0.wave0 = pid0.pos_error` with `term0.gain0` to scale it.
+*
+* ## Component Explanation
+*
+* 1. **Sampling** (rt):
+* - Every `send_step` rt ticks the 8 `wave` pins are stored into a ring buffer (`TERM_BUF_SIZE`: 64 entries on the F4, which covers 12.8 ms of main loop at `send_step` 1; 8 on the F3, set in its Makefile, because all F3 components share 1024 bytes of HAL memory). One entry is kept free, so 63 (or 7) samples fit. When the buffer is full, new samples are dropped instead of overwriting unsent ones.
+*
+* 2. **Sending** (nrt):
+* - Each buffered sample is sent as 9 bytes: a 255 sync byte, then for each wave `CLAMP((wave + offset) * gain + 128, 1, 254)`. So a wave value of 0 is the middle of the scope, and with the default `gain` of 10 the visible range is about +-12.6.
+* - On the F4 a sample goes into the USB transmit ring whole or not at all: if there is no room for all 9 bytes it is dropped, so the host never sees a torn sample.
+* - Nothing is sent while `send_step` is 0 or no terminal is connected; the samples are still taken from the buffer and dropped.
+*
+* 3. **Receiving** (nrt):
+* - `con` is 1 while a terminal is connected (always 1 on the F3).
+* - Each complete received line (up to 64 characters) is passed to `hal_parse`.
+*
+* Defaults from nrt_init: `send_step` 50, all `gain` 10, `offset` 0.
+*/
+
 HAL_COMP(term);
 
-HAL_PINA(wave, 8);
-HAL_PINA(offset, 8);
-HAL_PINA(gain, 8);
-HAL_PIN(send_step);
-HAL_PIN(con);
+HAL_PINA(wave, 8);    // *input*, Signals shown on the scope, 8 channels
+HAL_PINA(offset, 8);  // *parameter*, Offset added to each wave before scaling, default 0
+HAL_PINA(gain, 8);    // *parameter*, Scale of each wave on the scope, 1 unit = gain steps of the 1..254 scope range, default 10
+HAL_PIN(send_step);   // *parameter*, Send a sample every send_step rt ticks, 0 = off, default 50
+HAL_PIN(con);         // *output*, 1 while a terminal is connected
 
 struct term_ctx_t {
   float wave_buf[TERM_BUF_SIZE][TERM_NUM_WAVES];

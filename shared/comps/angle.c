@@ -29,6 +29,10 @@
 *
 * `vel` is always synchronous electrical speed [rad/s], which is what the F3
 * current loop wants for its decoupling and what it extrapolates the angle with.
+*
+* It runs in the F4 rt (5 kHz); the F3 extrapolates pos with vel every PWM
+* period between packets, so at a high electrical frequency vel must be right
+* for a smooth angle.
 */
 
 HAL_COMP(angle);

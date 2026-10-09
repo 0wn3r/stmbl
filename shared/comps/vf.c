@@ -41,13 +41,19 @@
 *   faster than the motor can follow just slows down. It replaces the slip compensation and the damping
 *   (k_damp, k_vel): the field is tied to the rotor. vel_fb must have the
 *   field's sign and mechanical scale; a reversed encoder runs away against
-*   the clamp, so check vel_fb in open loop first. enc 0 = off.
-* - `vel_e` = (vel + slip) * polecount, synchronous electrical speed for
+*   the clamp, so check vel_fb in open loop first. enc 0 = off. With
+*   the encoder the field speed, the voltage (u_n * |vel_fb + slip| / vel_n)
+*   and the boost fade (on |vel_fb|) use the rotor speed vel_fb in place of
+*   vel, so the boost does not fade with the reference at standstill.
+* - `vel_e` = (vel + slip + damp) * polecount (vel_fb in place of vel
+*   with the encoder), synchronous electrical speed for
 *   angle0.vel_cmd, so hv0.vel is right and the f3 extrapolates between packets.
 * - Damping (optional): open loop V/f on a lightly loaded motor hunts, the
 *   rotor swinging against the field. `damp` = k_damp * the active current
 *   band passed between damp_hz and damp_lp_hz moves the field frequency with
-*   the swing and damps it. The high pass keeps steady slip and the ramp's
+*   the swing and damps it. The active current is positive motoring in
+*   either direction, so the term is multiplied by the sign of vel, like
+*   the slip, and damps the same in reverse. The high pass keeps steady slip and the ramp's
 *   acceleration current out, the low pass the pwm and current loop ripple.
 *   Frequency only, the voltage stays on vel + slip. Clamped to 5 % of vel_n.
 *   k_damp 0 = off, positive damps.
@@ -60,6 +66,11 @@
 *   acceleration; less the field's own acceleration (the ramp, stall
 *   prevention, slip, damp), high passed at damp_hz and integrated (leaky at
 *   damp_hz), it gives the swing of the rotor against the field, `w_est`. Needs `j` (conf0.j) and `r` (conf0.r).
+* - Speed range: vf has no speed clamp and the vf template does not link
+*   conf0.max_vel, so limit vel_cmd at its source. Under load it is usable
+*   from about boost_vel (below it r and the dead time drop eat most of the
+*   small voltage) to about vel_n; above the voltage cap the flux falls as
+*   1/f and the breakdown torque as 1/f^2.
 */
 
 HAL_COMP(vf);

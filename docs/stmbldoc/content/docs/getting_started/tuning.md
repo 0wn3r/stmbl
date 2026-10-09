@@ -11,6 +11,8 @@ weight: 5
 
 # Parameter Tuning
 
+STMBL can measure most motor and axis parameters itself. Each measurement is an identification component (`idpmsm`, `idacim`, `iddc`, `idtune`, `idm`, `ids`, `iddac`) loaded by an `id_*` config template. It takes over the power stage, runs its test and prints the results as `conf0.* = ...` (or `hv0.*`, `acim_*`, `vf0.*`) lines in green for you to append to the config.
+
 ## Requirements
 
 * [Supply](/docs/supply.md)
@@ -18,219 +20,468 @@ weight: 5
 * [Feedback](/docs/getting_started/feedback.md)
 * [Motor](/docs/getting_started/motor.md)
 
-## Electrical Parameters
+## Before You Start
 
-### DC Motor
+### Which stages for which motor
 
-#### Manual Tuning
+| Motor | Stages, in this order |
+|---|---|
+| DC motor | [id_dc](#dc-motor), then [id_mot](#mechanical-parameters-id_mot), [id_sys](#load-inertia-id_sys), [id_pid](#control-loop-id_pid) |
+| PMSM with encoder | [id_pmsm](#electrical-parameters-id_pmsm), [id_tune](#advance-and-dead-time-id_tune), [id_mot](#mechanical-parameters-id_mot), [id_sys](#load-inertia-id_sys) (optional), [id_lpf](#coupling-resonance-id_lpf) (optional), [id_pid](#control-loop-id_pid) |
+| Induction motor (ACIM) | [id_acim](#standstill-test-id_acim) (standstill, optional rotating test), then run it with [V/f](#run-it-with-vf), [V/f with an encoder](#run-it-with-vf-and-an-encoder) or [FOC](#run-it-with-foc); with an encoder also id_mot, id_sys, id_pid |
+| Sensorless PMSM / ACIM | identify as above, then [obs_check, sl_pmsm, sl_acim, id_sys_sl](#sensorless) |
+
+On an STMBL v5 HV board also set the [overcurrent trip threshold](#overcurrent-trip-threshold-hv0dac).
+
+### How every stage is run
+
+1. Have a working base config saved (motor template, feedback template, `link misc`, your `conf0.*` limits and all results of the earlier stages), then type `reset`.
+2. With the drive disabled, type `link id_xxx` in Servoterm, then `stop` and `start`: a component loaded at runtime only joins the realtime loop at `start` (without it, enabling does nothing). Optionally change the component's test pins now (e.g. `idpmsm0.test_cur = 4`).
+3. Type `fault0.en = 1` (same as `enable` or the Enable button). Follow the green text: some stages ask you to type a state, e.g. `iddc0.state = 1.2`.
+4. Copy the printed `name = value` lines (most are marked `# append to config`). Lines printed in red, or after a "failed" message, are not measurements.
+5. Type `fault0.en = 0`, append the lines to the config (config editor or `appendconf <line>`), save with `flashsaveconf` and type `reset` before the next stage.
+
+{{% hint info %}}
+**Why reset between stages:** HAL cannot unload a component, so the `id_*` component and its links stay in place until a reset. Disabling also resets most result pins, so the numbers are only kept in the printed text. Typing `link id_xxx` at the console (followed by `stop`, `start`) keeps it out of the saved config, and is required for `id_tune`. A runtime link is not flattened like the boot config (the boot runs `relink`). This only matters for a chain of links, such as `conf0.com_fb_polecount = conf0.polecount` in `id_pmsm`, so the `id_pmsm` template runs `relink` itself.
+{{% /hint %}}
+
+### Safety
+
+{{% hint danger %}}
+- Every test current (`idpmsm0.test_cur`, `idacim0.test_cur`, `iddc0.test_cur`, `idtune0.test_cur` and `idtune0.step_cur`) must be below `conf0.max_ac_cur` (default 10 A).
+- Take the load off the shaft for all electrical tests and for `id_mot`. Most tests turn the motor: `id_tune` up to 200 rad/s at its defaults, the ACIM rotating test up to 0.8 x plate speed.
+- `id_mot`, `id_sys` and `id_pid` move the axis between `min_pos` and `max_pos`, absolute positions in the feedback frame: -20 to +20 rad (about 3.2 turns each way) for `id_mot` / `id_sys`, -10 to +10 rad for `id_pid`. Make sure there is room, or reduce these pins first. The profile starts where the rotor is (`pos_fb`), so there is no step at the start, but the first move goes to `max_pos`. `id_lpf` only rocks the axis 0.2 rad about where it stands.
+- To stop any test: `fault0.en = 0` (or `disable` / the Disable button). Every id component aborts and returns to state 0 (a finished `id_dac` result stays until reset).
+{{% /hint %}}
+
+## Overcurrent Trip Threshold (hv0.dac)
+
+The v5 HV board has a hardware overcurrent comparator, set by `hv0.dac`. Two ways to set it:
+
+**ocdac (fixed map):** add to the config
 
 ```python
-conf0.r # motor phase resistance
-conf0.l # motor phase inductance
-conf0.psi # torque constant [Nm/A] or [V/rad/s]
-conf0.mot_fb_rev
+link ocdac
+ocdac0.cur = 20 # trip current [A peak]
 ```
 
-#### Auto Tuning
+`ocdac` converts the current with a linear map (`ocdac0.dac0`, `ocdac0.k`) fitted on one bench board. Check it on your hardware before relying on it; `ocdac0.cur_out` shows the current the clamped dac really stands for. See [ocdac](/docs/hal_components/ocdac.md).
 
-This takes about 20 seconds. Disconnect the motor from the load. The motor will turn with a max velocity of `iddc0.test_vel (rad/s)` and apply a max current of `iddc0.test_cur (A)`. Follow the green instructions in Servoterm:
+**id_dac (measure it on your board):** a one shot search that prints `hv0.dac` for a trip at `iddac0.cur`.
 
-- Set your config to:
+1. Raise the current limit for the run: `conf0.max_ac_cur` must be more than 1.2 x `iddac0.cur` (1.05 x in mode 0), e.g. `conf0.max_ac_cur = 25` for the template's 20 A. `iddac0.cur` must be over 1 A and at most `iddac0.cur_max` (25 A).
+2. Type:
+
+```python
+link id_dac
+stop
+start
+iddac0.cur = 20 # wanted trip current [A peak]
+iddac0.mode = 1 # template default: loaded or blocked axis, current on the rotor d axis, no torque
+fault0.en = 1
+```
+
+3. Expect a few dozen comparator trips. Mode 1 tests only the comparator of one phase per run (`iddac0.trip_phase`); turn the axis by hand and rerun to check the others. `iddac0.mode = 0` (free, unloaded axis) tests all three angles; the rotor aligns to them.
+4. Append the printed `hv0.dac = ...` line and `reset` (a finished run does not repeat until reset; this also restores your `conf0.max_ac_cur`).
+
+See [iddac](/docs/hal_components/iddac.md).
+
+## DC Motor
+
+Takes about 10 seconds plus your typing. Test current `iddc0.test_cur` (default 2 A), speed `iddc0.test_vel` (default 50 rad/s).
+
+Base config:
 
 ```python
 link pid
 link dc
 link <your_feedback_type>
 link misc
+```
+
+1. `reset`, then type:
+
+```python
 link id_dc
-```
-
-- Reset STMBL by typing:
-
-```python
-reset
-```
-
-- Start the tuning by typing:
-
-```python
+stop
+start
 fault0.en = 1
 ```
 
-- Lock the rotor and type:
+2. The console asks you to **block the rotor**. Then type `iddc0.state = 1.2`. It measures r (2 s) and l (1 s) and prints `conf0.r` and `conf0.l`.
+3. The console asks you to **unblock the rotor**. Type `iddc0.state = 2.2`. The motor runs for 5 s under a speed loop and prints `conf0.psi` and, if reversed, `conf0.out_rev = 1`.
 
-```python
-iddc0.state = 1.2
-```
+| Append | Notes |
+|---|---|
+| `conf0.r`, `conf0.l` | `l` is a rough value (per tick dV/dI method) |
+| `conf0.psi` | torque constant [Nm/A = Vs/rad] |
+| `conf0.out_rev = 1` | only if printed |
 
-- Unlock the rotor and type:
+{{% hint warning %}}
+- `iddc` is marked untested (no DC motor was available).
+- The speed test ramps its current slowly, so the motor may not reach `test_vel`; `psi` is averaged at whatever speed it reaches.
+{{% /hint %}}
 
-```python
-iddc0.state = 2.2
-```
+Continue with [Mechanical Parameters](#mechanical-parameters-id_mot). Details: [iddc](/docs/hal_components/iddc.md).
 
-- Append the result (`conf0.r`, `conf0.l`, `conf0.psi`, opt. `conf0.out_rev`) to your config.
-- Go to [Motor Mechanical Parameters](/docs/getting_started/tuning#motor-mechanical-parameters).
+## PMSM with Encoder
 
-### PMSM Motor
-
-#### Manual Tuning
-
-```python
-conf0.r # motor phase resistance
-conf0.l # motor phase inductance
-conf0.polecount # number of pole pairs
-conf0.mot_fb_offset
-conf0.out_rev
-conf0.psi # torque constant [Nm/A] or [V/rad/s]
-```
-
-#### Auto Tuning
-
-This takes about 20 seconds. Disconnect the motor from the load. The motor will turn with a max velocity of `idpmsm0.test_vel (rad/s)` and apply a max current of `idpmsm0.test_cur (A)`. Follow the green instructions in Servoterm:
-
-- Set your config to:
+Base config (feedback set up and working, `conf0.max_ac_cur` set):
 
 ```python
 link pid
 link pmsm
 link <your_feedback_type>
 link misc
+```
+
+### Electrical Parameters (id_pmsm)
+
+Measures r and the dead time curve, Ld/Lq, pole pairs, direction, commutation offset and psi. Defaults: `idpmsm0.test_cur = 6` A, `idpmsm0.test_vel = 50`. The r test alone takes about 50 s; the other tests add a few seconds each.
+
+1. Load off the shaft, drive disabled, `reset`.
+2. Optional: `idpmsm0.test_cur = ...` (below `conf0.max_ac_cur`), `idpmsm0.r_known = ...` (measured per phase r = line to line / 2, cold, at the drive end of the motor cable; then only the dead time curve is fitted and `conf0.r` is printed as this value; recommended for runs at 12 A, see [idpmsm](/docs/hal_components/idpmsm.md)). `idpmsm0.auto_step` (default 4.2 = all steps without prompt) can be lowered to stop before a step and wait for `idpmsm0.state = 1.2` / `2.2` / `3.2`.
+3. Type:
+
+```python
 link id_pmsm
-```
-
-- Reset STMBL by typing:
-
-```python
-reset
-```
-
-- Start the tuning by typing:
-
-```python
+stop
+start
 fault0.en = 1
 ```
 
-- Append the result (`conf0.r`, `conf0.l`, `conf0.psi`, `conf0.polecount`, `conf0.mot_fb_offset`, opt. `conf0.out_rev`) to your config.
-- Go to [Motor Mechanical Parameters](/docs/getting_started/tuning#motor-mechanical-parameters).
+4. What the motor does:
+    - **r and dead time:** d current dwells at four angles, the rotor aligns and stays. Then a short sine injection for Ld and Lq.
+    - **pole pairs / direction:** the field turns open loop and drags the rotor for 4 s.
+    - **commutation offset:** 2 s hold on the d axis.
+    - **psi:** speed loop to `test_vel / 2` and `test_vel` (mechanical rad/s), 2 s each, then the bridge switches off and the rotor coasts while the back emf is measured.
+5. Append the printed lines, then `fault0.en = 0`, save, `reset`.
 
-## Motor Mechanical Parameters
+| Append | Notes |
+|---|---|
+| `conf0.r` | phase resistance |
+| `conf0.l`, `conf0.lq` | Ld and Lq; only printed if the injection worked |
+| `hv0.drop_k`, `hv0.drop_knee` | dead time compensation curve |
+| `conf0.polecount` | pole pairs |
+| `conf0.mot_fb_offset` | commutation offset |
+| `conf0.com_fb_offset` | only printed with a commutation track (e.g. halls, encf) |
+| `conf0.out_rev = 1` | only if printed |
+| `conf0.psi` | from the back emf map of the coast |
 
-### Manual Tuning
+{{% hint warning %}}
+- `id_pmsm` forces `hv0.drop_k = 0` during the test (the r fit needs the uncompensated loss).
+- A red warning before the `conf0.polecount` line means `fb_switch0.mot_state_fb` was not 3 after the pole pair test: the offsets are then relative to power-up. Index the encoder first.
+- `test_vel` means two things: electrical rad/s in the pole pair test, mechanical rad/s in the psi test. If the pole pair test fails, lower `test_vel` or raise `test_cur`.
+- After a failure the component idles with the bridge off until you disable.
+{{% /hint %}}
+
+Details: [idpmsm](/docs/hal_components/idpmsm.md).
+
+### Advance and Dead Time (id_tune)
+
+Finds `hv0.adv` (commutation advance) and, only with `hv0.drop_knee = 0`, `hv0.drop_k`. Needs all `id_pmsm` results in the config; a correct `conf0.lq` matters.
+
+1. Load off the shaft: the rotor runs at up to 2 x `idtune0.test_vel` (200 rad/s at the default). `reset`.
+2. Type at the console (**never put `link id_tune` in the saved config**: the boot `relink` would chain `idtune0.drop_k_cfg` to its own output):
 
 ```python
-conf0.j
+link id_tune
+stop
+start
+fault0.en = 1
 ```
 
-### Auto Tuning
+3. With `drop_knee = 0`: about 3.5 s of d current square wave (no torque). Then the motor runs speed dwells at 50, 100, 150, 200 rad/s (defaults), repeated until `adv` settles.
+4. Append, then `fault0.en = 0`, save, `reset`.
 
-This takes about 2 minutes. Disconnect the motor from the load. The motor will move between `idm0.min_pos (rad)` and `idm0.max_pos (rad)` with a max velocity of `idm0.max_vel (rad/s)` and a max acceleration of `idm0.max_acc (rad/s^2)`. Follow the green instructions in Servoterm:
+| Append | Notes |
+|---|---|
+| `hv0.adv` | commutation advance [s] |
+| `hv0.drop_k` | only printed with `drop_knee = 0`; otherwise your `id_pmsm` value is kept (a comment says so) |
 
-- Set your config to:
+A failure message pointing at `conf0.polecount`, `conf0.mot_fb_offset` and `out_rev` means the motor stalled; one pointing at `conf0.lq` and `conf0.r` means `adv` did not converge. Details: [idtune](/docs/hal_components/idtune.md).
+
+### Mechanical Parameters (id_mot)
+
+For all motor types once the motor runs with working commutation. Identifies inertia, damping, friction and a constant torque offset (e.g. gravity). Takes about two minutes.
+
+1. Bare motor, no load. The axis moves between `idm0.min_pos` and `idm0.max_pos` (-20 / +20 rad) at up to `idm0.max_vel` (50 rad/s) and `idm0.max_acc` (250 rad/s^2). Leave `idm0.vel_offset` at 0 (it is only for the sensorless `id_sys_sl`).
+2. `reset`, then type:
 
 ```python
-link pid
-link <your_motor_type>
-link <your_feedback_type>
-link misc
 link id_mot
-<your_electrical_parameters>
-```
-
-- Reset STMBL by typing:
-
-```python
-reset
-```
-
-- Start the tuning by typing:
-
-```python
+stop
+start
 fault0.en = 1
 ```
 
-- Append the result (`conf0.j`, `conf0.d`, `conf0.f`, `conf0.o`) to your config.
-- Go to [System Mechanical Parameters](/docs/getting_started/tuning#system-mechanical-parameters).
+3. It starts by itself (`idm0.auto_step` 1.4): five growing ramp rounds, then 45 s of adaptation at full speed followed by speed plateaus at 0.1, 0.25, 0.5 and 1.0 x `max_vel`. A least-squares fit over the plateaus gives `f`, `d` and `o`; `idm0.fit_n` and `idm0.fit_rms` show how many plateau bins it used and how well they fit.
+4. Append, `fault0.en = 0`, save, `reset`.
 
-## System Mechanical Parameters
+| Append | Notes |
+|---|---|
+| `conf0.j` | motor inertia [kg m^2] |
+| `conf0.d` | viscous damping |
+| `conf0.f` | coulomb friction |
+| `conf0.o` | constant torque offset |
 
-You can skip this step if you want to tune the motor without load.
+Details: [idm](/docs/hal_components/idm.md).
 
-### Manual Tuning
+### Load Inertia (id_sys)
 
-```python
-conf0.j_sys
-conf0.j_lpf
-```
-
-### Auto Tuning
-
-This takes about 2 minutes. Connect the motor to the load. The motor will move between `idm0.min_pos (rad)` and `idm0.max_pos (rad)` with a max velocity of `idm0.max_vel (rad/s)` and a max acceleration of `idm0.max_acc (rad/s^2)`. Follow the green instructions in Servoterm:
-
-- Set your config to:
+Optional, with the load coupled. Same component and procedure as `id_mot`, but `conf0.j` must already be in the config; `id_sys` links `id_mot` itself.
 
 ```python
-link pid
-link <your_motor_type>
-link <your_feedback_type>
-link misc
 link id_sys
-<your_electrical_parameters>
-<your_mechanical_parameters>
-```
-
-- Reset STMBL by typing:
-
-```python
-reset
-```
-
-- Start the tuning by typing:
-
-```python
+stop
+start
 fault0.en = 1
 ```
 
-- Append the result (`conf0.j_sys`, `conf0.d`, `conf0.f`, `conf0.o`) to your config.
-- Go to [Control Loop Tuning](/docs/getting_started/tuning#control-loop-tuning).
+Append the printed `conf0.j_sys`, `conf0.o`, `conf0.d`, `conf0.f` (replacing the earlier d, f, o, which were without load). Friction and damping drift with the lubrication state, so run it on a warmed up, lubricated axis.
 
-## Control Loop Tuning
+### Coupling Resonance (id_lpf)
 
-### Manual Tuning
+Optional, with the load coupled through a compliant coupling or belt. Needs `conf0.j` and `conf0.j_sys`. Run it before `id_pid`: `conf0.j_lpf` changes the plant the gains are tuned against. The axis rocks `ids0.ring_pos` (0.2 rad) to either side of where it stands, `ids0.ring_reps` (4) times, and `ids` times the ring in `vel_error`.
 
 ```python
-conf0.pos_bw
-conf0.vel_bw
-conf0.vel_d
+link id_lpf
+stop
+start
+fault0.en = 1
 ```
 
-### Auto Tuning
+Append the printed `conf0.j_lpf` line. If the ring died too fast to time (a well damped coupling), the console prints `conf0.j_lpf = 0` itself; append that, since the conf template sets 100 Hz. If it reports no ring found, either raise `ids0.ring_acc` or `ids0.ring_pos` and rerun, or set `conf0.j_lpf = 0` by hand. `j_lpf` only pays when `conf0.vel_bw` comes near 2 pi x `j_lpf`. Scope wave 1 shows `ids0.ring_sig`, the signal the detector sees. Details: [ids](/docs/hal_components/ids.md).
 
-This takes about 2 minutes. Connect the motor to the load. The motor will move between `ids0.min_pos (rad)` and `ids0.max_pos (rad)` with a max velocity of `ids0.max_vel (rad/s)` and a max acceleration of `ids0.max_acc (rad/s^2)`. Follow the green instructions in Servoterm:
+### Control Loop (id_pid)
 
-- Set your config to:
+Tunes `pos_bw`, `vel_bw`, `vel_d` of the pid loop by moving the axis and searching for the lowest tracking error. Needs `conf0.j` (and `j_sys`, `d`, `f`, `o`, `j_lpf`), `conf0.cur_bw` and `conf0.max_force` in the config. The search starts from the gains already in the config (10 / 100 / 10 where they are 0).
+
+1. The axis moves between `ids0.min_pos` and `ids0.max_pos` (-10 / +10 rad) at up to `ids0.max_vel` (100 rad/s) and `ids0.max_acc` (1000 rad/s^2), capped at `conf0.max_vel` and `conf0.max_acc` when those are set. `vel_bw` is capped at `conf0.cur_bw / ids0.bw_ratio` (7.5: 400 at a `cur_bw` of 3000), since above that the velocity loop mostly amplifies noise; `bw_ratio = 0` removes the cap.
+2. `reset`, then type:
+
+```python
+link id_pid
+stop
+start
+fault0.en = 1
+```
+
+3. It starts by itself with one warm-up cycle, then changes one gain at a time, scoring each step over `ids0.rep` (2) back and forth cycles of 0.8 s (defaults). A step whose torque noise is above `ids0.fb_max` x `conf0.max_force` (5 %) is taken back. Watch `ids0.min_cost` and the gains on the scope.
+4. Append the printed `conf0.pos_bw`, `conf0.vel_bw`, `conf0.vel_d`, `fault0.en = 0`, save, `reset`. The console also prints the torque peak; if it went over `conf0.max_force`, raise `max_force` to the drive's real torque or lower `ids0.max_acc`.
+
+Details: [ids](/docs/hal_components/ids.md). Then go on to [LinuxCNC](/docs/getting_started/linuxcnc.md).
+
+## Induction Motor (ACIM)
+
+### Standstill Test (id_acim)
+
+Measures r (dead time separated), leakage inductance `l` (sigma*Ls), rotor time constant `tr` and `lmr` (Lm^2/Lr), and from the motor plate computes a V/f set. The rotor may stay free: a dc field makes no torque on a cage.
+
+Base config: `link pid` (id_acim uses `pid0.en` and `vel1.vel`), your feedback template if there is an encoder, `link misc`, and `conf0.psi = 0` (an induction motor has no magnet flux). Like `id_pmsm`, the `id_acim` template sets `hv0.drop_k = 0` for the run (the r fit needs the uncompensated loss).
+
+1. `reset`, then type:
+
+```python
+link id_acim
+stop
+start
+idacim0.test_cur = 8 # default; below conf0.max_ac_cur, near the expected id_n is best
+idacim0.n_volt = 380 # plate: line to line rms V
+idacim0.n_freq = 50 # plate: Hz
+idacim0.n_cur = 5 # plate: rms A
+idacim0.n_pp = 2 # plate: pole pairs
+fault0.en = 1
+```
+
+The V/f set needs all four plate pins and a measured `tr`; otherwise it is skipped. With a four wire measured resistance also set `idacim0.r_known`. Set `idacim0.spin = 1` to go straight on to the [rotating test](#rotating-test-optional).
+
+2. The console asks for `idacim0.state = 1.2`. Type it. The test runs r (4 s), leakage (a few s) and the rotor test (d current steps, up to about 15 s at the defaults).
+3. Append the printed lines. Without `spin` the test ends in state 3.0.
+
+| Append | Notes |
+|---|---|
+| `conf0.r` | |
+| `conf0.l` | leakage sigma*Ls: right for `acim_foc` and the observer; with `acim` (acim_ttc) it makes iq fall short at speed |
+| `acim_flux0.tr`, `acim_flux0.lmr` | only printed when `tr` was measured |
+| `conf0.polecount` | V/f set (from `n_pp`) |
+| `vf0.u_n`, `vf0.vel_n`, `vf0.u_boost`, `vf0.boost_vel`, `vf0.slip_n`, `vf0.cur_n` | V/f set, only for the `vf` template |
+| `acim_foc0.id_n` | start value for FOC; the rotating test refines it |
+| `acim_flux0.tr`, `acim_flux0.i_knee`, `acim_flux0.tr_sat` | only if printed: with `idacim0.knee = 1` the tr knee fit replaces the `tr` above |
+
+{{% hint warning %}}
+- The dead time `drop` in the report is information only; it is **not** a value for `hv0.drop_k`.
+- If `l` failed (printed in red, 1 mH used), measure line to line near 150 Hz with an LCR meter and halve it.
+- `tr` is the rotor's at the test temperature: a hot cage reads shorter. Warnings about edge spread or a slow loop suggest more `idacim0.rot_cycles` or a higher `idacim0.rot_bw`.
+- If the report says so, rerun with `idacim0.test_cur` near the printed `id_n`.
+{{% /hint %}}
+
+### Rotating Test (optional)
+
+Spins the rotor open loop and measures the flux curve and, with an encoder, the inertia. Needs `tr` from the standstill test **in the same enable** (disabling resets `r` and `l`), and `idacim0.n_freq` and `idacim0.n_pp`. Shaft free and unloaded.
+
+1. With `idacim0.spin = 1` it follows the standstill test; otherwise type `idacim0.state = 4` after it finished.
+2. The console asks for `idacim0.state = 4.2`. The field ramps to `idacim0.rot_vel` (0.4) of plate speed (at plate speed per 5 s with `rot_acc = 0`), sweeps the d current down from 1.15 to 0.25 x `id_n` (0.45 without an encoder), then (encoder only) ramps up to 0.8 x plate speed and down for the inertia, and stops. It ends in state 5.0.
+
+| Append | Notes |
+|---|---|
+| `acim_foc0.id_n` | rated magnetizing current |
+| `acim_flux0.lmr`, `acim_flux0.lmr_sat` | replace the standstill `lmr` |
+| `acim_flux0.i_n` | `acim_foc` already links it to `acim_foc0.id_n` |
+| `acim_flux0.i_knee`, `acim_flux0.tr_sat`, `acim_flux0.i_dip`, `acim_flux0.lmr_dip` | only if printed (with an encoder and an accepted magnetizing curve fit) |
+| `conf0.j` | only with an encoder |
+
+A red message that the rotor did not follow: lower `idacim0.rot_acc` or unload the shaft. Friction is printed as a comment only.
+
+### Pole Pairs and Direction
+
+`conf0.out_rev` is only found by the pole pair test, which is started by hand and needs an encoder (it compares the field speed with `vel1.vel`): rotor free, type `idacim0.state = 2`, then `idacim0.state = 2.2`. The field turns at `idacim0.test_vel` for 3 s. Append `conf0.polecount` and, if printed, `conf0.out_rev = 1`.
+
+Details: [idacim](/docs/hal_components/idacim.md).
+
+### Run It with V/f
+
+The [vf](/docs/hal_templates/vf.md) template is a complete config of its own (no pid, no feedback needed):
+
+```python
+link vf
+<conf0 limits>
+conf0.r = ...
+conf0.l = ...
+conf0.polecount = ...
+vf0.u_n = ...
+vf0.vel_n = ...
+vf0.u_boost = ...
+vf0.boost_vel = ...
+vf0.slip_n = ...
+vf0.cur_n = ...
+```
+
+The speed command `vf0.vel_cmd` [rad/s mech] is not linked by the template: set it or link it to your command source. Ramps (`vf0.acc`, `vf0.dec`), stall prevention (`vf0.i_stall`) and damping (`vf0.k_damp`) are set by hand. See [vf](/docs/hal_components/vf.md).
+
+### Run It with V/f and an Encoder
+
+The [vf_enc](/docs/hal_templates/vf_enc.md) template is V/f with encoder slip control (`vf0.enc = 1`). The field runs at the rotor speed from the encoder plus a slip from a speed PI controller, so the speed follows the encoder and the rotor cannot pull out. Link it instead of `vf`, then your feedback template:
+
+```python
+link vf_enc
+link <your_feedback_type>
+<conf0 limits>
+conf0.r = ...
+conf0.l = ...
+conf0.polecount = ...
+vf0.u_n = ...
+vf0.vel_n = ...
+vf0.slip_n = ...
+vf0.cur_n = ...
+vf0.i_stall = ...
+```
+
+- The speed command is `vf0.vel_cmd` [rad/s mech], as with `vf`.
+- `vf0.slip_max` clamps the slip; 0 (default) means 2 x `vf0.slip_n`.
+- `vf0.enc_kp` (default 0.25) and `vf0.enc_ki` (default 5) are the speed PI gains. They were tuned on one spindle; a higher `enc_kp` can make the speed hunt.
+- From standstill the motor starts on the slip frequency alone, so it needs `vf0.u_boost` (the `vf` template sets 12 V).
+- Check the encoder direction before the first run: with `vf0.enc = 0` turn the motor in V/f and compare `vel0.vel` with `vf0.vel`. They must have the same sign; if not, set `conf0.mot_fb_rev`.
+
+See [vf](/docs/hal_components/vf.md).
+
+### Run It with FOC
+
+Rotor flux oriented control on an encoder. `acim_foc` must be linked after `pid`:
 
 ```python
 link pid
-link <your_motor_type>
+link acim_foc
 link <your_feedback_type>
 link misc
-link id_pid
-<your_electrical_parameters>
-<your_mechanical_parameters>
+conf0.r = ...
+conf0.l = ... # leakage from idacim
+conf0.lq = 0
+conf0.psi = 0
+conf0.polecount = ...
+acim_flux0.tr = ...
+acim_flux0.lmr = ...
+acim_flux0.lmr_sat = ... # rotating test
+acim_foc0.id_n = ...
 ```
 
-- Reset STMBL by typing:
+Then continue with [id_mot](#mechanical-parameters-id_mot), [id_sys](#load-inertia-id_sys) and [id_pid](#control-loop-id_pid) as for a PMSM. Optional extras (flux boost `acim_foc0.k_boost`, tr adaptation `acim_flux0.tr_ki`, ...) are listed in the [acim_foc template](/docs/hal_templates/acim_foc.md); they are off by default and not tuned automatically.
+
+The older [acim](/docs/hal_templates/acim.md) template (`acim_ttc`) takes plate values set by hand; `idacim` only prints a hint for `acim_ttc0.vel_n`.
+
+### Field Weakening
+
+Off by default. To enable it with `acim_foc`, add `acim_fw0.duty = hv0.duty`. Optional, by hand:
+
+- `acim_fw0.p_max` [W]: the motor's S1 power, the constant power torque limit. The template multiplies it by `iit0.cur_boost`, the overload headroom.
+- `acim_fw0.ls` (voltage feedforward) and `acim_fw0.ki` (regulator gain) are derived at 0: `ls` = `conf0.l` + `acim_flux0.lmr`, `ki` = 2.5 / `tr`. A value in the config wins.
+
+See [acim_fw](/docs/hal_components/acim_fw.md).
+
+### Speed Limits per Mode
+
+f_el = pp x rpm / 60 is the electrical frequency, w_el = 2 pi f_el in rad/s. Speeds in the configs are mechanical rad/s (rpm = rad/s x 60 / 2 pi).
+
+| Mode | Low end | High end | Limited by | What to set |
+|---|---|---|---|---|
+| V/f (`vf`) | about `vf0.boost_vel` under load, lower on a light one | about `vf0.vel_n` at full torque; above it light loads only | low: r and dead time drop against a small voltage, rated slip. High: the cap `vf0.duty` x `hv0.pwm_volt`; above it flux falls as 1/f, breakdown torque as 1/f^2 | `u_boost`, `i_stall`. **vf has no speed clamp** (`conf0.max_vel` is not linked): limit `vf0.vel_cmd` at its source |
+| FOC, encoder (`acim_foc`) | 0, full torque at standstill | base speed | past base speed the voltage runs out and the currents cannot be held. Low speed smoothness: encoder resolution | `conf0.max_vel` at or below base speed |
+| FOC + field weakening (`acim_fw`) | 0 | in theory base / `acim_fw0.scale_min` (0.1: 10 x base) | torque falls as `p_max` / speed, faster near the leakage limit; encoder count rate; bearings and the motor's rated top speed | `acim_fw0.p_max`, `conf0.max_vel` |
+| Sensorless (`sl_acim`) | `sl_seq0.w_hand` - `hyst` in closed loop; below it only I/f (no speed loop, no torque control), none at standstill | as with an encoder, while f_el stays below about 450 Hz on the F4 observer | emf against `obs0.e_min` (3 V); the F4 rate (5 kHz) and `obs0.max_vel` (3000 rad/s el = 477 Hz). There is no faster observer: an F3 one overran the F3 rt and was removed | `w_hand` where the emf is about 5 x `e_min`; `conf0.max_vel` below about 450 Hz electrical |
+| `acim` (`acim_ttc`) | as FOC | as FOC + field weakening (built in, `acim_ttc0.duty = hv0.duty`) | the angle integrates `vel1.vel`, so its filter lag shows as slip error on ramps | as FOC |
+
+The same limits as stator (electrical) frequency f_el, in Hz, for any motor at 15 kHz PWM. rpm = f_el x 60 / pp, ignoring slip.
+
+| Mode | Usable f_el |
+|---|---|
+| V/f | about 5-10 % of the plate frequency up to the plate frequency at full torque; up to plate f x (`duty` x `pwm_volt` / `u_n`) on light loads |
+| FOC, encoder | 0 Hz to base f_el |
+| FOC + field weakening | 0 Hz to 10 x base in theory; hard ceiling PWM_FREQ / 15 = 1000 Hz |
+| Sensorless | closed loop from (`w_hand` - `hyst`) x pp / 2 pi, I/f below; top about 450 Hz (F4 observer, `obs0.max_vel` 477 Hz, about 10 F4 ticks per period) |
+| `acim` (`acim_ttc`) | as FOC + field weakening |
+
+- Voltage: `hv0.pwm_volt` = dc link / sqrt(3) x duty_max (phase peak), with duty_max 0.91 at 15 kHz (0.94 at 10, 0.88 at 20 kHz).
+- Base speed, where rated flux reaches that voltage: w_el,base = `acim_fw0.duty_setpoint` x `pwm_volt` / (ls x `id_n`), ls = `conf0.l` + `lmr`. Divide by pp for mechanical. The r x I drop takes a few % more.
+- V/f: the voltage cap `vf0.duty` x `pwm_volt` is reached at about `vf0.vel_n` x cap / `vf0.u_n`; above it the flux falls.
+- Sample rates: the F3 current loop runs at PWM_FREQ (build option, 15 kHz default) and gets the angle from the F4 every 200 us (5 kHz), extrapolating it with `hv0.vel` in between. Keep f_el below PWM_FREQ / 15 (1 kHz at 15 kHz: 30000 rpm at pp 2) and, for the F4 observer, about 10 F4 ticks per electrical period.
+- The observer runs on the F4: the F3 rt has no time left for it at the PWM rate (an F3 observer overran the F3 rt and gave fault 9, link timeout).
+- The F3 corrects its own delay: the voltage lands about 1.5 PWM periods after the current sample, and `ls0.pos_v` advances the voltage angle by that (0.11 rad at 1100 rad/s el and 15 kHz). `hv0.adv` covers only the F4 to F3 transport.
+- Current loop: the current rises 10-90 % in about 2.2 / `conf0.cur_bw` (0.7 ms at the template's 3000).
+- Field weakening: flux scale about base / speed, torque limit `p_max` / speed.
+- Sensorless low end: the observer's emf is about w_el x `lmr` x `id_n`. Put `sl_seq0.w_hand` where this is about 5 x `obs0.e_min`: w_el = 5 x `e_min` / (`lmr` x `id_n`).
+
+**Example**, a Fanuc alpha2 spindle (measured on the bench or computed from the formulas above): pp 2, plate 78.4 Hz (2352 rpm), IM06B50GC1, 296 V link, 15 kHz, `id_n` 19 A, ls 14 mH, `lmr` 12.6 mH, `l` 0.92 mH.
+
+- `pwm_volt` = 296 / sqrt(3) x 0.91 = 155 V (computed). Base speed for `acim_fw0.duty_setpoint` 0.8: 0.8 x 155 / (0.014 x 19) = 468 rad/s el = 234 rad/s = 2230 rpm (computed). At the default `duty_setpoint` 0.9 the same formula gives 524 rad/s el = 262 rad/s = 2500 rpm. Measured: duty 0.82 at 246 rad/s (2352 rpm), no load, id 18.8 A.
+- V/f: `u_n` 126.6 V at `vel_n` 246.3; the cap 0.9 x 155 = 140 V is reached near 272 rad/s, 2600 rpm (computed). `u_boost` 3.6 V fades out by `boost_vel` 21 rad/s (200 rpm); rated slip 5.6 rad/s. On the bench V/f has been run only to 140 rad/s.
+- FOC and field weakening: 838 rad/s (8000 rpm) reached in encoder and sensorless mode (measured), flux scale 0.25 / 0.31, id about 5 A, duty peak 0.90, 314 V on the link braking from 838. `p_max` 2200 W gives 2.6 Nm continuous at 838 rad/s, up to 3.1 Nm with the iit0 overload headroom (`iit0.cur_boost` 1.19 on this spindle). f_el 267 Hz there: 56 PWM periods and 19 F4 ticks per electrical period (computed). Above about 7800 rpm the encoder position can jump by 2 counts (measured); the observer's angle error is 0.05 to 0.10 rad at 600 to 800 rad/s (measured). `conf0.max_vel` is 838.
+- Sensorless low end: `w_hand` 30 rad/s (290 rpm), `hyst` 10, so closed loop down to 20 rad/s (190 rpm), I/f below. The emf at 30 rad/s is 60 x 0.0126 x 19 = 14 V, about 5 x `e_min` (computed).
+
+## Sensorless
+
+The observer needs `conf0.r`, `conf0.l`, `conf0.lq`, `conf0.polecount` (and `hv0.adv`) from the identification above. The start-up and observer settings are **not** auto-tuned; set them by hand.
+
+### PMSM
+
+1. Identify with the encoder (`id_pmsm`, `id_tune`).
+2. Check the observer on the encoder: base config plus `link obs_check`, run the motor normally and scope `obs0.pos_err` (wave0). It should stay near 0; an error growing with speed is timing, trimmed by `hv0.adv`.
+3. Run sensorless with `link pid`, `link pmsm`, `link sl_pmsm` (the encoder stays for `fault0.fb_ready` and the check `obs0.chk_err`). Set `sl_seq0.i_f` (start current), `sl_seq0.acc` (100 rad/s^2) and `obs0.bw` (100). `sl_seq0.w_hand` 0 derives the handover speed from `conf0.psi` (linked by `sl_pmsm`) where the emf is 5 x `obs0.e_min`, and `hyst` 0 is `w_hand` / 3. The scope shows `sl_seq0.state`, `obs0.chk_err`, `obs0.vel_m`, `hv0.iq_fb`.
+
+### ACIM
+
+1. Identify with `id_acim` (with the rotating test for `id_n`, `lmr_sat`, and `conf0.j` if an encoder is available).
+2. Config: `link pid`, `link acim_foc`, `link sl_acim`, with `conf0.lq = 0`. The template links `sl_seq0.i_f = acim_foc0.id_n`; `sl_seq0.align_time` 0 is 3 x `acim_flux0.tr`, `w_hand` 0 is where the emf is 5 x `obs0.e_min` (flux `lmr` x `i_f`), `hyst` 0 is `w_hand` / 3. Set `obs0.bw`, and override any of these in the config if the start needs it. `sl_acim` turns the tr MRAS off (`acim_flux0.tr_ki = 0`).
+3. Optional, with a spindle encoder: `sl_seq0.vel_enc = vel1.vel`, `sl_seq0.enc_tol = 1`, then `acim_flux0.tr_ks = 1` trims `tr` from the slip error.
+4. Load inertia without encoder (`id_sys_sl`): needs `conf0.j` in the config. First `sl_seq0.acc` must be at least `idm0.max_acc` (250), or the ramp cuts the profile. Then:
 
 ```python
-reset
-```
-
-- Start the tuning by typing:
-
-```python
+link id_sys_sl
+stop
+start
+sl_seq0.acc = 250
 fault0.en = 1
 ```
 
-- Append the result (`conf0.pos_bw`, `conf0.vel_bw`, `conf0.vel_d`) to your config.
-- Go to [Cmd](/docs/getting_started/cmd.md).
+The drive starts sensorless; `idm` starts once `pid` is enabled after the handover and sweeps 50 to 200 rad/s in one direction (`idm0.vel_offset = 125`, `idm0.max_vel = 75`) for about 2 minutes. Append `conf0.j_sys` and `conf0.d`. `conf0.f` and `conf0.o` are both a constant torque here and split arbitrarily: only their sum is meaningful, take `f` from an encoder run.
+
+Details: [sl_seq](/docs/hal_components/sl_seq.md), [obs](/docs/hal_components/obs.md).

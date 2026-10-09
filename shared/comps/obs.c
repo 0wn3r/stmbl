@@ -40,12 +40,19 @@
 * angle and direction (track, or I/f): at standstill the sign of vel is a
 * guess. `track` = 1 copies pos_ref and vel_ref, for a sequencer that hands
 * over to it.
+*
+* `max_vel` (default 3000 rad/s electrical, 477 Hz) clamps vel. On the F4
+* (5 kHz) that is about 10 samples per electrical period, which is also
+* about where the F4 observer runs out. There is no faster path: an F3
+* observer overran the F3 rt on the spindle (fault 9) and was removed, so keep
+* conf0.max_vel below this. On X the angle error stayed flat (0.015-0.021 rad)
+* from 200 to 800 rad/s electrical.
 */
 
 HAL_COMP(obs);
 
 HAL_PIN(r);          // *parameter*, winding resistance [ohm]
-HAL_PIN(r_w);        // *parameter*, d loss growing with speed [ohm per rad/s electrical], r + r_w |vel|, 0 = none
+HAL_PIN(r_w);        // *parameter*, d loss growing with speed [ohm per rad/s electrical], r + r_w * abs(vel), 0 = none
 HAL_PIN(ld);         // *parameter*, d inductance [H] (induction motor: sigma*Ls)
 HAL_PIN(lq);         // *parameter*, q inductance [H], 0 = ld
 HAL_PIN(polecount);  // *parameter*, pole pairs

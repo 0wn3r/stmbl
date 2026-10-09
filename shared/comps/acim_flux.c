@@ -63,7 +63,7 @@
 * Q does not depend on r, so neither does the estimate. A positive residual
 * (times sign(w)) means tr_est is too high; the plant gain is a few thousand VA per second of
 * tr, so tr_ki 0.0001 settles in a few seconds. It adapts only while
-* |iq| > `tr_iq_min` and |w| > `tr_vel_min` (slip must be large enough to
+* abs(iq) > `tr_iq_min` and abs(w) > `tr_vel_min` (slip must be large enough to
 * see) and, with `tr_flux_min` > 0, |i_mr| >= tr_flux_min * i_n (in deep
 * field weakening the residual is dominated by model errors, not tr; 0.95
 * keeps it to the base speed range), holds otherwise, and
@@ -86,7 +86,7 @@
 * In steady state the q voltage is uq = r iq + w (l id + lmr i_mr). With
 * `lmr_ki` > 0 the relative residual of that, (uq - r iq - w (l id + lmr
 * i_mr)) / (w lmr i_mr), trims lmr at lmr_ki [1/s], while |w| > tr_vel_min,
-* |i_mr| > 20 % of i_n (or 1 A) and the flux is settled (|id - i_mr| < 5 %
+* abs(i_mr) > 20 % of i_n (or 1 A) and the flux is settled (abs(id - i_mr) < 5 %
 * of i_mr). It needs `r` (conf0.r) and stays within 0.7 to 1.4 times `lmr`.
 * `lmr_est` is the trimmed rated value; saturation still applies on top.
 */
@@ -109,8 +109,8 @@ HAL_PIN(slip);       // *output*, slip [rad/s electrical]
 HAL_PIN(torque);     // *output*, estimated torque [Nm]
 
 HAL_PIN(tr_ki);      // *parameter*, tr adaptation gain [1/(VA s)], 0 = off
-HAL_PIN(tr_iq_min);  // *parameter*, adapt only above this |iq| [A]
-HAL_PIN(tr_vel_min); // *parameter*, adapt only above this |vel| [rad/s electrical]
+HAL_PIN(tr_iq_min);  // *parameter*, adapt only above this abs(iq) [A]
+HAL_PIN(tr_vel_min); // *parameter*, adapt only above this abs(vel) [rad/s electrical]
 HAL_PIN(l);          // *parameter*, leakage sigma*Ls [H], conf0.l
 HAL_PIN(r_w);        // *parameter*, speed dependent d loss [ohm per rad/s electrical], as obs0.r_w
 HAL_PIN(ud);         // *input*, hv0.ud_fb
@@ -124,7 +124,7 @@ HAL_PIN(tr_act);     // *output*, the tr the model runs on
 HAL_PIN(lmr_act);    // *output*, the lmr the model runs on, to acim_foc0.lmr
 HAL_PIN(q_res);      // *output*, reactive power residual Q - Q_m [VA]
 HAL_PIN(i_knee);     // *parameter*, tr and lmr flat below this i_mr [A], 0 = no knee
-HAL_PIN(tr_flux_min); // *parameter*, adapt only while |i_mr| >= this fraction of i_n, 0 = no limit
+HAL_PIN(tr_flux_min); // *parameter*, adapt only while abs(i_mr) >= this fraction of i_n, 0 = no limit
 HAL_PIN(tr_acc_max); // *parameter*, adapt only below this fraction of max_acc, 0 = no limit
 HAL_PIN(max_acc);    // *parameter*, conf0.max_acc [rad/s^2 mech]
 HAL_PIN(acc);        // *output*, synchronous acceleration, 5 Hz low pass [rad/s^2 mech]
