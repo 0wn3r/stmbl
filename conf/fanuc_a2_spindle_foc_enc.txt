@@ -5,9 +5,8 @@
 # [id] idacim 9 Oct 2026, 16 A, standstill +
 #   rotating test, motor at about 30 C
 # checked 9 Oct 2026, no cutting load:
-# 50 to 400 rad/s, and
-# 838 rad/s (8000 rpm, FW scale 0.30), peak 24 A
-# at the 97.5 rad/s^2 start, no fault
+# 50 to 838 rad/s (8000 rpm, FW scale 0.30),
+# peak 24 A at the 97.5 rad/s^2 start, no fault
 # variant: rotor flux FOC on the encoder (S1)
 link pid
 link acim_foc

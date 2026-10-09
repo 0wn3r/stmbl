@@ -5,9 +5,10 @@
 # [id] idacim 9 Oct 2026, 16 A, standstill +
 #   rotating test, motor at about 30 C
 # checked 9 Oct 2026, no cutting load:
-# I/f start, 50 to
-# 838 rad/s (8000 rpm), stop, peak 25 A, no fault;
-# iq ripple about 8 A rms above 600 rad/s
+# I/f start, 50 to 838 rad/s (8000 rpm) both
+# ways, stop, peak 22 A, no fault. With tr_dip
+# below, iq ripple at 700-838 rad/s is 1.0-1.3 A
+# rms (8.6 A without: tr rises at low flux).
 # variant: rotor flux FOC sensorless (S3): I/f
 # start, observer above w_hand. No encoder.
 link pid
