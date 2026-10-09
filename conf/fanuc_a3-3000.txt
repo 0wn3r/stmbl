@@ -43,7 +43,7 @@ encf0.pos_offset = 0
 linrev0.abs_en = 1
 linrev0.abs_rev = encf0.turns
 linrev0.abs_pos = encf0.pos
-linrev0.abs_state = fb_switch0.mot_state_fb
+linrev0.abs_state = encf0.state
 linrev0.abs_neg = conf0.mot_fb_rev
 # motor
 conf0.polecount = 4 # [id] pole pairs
