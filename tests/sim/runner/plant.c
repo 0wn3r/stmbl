@@ -201,14 +201,26 @@ static double acim_lm(double im, double *tr) {
 }
 // magnetizing current behind a rotor flux magnitude (psi grows with im)
 static double acim_im(double psi, double *lm, double *tr) {
+  // fixed point from the last step's answer: lm moves little per step
+  static double last = 1.0;
+  double im = last;
+  for(int k = 0; k < 6; k++) {
+    im = psi / acim_lm(im, tr);
+  }
+  *lm = acim_lm(im, tr);
+  if(fabs(*lm * im - psi) <= 1e-7 * fmax(psi, 1e-6)) {
+    last = im;
+    return im;
+  }
   double lo = 0.0, hi = 1.0;
   while(acim_lm(hi, tr) * hi < psi && hi < 1e4) hi *= 2.0;
   for(int k = 0; k < 40; k++) {
     double m = 0.5 * (lo + hi);
     if(acim_lm(m, tr) * m < psi) lo = m; else hi = m;
   }
-  double im = 0.5 * (lo + hi);
-  *lm = acim_lm(im, tr);
+  im   = 0.5 * (lo + hi);
+  *lm  = acim_lm(im, tr);
+  last = im;
   return im;
 }
 
