@@ -44,6 +44,7 @@ static param_t P[] = {
     {"udc_r", 0, 0, "link source resistance [ohm]"},
     {"dt_eff", 2.0e-6 * 0.94, 0, "effective dead time [s]"},
     {"dt_i0", 0.3, 0, "phase current where the dead-time loss is 76% of full [A]"},
+    {"dt_shape", 0, 0, "dead-time loss over current: 0 tanh(i/dt_i0), 1 hv.c's curve 1-1/(1+|i|/dt_i0)^2"},
     {"vdrop", 0, 0, "device drop [V]"},
     {"adc_lsb", 0.0176, 0, "current ADC step [A] (3 mOhm shunt, gain 16)"},
     {"adc_noise", 0, 0, "current ADC noise per sample [A rms]"},
@@ -70,6 +71,16 @@ static param_t P[] = {
     {"enc_bits", 22, 0, "encoder bits per turn"},
     {"hv_temp", 40, 0, "IPM case temperature [C]"},
     {"substeps", 16, 0, "integration steps per PWM period"},
+    {"motor", 0, 0, "0 = PMSM, 1 = induction motor (ACIM)"},
+    {"lmr", 0.0124, 0, "ACIM: rotor side magnetizing inductance Lm^2/Lr at i_n [H]"},
+    {"tr", 0.09, 0, "ACIM: rotor time constant at i_n [s]"},
+    {"i_n", 19.5, 0, "ACIM: magnetizing current where lmr and tr hold [A]"},
+    {"i_knee", 0, 0, "ACIM: saturation stops growing below this [A]"},
+    {"lmr_sat", 0, 0, "ACIM: lmr growth at zero flux, as acim_flux0"},
+    {"tr_sat", 0, 0, "ACIM: tr growth at zero flux"},
+    {"i_dip", 0, 0, "ACIM: low induction dip below this [A]"},
+    {"lmr_dip", 0, 0, "ACIM: fraction lmr loses at zero flux"},
+    {"tr_dip", 0, 0, "ACIM: fraction tr loses at zero flux"},
 };
 #define NP (sizeof(P) / sizeof(P[0]))
 
@@ -104,6 +115,8 @@ static double sigma = 1.0, mech_off = 0.0;
 static uint32_t cu, cv, cw, carr = PWM_RES;  // compares in force
 static uint32_t nu, nv, nw, narr = PWM_RES;  // compares for the next period
 static double t_plant;
+static double psa, psb;    // ACIM rotor flux, stationary frame [Vs]
+static double im_now, lm_now, tr_now;
 
 #define HIST 4096
 static double hist_t[HIST], hist_th[HIST];
@@ -111,6 +124,7 @@ static int hist_n;
 
 void plant_init(void) {
   id = iq = thm = wm = thl = wl = tm = ts = 0.0;
+  psa = psb = im_now = 0.0;
   vu = vv = vw = ud = uq = 0.0;
   cu = cv = cw = nu = nv = nw = 0;
   carr = narr = PWM_RES;
@@ -166,6 +180,38 @@ static double th_el(void) {
   return sigma * PV(pp) * (thm + mech_off) + PV(off_err);
 }
 
+// The frame id/iq and ud/uq live in: the rotor for a PMSM, the stator
+// (alpha/beta) for an induction motor
+static int acim(void) {
+  return PV(motor) > 0.5;
+}
+static double th_frame(void) {
+  return acim() ? 0.0 : th_el();
+}
+
+// ACIM saturation, the shape acim_flux uses, as a static curve:
+// psi = lm(im) * im, rotor resistance lm / tr. Returns lm, sets *tr.
+static double acim_lm(double im, double *tr) {
+  double i_n = PV(i_n), i_k = fmin(fmax(PV(i_knee), 0.0), 0.9 * i_n);
+  double x = i_n > 0.0 ? fmin(fmax((i_n - fabs(im)) / (i_n - i_k), 0.0), 1.0) : 0.0;
+  double y = PV(i_dip) > 0.0 ? fmin(fmax((PV(i_dip) - fabs(im)) / PV(i_dip), 0.0), 1.0) : 0.0;
+  double kd = fmax(1.0 - PV(lmr_dip) * y, 0.1);
+  *tr = PV(tr) * fmax(1.0 + PV(tr_sat) * x, 0.1) * fmax(1.0 - PV(tr_dip) * y, 0.1);
+  return PV(lmr) * fmax(1.0 + PV(lmr_sat) * x, 0.1) * kd;
+}
+// magnetizing current behind a rotor flux magnitude (psi grows with im)
+static double acim_im(double psi, double *lm, double *tr) {
+  double lo = 0.0, hi = 1.0;
+  while(acim_lm(hi, tr) * hi < psi && hi < 1e4) hi *= 2.0;
+  for(int k = 0; k < 40; k++) {
+    double m = 0.5 * (lo + hi);
+    if(acim_lm(m, tr) * m < psi) lo = m; else hi = m;
+  }
+  double im = 0.5 * (lo + hi);
+  *lm = acim_lm(im, tr);
+  return im;
+}
+
 static void abc(double th, double *iu, double *iv, double *iw) {
   double s = sin(th), c = cos(th);
   double ia = id * c - iq * s;
@@ -182,7 +228,12 @@ static double gauss(void) {
 
 // one phase leg's average voltage to ground over a PWM period
 static double leg(uint32_t cmp, uint32_t arr, double i, double udc) {
-  double soft = tanh(i / fmax(PV(dt_i0), 1e-6));
+  double i0   = fmax(PV(dt_i0), 1e-6);
+  double soft = tanh(i / i0);
+  if(PV(dt_shape) > 0.5) {
+    double q = 1.0 + fabs(i) / i0;
+    soft     = (i > 0.0 ? 1.0 : -1.0) * (1.0 - 1.0 / (q * q));
+  }
   double v;
   if(cmp == 0) {
     v = 0.0;
@@ -211,13 +262,37 @@ static double coulomb(double f, double v, double tn, double j, double h) {
 }
 
 static void deriv(const double *x, double *dx, double h) {
-  // x: id iq thm wm thl wl, in the plant's dq frame
+  // x: id iq thm wm thl wl [psa psb], in the plant's dq frame
   double _id = x[0], _iq = x[1];
   double r = PV(r), ld = PV(ld), lq = PV(lq), psi = PV(psi), pp = PV(pp);
   double we = sigma * pp * x[3];
-  dx[0]     = (ud - r * _id + we * lq * _iq) / ld;
-  dx[1]     = (uq - r * _iq - we * (ld * _id + psi)) / lq;
-  double te = 1.5 * pp * (psi * _iq + (ld - lq) * _id * _iq);
+  double te;
+  if(acim()) {
+    // inverse-gamma model in the stator frame: ld is the leakage sigma*Ls
+    double pa = x[6], pb = x[7], ps = hypot(pa, pb), lm, tr;
+    double im = acim_im(ps, &lm, &tr);
+    double rr = lm / tr;
+    double ima = ps > 1e-9 ? pa / ps * im : 0.0, imb = ps > 1e-9 ? pb / ps * im : 0.0;
+    double dpa = rr * (_id - ima) - we * pb;
+    double dpb = rr * (_iq - imb) + we * pa;
+    if(x[8] > 0.5) {  // phases open: no stator current
+      dx[0] = dx[1] = 0.0;
+    } else {
+      dx[0] = (ud - r * _id - dpa) / ld;
+      dx[1] = (uq - r * _iq - dpb) / ld;
+    }
+    dx[6]  = dpa;
+    dx[7]  = dpb;
+    te     = 1.5 * pp * (pa * _iq - pb * _id);
+    im_now = im;
+    lm_now = lm;
+    tr_now = tr;
+  } else {
+    dx[0] = (ud - r * _id + we * lq * _iq) / ld;
+    dx[1] = (uq - r * _iq - we * (ld * _id + psi)) / lq;
+    te    = 1.5 * pp * (psi * _iq + (ld - lq) * _id * _iq);
+    dx[6] = dx[7] = 0.0;
+  }
   double k = PV(k), c = PV(c), jm = PV(jm), jl = PV(jl);
   double tq = sigma * te;
   if(k > 0.0 && jl > 0.0) {
@@ -242,7 +317,8 @@ static void deriv(const double *x, double *dx, double h) {
 }
 
 static void step(double dt) {
-  double th = th_el();
+  double th = th_frame();
+  int open  = 0;
   double we = sigma * PV(pp) * wm;
   double iu, iv, iw;
   abc(th, &iu, &iv, &iw);
@@ -274,6 +350,10 @@ static void step(double dt) {
   } else {
     // back emf per phase, to see whether the diodes conduct
     double ea = -we * PV(psi) * s, eb = we * PV(psi) * c;
+    if(acim()) {  // rotating rotor flux
+      ea = -we * psb;
+      eb = we * psa;
+    }
     double eu = ea, ev = -0.5 * ea + 0.5 * sqrt(3.0) * eb, ew = -0.5 * ea - 0.5 * sqrt(3.0) * eb;
     double ell = fmax(fabs(eu - ev), fmax(fabs(ev - ew), fabs(ew - eu)));
     if(fabs(iu) < 0.01 && fabs(iv) < 0.01 && fabs(iw) < 0.01 && ell < udc) {
@@ -282,6 +362,7 @@ static void step(double dt) {
       vv      = ev + udc / 2.0;
       vw      = ew + udc / 2.0;
       ud = uq = 0.0;
+      open    = 1;
       goto mech;
     }
     vu = iu > 0.0 ? 0.0 : udc;
@@ -296,9 +377,10 @@ static void step(double dt) {
   }
 mech:;
   // RK2 (midpoint), voltages held
-  double x[6] = {id, iq, thm, wm, thl, wl}, k1[6], k2[6], xm[6];
+  double x[9] = {id, iq, thm, wm, thl, wl, psa, psb, open}, k1[9], k2[9], xm[9];
   deriv(x, k1, dt);
-  for(int i = 0; i < 6; i++) {
+  xm[8] = open;
+  for(int i = 0; i < 8; i++) {
     xm[i] = x[i] + 0.5 * dt * k1[i];
   }
   deriv(xm, k2, dt);
@@ -310,6 +392,8 @@ mech:;
   wm += dt * k2[3];
   thl += dt * k2[4];
   wl += dt * k2[5];
+  psa += dt * k2[6];
+  psb += dt * k2[7];
   // a rigid pair moves as one
   if(!(PV(k) > 0.0 && PV(jl) > 0.0)) {
     thl = thm;
@@ -352,7 +436,7 @@ void plant_sample_adc(void) {
   carr = narr;
 
   double iu, iv, iw;
-  abc(th_el(), &iu, &iv, &iw);
+  abc(th_frame(), &iu, &iv, &iw);
   double lsb = PV(adc_lsb), nz = PV(adc_noise);
   double in[3]  = {iu + PV(adc_off_u), iv + PV(adc_off_v), iw + PV(adc_off_w)};
   double out[3] = {0, 0, 0};
@@ -398,7 +482,7 @@ double plant_get(const char *key, int *ok) {
   if(!strcmp(key, "ud")) return ud;
   if(!strcmp(key, "uq")) return uq;
   if(!strcmp(key, "iu") || !strcmp(key, "iv") || !strcmp(key, "iw")) {
-    abc(th_el(), &iu, &iv, &iw);
+    abc(th_frame(), &iu, &iv, &iw);
     return key[1] == 'u' ? iu : key[1] == 'v' ? iv : iw;
   }
   if(!strcmp(key, "pos")) return thm;
@@ -414,6 +498,15 @@ double plant_get(const char *key, int *ok) {
   if(!strcmp(key, "moe")) return sim_tim8.moe;
   if(!strcmp(key, "brk")) return sim_tim8.brk;
   if(!strcmp(key, "th_el")) return remainder(th_el(), 2.0 * M_PI);
+  if(!strcmp(key, "psi_r")) return hypot(psa, psb);
+  if(!strcmp(key, "i_mr")) return im_now;
+  if(!strcmp(key, "lm")) return lm_now;
+  if(!strcmp(key, "tr_act")) return tr_now;
+  if(!strcmp(key, "th_flux")) return atan2(psb, psa);
+  if(!strcmp(key, "slip")) {  // rotor flux speed minus rotor speed [rad/s el]
+    double rr = tr_now > 0.0 ? lm_now / tr_now : 0.0, ps = hypot(psa, psb);
+    return ps > 1e-6 ? rr * (psa * iq - psb * id) / (ps * ps) : 0.0;
+  }
   for(unsigned i = 0; i < NP; i++) {
     if(!strcmp(P[i].key, key)) {
       return P[i].v;

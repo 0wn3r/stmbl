@@ -352,6 +352,28 @@ static void plant_from_config(void) {
       plant_set(m[i].plant, f4_side.get(p));
     }
   }
+  // an induction motor config: plant follows acim_flux0's model
+  if(f4_side.pin("acim_flux0.lmr") && !plant_was_set("motor")) {
+    plant_set("motor", 1);
+  }
+  if((f4_side.pin("vf0.u_n") || (f4_side.pin("idacim0.r") && !f4_side.pin("idpmsm0.r"))) && !plant_was_set("motor")) {
+    plant_set("motor", 1);
+  }
+  if(plant_get("motor", &(int){0}) > 0.5) {
+    struct {
+      const char *plant, *pin;
+    } a[] = {
+        {"lmr", "acim_flux0.lmr"}, {"tr", "acim_flux0.tr"}, {"i_n", "acim_foc0.id_n"},
+        {"i_knee", "acim_flux0.i_knee"}, {"lmr_sat", "acim_flux0.lmr_sat"}, {"tr_sat", "acim_flux0.tr_sat"},
+        {"i_dip", "acim_flux0.i_dip"}, {"lmr_dip", "acim_flux0.lmr_dip"}, {"tr_dip", "acim_flux0.tr_dip"},
+    };
+    for(unsigned i = 0; i < sizeof(a) / sizeof(a[0]); i++) {
+      void *p = f4_side.pin(a[i].pin);
+      if(p && !plant_was_set(a[i].plant) && (f4_side.get(p) != 0.0 || !strcmp(a[i].plant, "tr_dip"))) {
+        plant_set(a[i].plant, f4_side.get(p));
+      }
+    }
+  }
   if(!plant_was_set("lq")) {
     float lq = f4_get("conf0.lq", 0.0);
     plant_set("lq", lq > 0.0 ? lq : f4_get("conf0.l", 0.0015));
@@ -365,8 +387,10 @@ static void plant_from_config(void) {
 
 // encoder shell: encf0 as fanuc_fb0 links it
 static void *enc_pos, *enc_abs, *enc_turns, *enc_com, *enc_state, *enc_err;
+// or enc_fb0 (sin/cos on the adc) as the spindle links it
+static void *efb_pos, *efb_ipos, *efb_abs, *efb_state, *efb_err, *efb_amp;
 static void encoder_out(void) {
-  if(!enc_pos) {
+  if(!enc_pos && !efb_ipos) {
     return;
   }
   double th;
@@ -378,6 +402,17 @@ static void encoder_out(void) {
   int64_t one  = (int64_t)n;
   int64_t turn = (cnt + half) >= 0 ? (cnt + half) / one : -((-(cnt + half) + one - 1) / one);
   double pos   = (double)(cnt - turn * one) * 2.0 * M_PI / n;  // [-pi, pi)
+  if(efb_ipos) {
+    f4_side.set(efb_ipos, pos);
+    if(efb_pos) f4_side.set(efb_pos, pos);
+    if(efb_abs) f4_side.set(efb_abs, pos);
+    if(efb_state) f4_side.set(efb_state, 3);
+    if(efb_err) f4_side.set(efb_err, 0);
+    if(efb_amp) f4_side.set(efb_amp, 0.5);
+  }
+  if(!enc_pos) {
+    return;
+  }
   f4_side.set(enc_pos, pos);
   if(enc_abs) f4_side.set(enc_abs, pos);
   if(enc_turns) f4_side.set(enc_turns, turn);
@@ -598,6 +633,18 @@ int main(int argc, char **argv) {
   enc_com   = f4_side.pin("encf0.com_pos");
   enc_state = f4_side.pin("encf0.state");
   enc_err   = f4_side.pin("encf0.error");
+  if(f4_side.pin("enc_fb0.ipos") && f4_side.pin("fb_switch0.mot_pos")) {
+    efb_ipos  = f4_side.pin("enc_fb0.ipos");
+    efb_pos   = f4_side.pin("enc_fb0.pos");
+    efb_abs   = f4_side.pin("enc_fb0.abs_pos");
+    efb_state = f4_side.pin("enc_fb0.state");
+    efb_err   = f4_side.pin("enc_fb0.error");
+    efb_amp   = f4_side.pin("enc_fb0.amp");
+    if(!plant_was_set("enc_bits")) {  // lines x interpolation
+      double n = f4_get("enc_fb0.res", 0.0) * f4_get("enc_fb0.ires", 0.0);
+      if(n > 0.0) plant_set("enc_bits", log2(n));
+    }
+  }
   ss_pos    = f4_side.pin("sserial0.pos_cmd");
   if(ss_pos) {
     ss_vel   = need_pin(&f4_side, "sserial0.pos_cmd_d");
