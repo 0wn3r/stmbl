@@ -262,3 +262,7 @@ FORCE:
 #
 .PHONY: all build clean \
         elf hex bin lss sym tbl
+
+# rt functions that run from CCM (8 KB, full) are built for size
+CCM_OBJECTS = $(addprefix $(OBJDIR)/,stm32f303/src/comps/ls.o stm32f303/src/comps/io.o shared/comps/curpid.o shared/comps/idq.o stm32f303/src/comps/hv.o)
+$(CCM_OBJECTS): CFLAGS += -Os
