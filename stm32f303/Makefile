@@ -276,3 +276,6 @@ SIZE_OBJECTS = $(addprefix $(OBJDIR)/,shared/commands.o shared/ringbuf.o \
   stm32f303/src/stm32f3xx_hal_msp.o stm32f303/src/periph.o)
 $(OBJDIR)/lib/%.o: CFLAGS += -Os
 $(SIZE_OBJECTS): CFLAGS += -Os
+# rt functions that run from CCM (8 KB, full) are built for size
+CCM_OBJECTS = $(addprefix $(OBJDIR)/,stm32f303/src/comps/ls.o stm32f303/src/comps/io.o shared/comps/curpid.o shared/comps/idq.o stm32f303/src/comps/hv.o)
+$(CCM_OBJECTS): CFLAGS += -Os
