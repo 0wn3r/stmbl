@@ -325,6 +325,93 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(oc_min) = 5.0;
 }
 
+// Rare paths of rt_func, kept out of CCM (8 KB, full): they run from flash
+// with its wait states, and only while they are taken (the first 201 ticks,
+// an enable edge, a short brake). noinline keeps them out of rt_func.
+
+// current offsets: 100 ticks settle, 100 averaged, then the check
+static void __attribute__((noinline)) io_offset(struct io_ctx_t *ctx, uint32_t a12, uint32_t a34) {
+  if(ctx->offset_count < 100) {
+    ctx->offset_count++;
+  } else if(ctx->offset_count < 100 + 100) {
+    ctx->w_offset += AMP((float)(a12 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
+    ctx->u_offset += AMP((float)(a12 >> 16) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
+    ctx->v_offset += AMP((float)(a34 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
+    ctx->offset_count++;
+  } else {
+    if(ABS(ctx->u_offset) > 5.0 || ABS(ctx->v_offset) > 5.0 || ABS(ctx->w_offset) > 5.0) {
+      ctx->fault      = HV_CURRENT_OFFSET_FAULT;
+      ctx->offset_bad = 1;
+    }
+    ctx->offset_count++;
+  }
+}
+
+static void __attribute__((noinline)) io_enable_edge(struct io_ctx_t *ctx) {
+  // a break while idle is not this enable's: clear it and re-arm the
+  // second shutdown here, nrt may not have run since. A comparator
+  // still active keeps MOE off, which the check below reports.
+  WRITE_REG(TIM8->SR, ~TIM8_BRK_FLAGS);
+  LL_TIM_EnableIT_BRK(TIM8);
+  //set timer master out enable
+  LL_TIM_EnableAllOutputs(TIM8);
+#ifdef HV_EN_PIN
+  //clear driver enable pin
+  LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
+#endif
+  ctx->enabled   = 1;
+  ctx->sbrake_ok = ctx->fault == NO_ERROR;
+}
+
+// short brake, while the f4 asks for it with the bridge disabled
+static void __attribute__((noinline)) io_sbrake(struct io_ctx_t *ctx, struct io_pin_ctx_t *pins) {
+  ctx->enabled = 0;
+  if(ctx->sbrake_ticks == 0) {
+    // a break flag left from before braking is not ours to judge
+    WRITE_REG(TIM8->SR, ~TIM8_BRK_FLAGS);
+  }
+  if(ctx->fault == NO_ERROR) {
+#ifdef HV_FAULT_PIN
+    if(PIN(ignore_fault_pin) <= 0.0 && LL_GPIO_IsInputPinSet(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY) {
+      ctx->fault = HV_FAULT_ERROR;
+    }
+#endif
+    // the comparators clear MOE and set a break flag even while this
+    // code holds MOE off for a chop, so the flag is the trip signal here
+    if(TIM8->SR & TIM8_BRK_FLAGS) {
+      ctx->fault = HV_OVERCURRENT_HW;
+    }
+  }
+
+  if(ctx->fault != NO_ERROR) {
+    // tripped while braking: off for good, and the fault goes to the f4
+    ctx->sbrake_ok    = 0;
+    ctx->sbrake_ticks = 0;
+    PIN(sbrake_on)    = 0.0;
+    LL_TIM_DisableAllOutputs(TIM8);
+#ifdef HV_EN_PIN
+    LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+#endif
+  } else {
+    float lim = PIN(sbrake_cur) > 0.0 ? PIN(sbrake_cur) : (PIN(max_cur) > 0.0 ? PIN(max_cur) : 10.0);
+    lim       = MIN(lim, 0.8 * PIN(oc_lim));
+
+    PIN(sbrake_on) = 1.0;
+#ifdef HV_EN_PIN
+    LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
+#endif
+    // two ticks for hv0's zero compares to reach the timer
+    if(ctx->sbrake_ticks < 2) {
+      ctx->sbrake_ticks++;
+      LL_TIM_DisableAllOutputs(TIM8);
+    } else if(PIN(iabs) > lim) {
+      LL_TIM_DisableAllOutputs(TIM8);
+    } else {
+      LL_TIM_EnableAllOutputs(TIM8);
+    }
+  }
+}
+
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct io_ctx_t *ctx      = (struct io_ctx_t *)ctx_ptr;
   struct io_pin_ctx_t *pins = (struct io_pin_ctx_t *)pin_ptr;
@@ -348,19 +435,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   uint32_t a12 = adc_12_buf[0] + adc_12_buf[1] + adc_12_buf[2];
   uint32_t a34 = adc_34_buf[0] + adc_34_buf[1] + adc_34_buf[2];
 
-  if(ctx->offset_count < 100) {
-    ctx->offset_count++;
-  } else if(ctx->offset_count < 100 + 100) {
-    ctx->w_offset += AMP((float)(a12 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
-    ctx->u_offset += AMP((float)(a12 >> 16) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
-    ctx->v_offset += AMP((float)(a34 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
-    ctx->offset_count++;
-  } else if(ctx->offset_count < 100 + 100 + 1) {
-    if(ABS(ctx->u_offset) > 5.0 || ABS(ctx->v_offset) > 5.0 || ABS(ctx->w_offset) > 5.0) {
-      ctx->fault      = HV_CURRENT_OFFSET_FAULT;
-      ctx->offset_bad = 1;
-    }
-    ctx->offset_count++;
+  if(ctx->offset_count < 100 + 100 + 1) {
+    io_offset(ctx, a12, a34);
   } else {
     PIN(uo)       = ctx->u_offset;
     PIN(vo)       = ctx->v_offset;
@@ -474,19 +550,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(sbrake_on)    = 0.0;
       ctx->sbrake_ticks = 0;
       if(!ctx->enabled) {  //rising edge of enable
-        // a break while idle is not this enable's: clear it and re-arm the
-        // second shutdown here, nrt may not have run since. A comparator
-        // still active keeps MOE off, which the check below reports.
-        WRITE_REG(TIM8->SR, ~TIM8_BRK_FLAGS);
-        LL_TIM_EnableIT_BRK(TIM8);
-        //set timer master out enable
-        LL_TIM_EnableAllOutputs(TIM8);
-#ifdef HV_EN_PIN
-        //clear driver enable pin
-        LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
-#endif
-        ctx->enabled   = 1;
-        ctx->sbrake_ok = ctx->fault == NO_ERROR;
+        io_enable_edge(ctx);
       }
       if(ctx->fault != NO_ERROR) {
         ctx->sbrake_ok = 0;
@@ -518,51 +582,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 #endif
       }
     } else if(PIN(sbrake) > 0.0 && ctx->sbrake_ok && ctx->offset_count > 200) {
-      ctx->enabled = 0;
-      if(ctx->sbrake_ticks == 0) {
-        // a break flag left from before braking is not ours to judge
-        WRITE_REG(TIM8->SR, ~TIM8_BRK_FLAGS);
-      }
-      if(ctx->fault == NO_ERROR) {
-#ifdef HV_FAULT_PIN
-        if(PIN(ignore_fault_pin) <= 0.0 && LL_GPIO_IsInputPinSet(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY) {
-          ctx->fault = HV_FAULT_ERROR;
-        }
-#endif
-        // the comparators clear MOE and set a break flag even while this
-        // code holds MOE off for a chop, so the flag is the trip signal here
-        if(TIM8->SR & TIM8_BRK_FLAGS) {
-          ctx->fault = HV_OVERCURRENT_HW;
-        }
-      }
-
-      if(ctx->fault != NO_ERROR) {
-        // tripped while braking: off for good, and the fault goes to the f4
-        ctx->sbrake_ok    = 0;
-        ctx->sbrake_ticks = 0;
-        PIN(sbrake_on)    = 0.0;
-        LL_TIM_DisableAllOutputs(TIM8);
-#ifdef HV_EN_PIN
-        LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
-#endif
-      } else {
-        float lim = PIN(sbrake_cur) > 0.0 ? PIN(sbrake_cur) : (PIN(max_cur) > 0.0 ? PIN(max_cur) : 10.0);
-        lim       = MIN(lim, 0.8 * PIN(oc_lim));
-
-        PIN(sbrake_on) = 1.0;
-#ifdef HV_EN_PIN
-        LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
-#endif
-        // two ticks for hv0's zero compares to reach the timer
-        if(ctx->sbrake_ticks < 2) {
-          ctx->sbrake_ticks++;
-          LL_TIM_DisableAllOutputs(TIM8);
-        } else if(PIN(iabs) > lim) {
-          LL_TIM_DisableAllOutputs(TIM8);
-        } else {
-          LL_TIM_EnableAllOutputs(TIM8);
-        }
-      }
+      io_sbrake(ctx, pins);
     } else {
       ctx->enabled = 0;
       // a trip during braking stays reported until the request goes away,
