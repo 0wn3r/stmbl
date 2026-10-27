@@ -43,6 +43,14 @@ vel_int0.vel_ip = 1 # vel_cmd extrapolated through the frame
 
 Without them the drive ran about 38 um ahead of LinuxCNC through every acceleration on the example Y axis ([fanuc_a3-3000.txt](https://github.com/freakontrol/stmbl/blob/main/conf/fanuc_a3-3000.txt) sets both). `vel_p` passes more encoder noise into the velocity.
 
+For a spindle that LinuxCNC syncs an axis to (rigid tapping G33.1, threading G33, feed per rev G95) also set:
+
+```python
+sserial0.req_k = 0.05 # position on a filtered request clock
+```
+
+The drive answers each request when it gets it, and the time between requests varies (950-1050 us on a 7i94T at a 1 ms servo period). LinuxCNC takes each reply as the position at its own 1 ms tick, so `spindle.N.revs` steps by `speed x interval`: +-16 % per period at 300 rpm. The synced axis follows those steps and buzzes. With `req_k` the drive reports the position at a filtered request clock instead, so the steps are even; the mean timing is unchanged.
+
 `sserial_uf` (for the `uf` template, velocity feedback only) sets `sserial0.pos_extrap = 0`, so `pos_fb` is not extrapolated from `vel_fb`.
 
 LinuxCNC reads the position at the servo rate, 1 kHz with `SERVO_PERIOD = 1000000` below, well inside the 5 ms timeout.
