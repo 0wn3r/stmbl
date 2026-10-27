@@ -69,6 +69,8 @@ fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 
 Link `iabs_pos` together with `ipos`: once the index is found, the position sent to LinuxCNC comes from `mot_abs_pos`, and the plain `abs_pos` (the template default) has whole counts only.
 
+If the encoder's sin and cos are single ended (each against a fixed reference instead of a true inverted signal), their offsets are not zero and drift with supply and temperature. Then also set `enc_fb0.off_k = 0.0002`: the offsets are tracked while the motor turns (about 1 s), see [enc_fb](/docs/hal_components/enc_fb.md).
+
 ## Resolver  
 
  A [resolver](https://en.wikipedia.org/wiki/Resolver_(electrical)) is an electrical device that converts the angular position of a rotating shaft into an output signal by using magnetic fields and coils. It generates two phase-shifted sine signals that can be used to determine the position and direction of rotation with high precision.  

@@ -33,6 +33,7 @@ conf0.mot_fb_res = 512
 enc_fb0.ires = 32
 fb_switch0.mot_pos = enc_fb0.ipos
 fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
+enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
 # drive: IM06B50GC1 bridge, water cooled
