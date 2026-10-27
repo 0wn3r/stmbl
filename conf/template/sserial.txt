@@ -28,6 +28,7 @@ sserial0.pos_fb = linrev0.fb_out
 sserial0.vel_fb = linrev0.fb_d_out
 # feedback timing: tune per axis, tools/sserial_advance.py
 sserial0.pos_advance = 0.0003
+# spindle that axes sync to (G33, G33.1): sserial0.req_k = 0.05
 rev0.in = vel_int0.pos_out
 rev0.in_d = vel_int0.vel_out
 pid0.vel_ext_cmd = rev0.out_d
