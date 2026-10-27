@@ -64,7 +64,12 @@ With an index (Z) track, `link enc_fb0` sets `enc_fb0.en_index = 1`: at the firs
 link enc_fb0
 conf0.mot_fb_res = 4096
 fb_switch0.mot_pos = enc_fb0.ipos
+fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 ```
+
+Link `iabs_pos` together with `ipos`: once the index is found, the position sent to LinuxCNC comes from `mot_abs_pos`, and the plain `abs_pos` (the template default) has whole counts only.
+
+If the encoder's sin and cos are single ended (each against a fixed reference instead of a true inverted signal), their offsets are not zero and drift with supply and temperature. Then also set `enc_fb0.off_k = 0.0002`: the offsets are tracked while the motor turns (about 1 s), see [enc_fb](/docs/hal_components/enc_fb.md).
 
 ## Resolver  
 
