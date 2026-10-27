@@ -130,7 +130,7 @@ The `help` command prints the live list of commands in the running firmware. Som
 * `bootloader`: enter bootloader
 * `reset`: reset STMBL
 * `about`: show system infos, the watchdog mode and the cause of the last reset (IWDG, WWDG, software, power-on, brown-out, pin, low-power, or none after an entry without a reset such as a DFU leave).
-* `wdg`: show the watchdog mode. The F4 watchdog (IWDG) only runs in hardware mode, set once per board with `wdg_hw`; it is kicked by the nrt, so `stop` does not reset the F4.
+* `wdg`: show the watchdog mode. The F4 watchdog (IWDG) only runs in hardware mode, set once per board with `wdg_hw`; it is kicked by the nrt, so `stop` does not reset the F4. Text output waits at most 20 ms for the host to read and is dropped after that (the watchdog is fed while it waits), so a program that stops reading the port mid `show` loses the rest of the reply instead of resetting the drive.
 * `help`: print this
 * `link`: load config template
 * `hal`: print HAL stats
