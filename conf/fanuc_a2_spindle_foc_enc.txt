@@ -26,11 +26,20 @@
 # variant: rotor flux FOC on the encoder (S1)
 link pid
 link acim_foc
-# encoder: 512 line sin/cos (magnetic) on fb0
+# encoder: 512 line sin/cos (magnetic) on fb0;
+#   iabs_pos keeps the interpolation after the index
+#   amplitude window checked at any speed
 link enc_fb0
 conf0.mot_fb_res = 512
 enc_fb0.ires = 32
 fb_switch0.mot_pos = enc_fb0.ipos
+fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
+enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
+enc_fb0.min_amp = 0.25 # amp 0.40-0.54: signal check at any speed
+enc_fb0.max_amp = 0.9
+enc_fb0.amp_vel = 0
+enc_fb0.amp_inst = 1 # each sample, amp0 lags 2 ms
+enc_fb0.amp_n = 2 # 0.4 ms
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
 # drive: IM06B50GC1 bridge, water cooled

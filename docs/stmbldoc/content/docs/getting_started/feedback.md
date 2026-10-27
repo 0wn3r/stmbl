@@ -64,7 +64,24 @@ With an index (Z) track, `link enc_fb0` sets `enc_fb0.en_index = 1`: at the firs
 link enc_fb0
 conf0.mot_fb_res = 4096
 fb_switch0.mot_pos = enc_fb0.ipos
+fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 ```
+
+Link `iabs_pos` together with `ipos`: once the index is found, the position sent to LinuxCNC comes from `mot_abs_pos`, and the plain `abs_pos` (the template default) has whole counts only.
+
+If the encoder's sin and cos are single ended (each against a fixed reference instead of a true inverted signal), their offsets are not zero and drift with supply and temperature. Then also set `enc_fb0.off_k = 0.0002`: the offsets are tracked while the motor turns (about 1 s), see [enc_fb](/docs/hal_components/enc_fb.md).
+
+By default a missing sin/cos signal is only reported at standstill (`enc_fb0.amp` below `min_amp`). To check it at any speed, also against a too high amplitude (a floating input), set a window around the measured `enc_fb0.amp`, e.g. for the 0.40-0.54 of the Fanuc spindle sensor:
+
+```python
+enc_fb0.min_amp = 0.25
+enc_fb0.max_amp = 0.9
+enc_fb0.amp_vel = 0
+enc_fb0.amp_inst = 1
+enc_fb0.amp_n = 2
+```
+
+`amp_inst = 1` checks each sample: the filtered `adc0.amp0` lags about 2 ms, long enough for a pulled connector to upset the speed loop before the fault.
 
 ## Resolver  
 
