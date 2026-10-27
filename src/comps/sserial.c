@@ -60,12 +60,12 @@
 * - Data from LinuxCNC (12 bytes): `pos_cmd` float (rad), `vel_cmd` float (rad/s), bits out0..out3, enable, index_enable, then `scale` as a 24 bit unsigned count of 1e-4 (0 to about 1677.72). A float does not fit, because hm2's standard sserial module carries 96 bits per direction. A `scale` of 0 keeps the current `scale` pin, any other value sets it, in every good packet.
 * - Data to LinuxCNC (1 status byte, always 0, then 11 bytes):
 * ```c
-* pos_fb  = snap.pos + (pos_extrap > 0 ? snap.vel * (pos_advance + age) : 0); // float, rad, latency compensation
+* pos_fb  = snap.pos + (pos_extrap > 0 ? snap.vel * (pos_advance + age + req_ofs) : 0); // float, rad, latency compensation
 * vel_fb  = snap.vel;                                  // float, rad/s
 * current = CLAMP(current / (30.0 / 128.0), -127, 127); // int8, about 0.234 A per LSB, +-30 A
 * ```
 * followed by the bits in0..in3, fault and index_enable, and the byte `fault_code`: the `fault_code` pin (clamped to 0..255) while fault is set, else 0. The template feeds it `fault0.last_fault`, which keeps its value after the fault is gone, so the byte is gated by the fault bit.
-* - `snap` is the last rt snapshot. `age` is the time since the rt period of that snapshot started (from the rt tick count and the progress of the ADC DMA in the current period, clamped to 0..2 rt periods), so the reported position is extrapolated to the moment the reply is sent, which is up to one rt period after the snapshot. The tick and the DMA flag are read on both sides of the DMA count and the read is repeated if they changed, so a period boundary between the reads cannot make the age one rt period (200 us) too old.
+* - `snap` is the last rt snapshot. `age` is the time since the rt period of that snapshot started (from the rt tick count and the progress of the ADC DMA in the current period, clamped to 0..2 rt periods), so the reported position is extrapolated to the moment the reply is sent, which is up to one rt period after the snapshot. The tick and the DMA flag are read on both sides of the DMA count and the read is repeated if they changed, so a period boundary between the reads cannot make the age one rt period (200 us) too old. `req_ofs` moves the extrapolation from the actual reply time to the filtered request clock (see 8.); it is 0 with `req_k = 0`.
 * - `pos_advance` covers the feedback delays the drive cannot see itself: hm2 timing, encoder transport and the loop following the `vel1` observer. It is tuned per axis: `tools/sserial_advance.py` fits LinuxCNC's ferror = a vel + b acc + c over a move and prints the value. On Y (LinuxCNC, 7i94T, 1 kHz servo) 0.0002 left +89 us (+18 um at 200 mm/s); 0.00029 brought it to -1 us, f-error rms 18 to 11 um.
 * - `pos_extrap = 0` sends `snap.pos` without extrapolation; `sserial_uf.txt` sets it, since `pos_fb` is not linked there (velocity only feedback).
 * - If the request CRC-8 is correct, the reply (with its CRC-8) is sent and `pos_cmd`, `pos_cmd_d` (= vel_cmd), `out0`..`out3` and `enable` (and `scale`, see above) are updated. If not, no reply is sent; the last good command is kept for up to 2 bad packets in a row. From the 3rd bad packet in a row `pos_cmd`, `pos_cmd_d`, `out0`..`out3` and `enable` are set to 0 and `connected = 0`, `error = 1`, until a packet with a correct CRC arrives.
@@ -78,6 +78,13 @@
 *
 * 7. **Clock synchronisation** (`frt`):
 * - On every 4th cycle `clock_scale` is set to 0.9 if more than 5 bytes are waiting, 1.1 if 1 to 4 bytes are waiting, else it stays 1.0. `io0` uses this to lengthen or shorten its timer period by one count, so the drive's frt cycle locks to the request rate of the LinuxCNC servo thread.
+*
+* 8. **Request clock** (`frt`, `req_k`):
+* - The time the drive handles each request varies from period to period: the host's servo thread jitters and the frt picks the packet up in 50 us steps. LinuxCNC takes every reply as the position at its own fixed 1 ms tick, so with the position extrapolated to the actual reply time, each 1 ms step of `pos_fb` carries `vel_fb` x the timing error. On a spindle (7i94T, 1 kHz servo) the request interval ran 950-1050 us, which at 300 rpm moved `spindle.0.revs` by +-16 % per period; Z, synced to it in G33.1, followed that and buzzed.
+* - With `req_k > 0` the reply times go through a critically damped second order filter: the clock moves `req_k` of the way to each reply time and the interval `req_k^2/4` of the error. `pos_fb` is extrapolated to that clock, so the steps follow the filtered interval. The mean offset is 0, so `pos_advance` keeps its value; slow drift (the frt lock to the host) is followed within about `2/req_k` periods.
+* - A reply more than one rt period off the prediction (lost packet, a new servo period) restarts the filter from that reply. `req_k = 0` (default) sends the position at each actual reply time as before.
+* - Host test, 30 us rms jitter plus 50 us steps: the step jitter went from 47 us rms (`req_k = 0`) to 1.7 us (`req_k = 0.05`) and 7 us (0.2).
+* - Set `sserial0.req_k = 0.05` on a spindle that LinuxCNC syncs an axis to (G33, G33.1, G95). `req_int` and `req_ofs` show the filtered interval and the offset in us.
 *
 * {{% hint warning %}}
 * The status byte in front of the data is always 0; the fault code is in the `fault_code` byte of the process data.
@@ -119,6 +126,9 @@ HAL_PIN(index_clear); // *input*, Index found: clears index_enable in the reply
 HAL_PIN(index_out);   // *output*, Index enable request from LinuxCNC
 HAL_PIN(pos_advance); // *parameter*, Extra time the sent position is advanced by vel_fb, on top of the snapshot age (s), template 0.0003
 HAL_PIN(pos_extrap);  // *parameter*, 1 = pos_fb extrapolated by vel_fb to the reply (default), 0 for a velocity only feedback (sserial_uf)
+HAL_PIN(req_k);       // *parameter*, Request clock filter gain, 0 = pos_fb at each actual reply time (default), 0.05 for a spindle that axes are synced to
+HAL_PIN(req_int);     // *output*, Filtered request interval (us)
+HAL_PIN(req_ofs);     // *output*, Time from the actual reply to the filtered request clock that pos_fb is extrapolated to (us)
 
 //TODO: move to ctx
 struct sserial_ctx_t {
@@ -867,24 +877,59 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   fb_snap_i       = i;
 }
 
-// time since the rt period of the last snapshot started [s]
-static float fb_age(uint32_t tick) {
+// time now: rt tick count and the progress into that rt period (0..1)
+static void rt_now(uint32_t *ticks, float *prog) {
   // the adc dma restarts its count at every rt period: its progress is the
   // time into the current one
   // the period may end (TC set, count reloaded) between the reads: read the
   // tick and flag on both sides of the count and retry if they differ, else
   // the old period's count lands on the new period's tick, one period too old
-  uint32_t ticks, ndtr, flag;
+  uint32_t t, ndtr, flag;
   do {
-    ticks = rt_tick;
-    flag  = LL_DMA_IsActiveFlag_TC0(DMA2);
-    ndtr  = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
-  } while(ticks != rt_tick || flag != LL_DMA_IsActiveFlag_TC0(DMA2));
+    t    = rt_tick;
+    flag = LL_DMA_IsActiveFlag_TC0(DMA2);
+    ndtr = LL_DMA_GetDataLength(DMA2, LL_DMA_STREAM_0);
+  } while(t != rt_tick || flag != LL_DMA_IsActiveFlag_TC0(DMA2));
   if(flag) {  // a period started, its irq not yet in
-    ticks++;
+    t++;
   }
-  float age = (float)(ticks - tick) + (float)(ADC_SAMPLES_IN_RT - ndtr) / (float)ADC_SAMPLES_IN_RT;
-  return CLAMP(age, 0.0, 2.0) / (float)RT_FREQ;
+  *ticks = t;
+  *prog  = (float)(ADC_SAMPLES_IN_RT - ndtr) / (float)ADC_SAMPLES_IN_RT;
+}
+
+// request clock: a second order filter on the reply times, in rt periods.
+// ofs = filtered clock - actual reply time, intv = filtered interval.
+// Ticks and progress are kept apart: a float time loses the fraction.
+static struct {
+  uint32_t ticks;
+  float prog, ofs, intv;
+  uint32_t n;  // replies since the last (re)start
+} req;
+
+// offset of the filtered request clock from now [rt periods]
+static float req_clock(uint32_t ticks, float prog, float k) {
+  float dt  = (float)(int32_t)(ticks - req.ticks) + prog - req.prog;
+  req.ticks = ticks;
+  req.prog  = prog;
+  if(k <= 0.0) {
+    req.n = 0;
+  }
+  if(req.n < 2) {  // first reply, or the first interval
+    req.intv = dt;
+    req.ofs  = 0.0;
+    req.n++;
+    return 0.0;
+  }
+  float err = dt - req.ofs - req.intv;  // now - predicted request time
+  if(ABS(err) > 1.0) {                  // lost or late packet, or a new rate: restart from this reply
+    req.ofs = 0.0;
+    req.n   = 1;
+    return 0.0;
+  }
+  // clock moves k of the way to now, interval by k^2/4 (critically damped)
+  req.ofs = -(1.0 - k) * err;
+  req.intv += k * k * 0.25 * err;
+  return req.ofs;
 }
 
 static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -976,8 +1021,16 @@ static void frt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         } while(available < discovery.output + 2 && wait_ticks <= max_waste_ticks);
         //TODO: fault handling on timeout...
         //set input pins
-        uint32_t si     = fb_snap_i;
-        data_in.pos_fb  = fb_snap[si].pos + (PIN(pos_extrap) > 0.0 ? fb_snap[si].vel * (PIN(pos_advance) + fb_age(fb_snap[si].tick)) : 0.0);
+        uint32_t si = fb_snap_i;
+        uint32_t ticks;
+        float prog;
+        rt_now(&ticks, &prog);
+        float ofs = req_clock(ticks, prog, CLAMP(PIN(req_k), 0.0, 1.0));
+        // time from the start of the snapshot's rt period to the filtered request clock
+        float age      = CLAMP((float)(ticks - fb_snap[si].tick) + prog + ofs, -1.0, 2.0) / (float)RT_FREQ;
+        PIN(req_int)   = req.intv * 1e6f / (float)RT_FREQ;
+        PIN(req_ofs)   = ofs * 1e6f / (float)RT_FREQ;
+        data_in.pos_fb = fb_snap[si].pos + (PIN(pos_extrap) > 0.0 ? fb_snap[si].vel * (PIN(pos_advance) + age) : 0.0);
         data_in.vel_fb  = fb_snap[si].vel;
         data_in.current = CLAMP(PIN(current) / (30.0f / 128.0f), -127, 127);
         data_in.in_0    = (PIN(in0) > 0) ? 1 : 0;
