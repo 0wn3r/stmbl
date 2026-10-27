@@ -5,6 +5,7 @@
 #include "usbd_cdc.h"
 #include "usbd_desc.h"
 #include "stm32f4xx.h"
+#include "f4_wdg.h"
 
 #define RX_QUEUE_SIZE 512
 
@@ -179,29 +180,45 @@ int cdc_tx(void *data, uint32_t len) {
   return len;
 }
 
-// Text waits a little for the interrupt to drain, then drops what does not
-// fit rather than overwriting what has not been sent. Without a host it is
-// dropped right away.
+// Text waits up to CDC_TEXT_WAIT_MS for the interrupt to drain, then drops
+// what does not fit rather than overwriting what has not been sent. Without a
+// host it is dropped right away. Once a wait has run out, later text is
+// dropped at once until the ring has room again, so a host that stops
+// reading costs one wait, not one per line. The watchdog is kept fed while
+// waiting: the nrt only kicks it in Wait(), and a long `show` to a host that
+// paused 1.5 s reset the drive (IWDG, bench 27 Oct).
+// The whole length is reported as written: newlib retries a short write.
+#define CDC_TEXT_WAIT_MS 20
+static uint8_t tx_stalled;
+
 int cdc_tx_text(const char *data, int len) {
   if(!cdc_is_connected() || !host_open) {
     return len;  // no host, nothing will drain the ring: drop instead of spinning
   }
-  int sent = 0;
-  for(uint32_t spin = 0; len > 0 && spin < 200000; spin++) {
+  int sent    = 0;
+  int left    = len;
+  uint32_t t0 = HAL_GetTick();
+  while(left > 0) {
     // text leaves TX_SCOPE_ROOM to the scope, so a long reply (list, show)
     // does not stall the samples behind it
     uint32_t room = cdc_tx_room();
     room          = room > TX_SCOPE_ROOM ? room - TX_SCOPE_ROOM : 0;
     if(room == 0) {
+      if(tx_stalled || HAL_GetTick() - t0 >= CDC_TEXT_WAIT_MS) {
+        tx_stalled = 1;
+        break;
+      }
+      wdg_kick();
       continue;
     }
-    uint32_t n = (uint32_t)len < room ? (uint32_t)len : room;
+    tx_stalled = 0;
+    uint32_t n = (uint32_t)left < room ? (uint32_t)left : room;
     cdc_tx_put((const uint8_t *)data + sent, n);
     NVIC_SetPendingIRQ(OTG_FS_IRQn);
     sent += n;
-    len -= n;
+    left -= n;
   }
-  return sent;
+  return len;
 }
 
 // usb_rx_buf is filled from the USB interrupt (cdc_itf_receive -> rb_write)
