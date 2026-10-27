@@ -26,6 +26,7 @@
 * 3. **Index and absolute position (rt)**:
 * - If `en_index > 0` and an index capture happened, the captured count is stored as the offset and `state` becomes 3.
 * - `abs_pos = minus(pos, offset)`. Before the first index the offset is 0.
+* - `iabs_pos = minus(ipos, offset)`, updated with `ipos` (see 4.). A config that links `fb_switch0.mot_pos = enc_fb0.ipos` links `fb_switch0.mot_abs_pos = enc_fb0.iabs_pos` too: `idx_home` (sserial template) reports the absolute position to LinuxCNC once the index is found, and with `abs_pos` the interpolation was lost from then on (spindle, 512 counts/rev at 300 rpm: step sd 0.00047 rev before the index, 0.00106 after, on whole counts).
 * - If `indexprint > 0`, the nrt function prints the captured counter value (`cnt = ...`) once per index event.
 *
 * 4. **Signal check and interpolation (rt)**:
@@ -52,6 +53,7 @@ HAL_PIN(index);       // *output*, Raw level of the Z input (0/1)
 HAL_PIN(a);           // *output*, Raw level of the A input (0/1)
 HAL_PIN(b);           // *output*, Raw level of the B input (0/1)
 HAL_PIN(ipos);        // *output*, Position interpolated with the sin/cos signals (rad, +-pi)
+HAL_PIN(iabs_pos);    // *output*, Interpolated position relative to the index (rad, +-pi), for configs that use ipos
 HAL_PIN(sin);         // *input*, Analog sine signal from adc
 HAL_PIN(cos);         // *input*, Analog cosine signal from adc
 HAL_PIN(quad);        // *input*, Analog quadrant (1..4) from adc
@@ -254,6 +256,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(error) = 0.0;
     PIN(state) = MAX(PIN(state), 1.0);
     PIN(ipos)  = mod(p + ((int)(ir * mod(atan2_fast(s, c) * 4.0 + M_PI) * M_1_PI)) / ir * M_PI / (float)ctx->e_res);
+    PIN(iabs_pos) = minus(PIN(ipos), ctx->absoffset);
   } else {
     PIN(error) = 1.0;
     PIN(state) = 0.0;

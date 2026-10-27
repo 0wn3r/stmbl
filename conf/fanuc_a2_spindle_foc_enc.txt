@@ -26,11 +26,13 @@
 # variant: rotor flux FOC on the encoder (S1)
 link pid
 link acim_foc
-# encoder: 512 line sin/cos (magnetic) on fb0
+# encoder: 512 line sin/cos (magnetic) on fb0;
+#   iabs_pos keeps the interpolation after the index
 link enc_fb0
 conf0.mot_fb_res = 512
 enc_fb0.ires = 32
 fb_switch0.mot_pos = enc_fb0.ipos
+fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
 # drive: IM06B50GC1 bridge, water cooled
