@@ -16,6 +16,7 @@
 * 2. **Ramp**:
 * - `vel_cmd` moves towards the target by at most `max_acc * scale * period` when the absolute velocity increases and `max_dec * scale * period` when it decreases.
 * - The ramp only starts once `en_timer` >= 0.9 * `en_delay`, giving the drive time to enable.
+* - Constant power limit (optional): with `j` > 0 and `p_acc` > 0, the acceleration is also limited to `p_acc / (j * |vel_cmd|)`, and with `p_dec` > 0 the deceleration to `p_dec / (j * |vel_cmd|)` (|vel_cmd| at least 1 rad/s). Above the speed where that falls below `max_acc` the ramp follows what a power limited drive can deliver, instead of running ahead with the speed loop saturated, and `p_dec` caps the regenerated power when braking from high speed. Spindle α2: `j` = conf0.j + conf0.j_sys, `p_acc` about the acim_fw power (p_max * p_boost): at 3.6 kW and 0.0131 kgm2 600 rad/s^2 holds up to about 4400 rpm and 330 rad/s^2 remain at 8000 rpm.
 *
 * 3. **Automatic enable**:
 * - `en_timer` counts up while `vel_cmd` or the target is above 0.01, and down otherwise, clamped to 0..`en_delay`. `en_out` = 1 while `en_timer` > 0, so the drive stays enabled for `en_delay` after reaching standstill.
@@ -42,6 +43,10 @@ HAL_PIN(max_vel);      // *parameter*, Maximum velocity (rad/s)
 HAL_PIN(max_acc);      // *parameter*, Maximum acceleration (rad/s^2)
 HAL_PIN(max_dec);      // *parameter*, Maximum deceleration (rad/s^2), <= 0 uses max_acc
 HAL_PIN(at_speed_th);  // *parameter*, at_speed threshold as fraction of max_vel, default 0.01
+HAL_PIN(j);            // *parameter*, Inertia for the power limit (kgm^2), 0 = no power limit
+HAL_PIN(p_acc);        // *parameter*, Power limit when accelerating (W), 0 = none
+HAL_PIN(p_dec);        // *parameter*, Power limit when decelerating (W), 0 = none
+HAL_PIN(acc);          // *output*, Acceleration limit in use this period (rad/s^2)
 
 // output
 HAL_PIN(vel_cmd);  // *output*, Ramped velocity command (rad/s)
@@ -75,9 +80,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float abs_vel_error = ABS(vel_ext_cmd) - ABS(PIN(vel_cmd));
   float max_acc   = PIN(max_acc) * PIN(scale);
   float max_dec   = (PIN(max_dec) > 0.0 ? PIN(max_dec) : PIN(max_acc)) * PIN(scale);
+  if(PIN(j) > 0.0) {  // constant power: a <= p / (j * |vel|)
+    float jv = PIN(j) * MAX(ABS(PIN(vel_cmd)), 1.0);
+    if(PIN(p_acc) > 0.0) {
+      max_acc = MIN(max_acc, PIN(p_acc) / jv);
+    }
+    if(PIN(p_dec) > 0.0) {
+      max_dec = MIN(max_dec, PIN(p_dec) / jv);
+    }
+  }
+  PIN(acc) = (abs_vel_error > 0.f ? max_acc : max_dec);
 
   if(PIN(en_timer) >= PIN(en_delay) * 0.9) {
-    PIN(vel_cmd) += LIMIT(vel_error, (abs_vel_error > 0.f ? max_acc : max_dec) * period);
+    PIN(vel_cmd) += LIMIT(vel_error, PIN(acc) * period);
   }
 
   if(ABS(vel_ext_cmd - PIN(vel_cmd)) < PIN(max_vel) * PIN(at_speed_th) && ABS(PIN(vel_cmd)) > 0.01) {
