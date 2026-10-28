@@ -107,7 +107,7 @@ HAL_PIN(cur_ff);            // *parameter*, current loop resistance feed forward
 HAL_PIN(cur_ind);           // *parameter*, current loop BEMF / cross coupling feed forward gain
 HAL_PIN(max_y);             // *parameter*, sent to the F3 but unused there
 HAL_PIN(max_cur);           // *parameter*, max phase current (A peak), sent multiplied by scale
-HAL_PIN(dac);         // *parameter*, F3 overcurrent comparator DAC value (0..4095), default 2500 = comparator off (about 350 A); set it with ocdac from a map measured with id_dac on the board
+HAL_PIN(dac);         // *parameter*, F3 overcurrent comparator DAC value (0..4095), default 2500 = comparator off (about 350 A); set it with ocdac from a map measured with id_dac on the board (v4.0 has 18 pF on the sense nodes: check for trips on switching ringing)
 HAL_PIN(drop_k);            // *parameter*, dead time compensation, fraction of the ideal loss, 0 = off, default 0
 HAL_PIN(drop_knee);         // *parameter*, dead time compensation curve knee (A peak), 0 = latched sign
 HAL_PIN(vlim_mode);         // *parameter*, F3 current loop voltage limit, 0 = d first (default), 1 = proportional (curpid)

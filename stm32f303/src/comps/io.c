@@ -71,11 +71,11 @@
 * lim = MIN(lim, 0.8 * oc_lim);
 * ```
 * - Braking is refused after any fault since the last enable (a failed switch plus three low sides on would be another short), and before the first enable after power up.
-* - While braking, the fault pin (unfiltered), a TIM8 break flag (`HV_OVERCURRENT_HW`) and all the checks of item 5 are watched. A fault stops the braking for good (until the next enable edge), turns MOE and the driver off, and stays reported in `fault` until `sbrake` goes to 0, so the F4 sees it and drops the request instead of retrying.
+* - While braking, the fault pin (unfiltered, from the third tick: PB7 reads the FLT/EN node that HV_EN only raised when braking started), a TIM8 break flag (`HV_OVERCURRENT_HW`) and all the checks of item 5 are watched. A fault stops the braking for good (until the next enable edge), turns MOE and the driver off, and stays reported in `fault` until `sbrake` goes to 0, so the F4 sees it and drops the request instead of retrying.
 *
 * 8. **Temperatures, LED and brake** (nrt):
 * - The thermistor voltages are converted into degC with a beta model. `hv_temp` is the IRAM's internal NTC on its own pin (Vth, 47 kOhm at 25 degC, B = 4050, 10 kOhm pullup R115, ADC4 rank 2); it reads in any state, enabled or not. `mot_temp` is the motor sensor (10 kOhm pullup behind a 51k/10k divider, ADC4 rank 3, 85 kOhm at 25 degC, B = 4092). A resistance below 500 Ohm (above about 200 degC) reads as 0 degC. The logarithm is a single precision approximation (error well below 0.001 K).
-* - The first `hv_temp` reading after power up is taken as is, later ones and `mot_temp` are filtered with 1 % new value per nrt call. `hv_temp_ok` is 0 before the first reading and 1 after it.
+* - The first `hv_temp` reading after power up (once rt has sampled the ADC) is taken as is, later ones and `mot_temp` are filtered with 1 % new value per nrt call. `hv_temp_ok` is 0 before the first reading and 1 after it.
 * - The LED blinks `led` times (it is wired to `ls0.fault`), or 2 times while the HAL is not running normally.
 * - If the brake circuit on PB2 reads high at start, `brk_present` is set to 1 and the pin becomes an output. `brk` > 0 then drives it low, otherwise high.
 *
@@ -399,7 +399,9 @@ static void __attribute__((noinline)) io_sbrake(struct io_ctx_t *ctx, struct io_
   }
   if(ctx->fault == NO_ERROR) {
 #ifdef HV_FAULT_PIN
-    if(PIN(ignore_fault_pin) <= 0.0 && LL_GPIO_IsInputPinSet(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY) {
+    // PB7 reads the FLT/EN node HV_EN drives: it was low until this
+    // braking set HV_EN, so the first ticks can't count
+    if(PIN(ignore_fault_pin) <= 0.0 && ctx->sbrake_ticks >= 2 && LL_GPIO_IsInputPinSet(HV_FAULT_PORT, HV_FAULT_PIN) == HV_FAULT_POLARITY) {
       ctx->fault = HV_FAULT_ERROR;
     }
 #endif
@@ -682,11 +684,14 @@ void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     LL_TIM_EnableIT_BRK(TIM8);
   }
 
-  // the IRAM's NTC has its own pin (Vth), so it reads in any state
-  float t = r2temp(HV_R(ADC(ctx->hv_temp >> 16)), HV_NTC_R0, HV_NTC_B);
-  // first reading since power up: start from it, not from 0
-  PIN(hv_temp)    = PIN(hv_temp_ok) > 0.0 ? t * 0.01 + PIN(hv_temp) * 0.99 : t;
-    PIN(hv_temp_ok)  = 1.0;
+  // the IRAM's NTC has its own pin (Vth), so it reads in any state; nothing
+  // until rt has taken the first ADC sample
+  if(ctx->hv_temp) {
+    float t = r2temp(HV_R(ADC(ctx->hv_temp >> 16)), HV_NTC_R0, HV_NTC_B);
+    // first reading since power up: start from it, not from 0
+    PIN(hv_temp)    = PIN(hv_temp_ok) > 0.0 ? t * 0.01 + PIN(hv_temp) * 0.99 : t;
+    PIN(hv_temp_ok) = 1.0;
+  }
   PIN(mot_temp)   = r2temp(MOT_R(MOT_REF(ADC(ctx->mot_temp >> 16))), MOT_NTC_R0, MOT_NTC_B) * 0.01 + PIN(mot_temp) * 0.99;
 }
 

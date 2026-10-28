@@ -18,6 +18,13 @@
 #   DMM R line-line 0.56 ohm (0.28 per phase,
 #   cable included); id_pmsm reads 0.35
 #
+# v4.0 board: holding this axis against gravity
+# takes 10.8 A at standstill, mostly in one leg,
+# which the IRAM256-2067A model takes past its
+# 140 C trip (fault 17, host sim). Use it with a
+# counterweight or a lighter load, and keep the
+# brake on at rest.
+#
 # Run the id_* templates with sserial out of the
 # config: their stop/start (and resets) can drop
 # the F3 link while sserial is linked.
