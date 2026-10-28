@@ -44,7 +44,7 @@ static param_t P[] = {
     {"pp", 4, 0, "pole pairs"},
     {"udc", 295, 0, "link voltage [V]"},
     {"udc_r", 0, 0, "link source resistance [ohm]"},
-    {"dt_eff", 2.0e-6 * 0.94, 0, "effective dead time [s]"},
+    {"dt_eff", PWM_DEADTIME_TICKS / PWM_TIM_CLK * 0.94, 0, "effective dead time [s]"},
     {"dt_i0", 0.3, 0, "phase current where the dead-time loss is 76% of full [A]"},
     {"dt_shape", 0, 0, "dead-time loss over current: 0 tanh(i/dt_i0), 1 hv.c's curve 1-1/(1+|i|/dt_i0)^2"},
     {"vdrop", 0, 0, "device drop [V]"},

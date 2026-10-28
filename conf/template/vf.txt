@@ -63,7 +63,8 @@ vf0.dc_hold = conf0.high_dc_volt
 # standstill boost: covers the dead time drop (no compensation in volt
 # mode) plus r * the magnetizing current, so the encoder path (enc 1) starts
 # from rest on the slip frequency alone. 12 V on the Fanuc alpha2 spindle
-# (dead time drop ~8.7 V there); set it in the config for other motors
+# (dead time drop ~8.7 V there, v5 board, 2 us); the v4.0 board's 1.19 us
+# dead time drops about 6.6 V on d at 295 V. Set it in the config per motor
 vf0.u_boost = 12
 angle0.src = 3
 angle0.vel_cmd = vf0.vel_e

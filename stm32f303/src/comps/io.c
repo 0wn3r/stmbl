@@ -33,7 +33,7 @@
 *
 * 3. **Phase current reconstruction** (rt, `recon` > 0, the default):
 * - A phase's low side shunt only carries its current while its low side is on. From the TIM8 compare values `io` knows each phase's low side half pulse (`ARR - CCR`, in timer ticks): the half after the counter extreme comes from the compare loaded at this extreme (`io` runs before `hv0` rewrites it; read through `PWM_U/V/W`), the half before from last tick's.
-* - A phase is flagged when the half after is shorter than the sample window (`ADC_CUR_WINDOW_TICKS`, the three conversions plus 0.5 us ring down, about 3.6 us) or the half before is shorter than the dead time (2.0 us). This happens near full duty: with `min_off` 3 us the low side is on for only part of the window, and the phase would read low, which the current loop answers by pushing harder (a torque reversal at speed).
+* - A phase is flagged when the half after is shorter than the sample window (`ADC_CUR_WINDOW_TICKS`, the three conversions plus 0.5 us ring down, about 3.6 us) or the half before is shorter than the dead time (1.19 us). This happens near full duty: with `min_off` 3 us the low side is on for only part of the window, and the phase would read low, which the current loop answers by pushing harder (a torque reversal at speed).
 * - The flagged phase is rebuilt from the other two, `iu = -(iv + iw)` and so on (no neutral, so the three sum to 0). The other two are valid nearly always, as a phase at the top of the range forces the others down.
 * - Two phases are flagged together only when both sit within the window of the top, right at the voltage limit: at the default `min_off` about 0.2 % of the electrical turn on the full `pwm_volt` circle, none at 95 % of it. `hv0` does not prevent it. Then only the one with the shortest pulse is rebuilt, from a partner that is marginal but the better of the two, and the other is left as sampled.
 *
@@ -498,8 +498,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     // sits in the half after. So the sample is good only if the half after
     // outlasts the window and the half before outlasts the dead time.
     //
-    // The default min_off of 3 us against the 2.0 us dead time leaves a phase
-    // at maximum duty with its low side on for 1 us inside the sample window
+    // The default min_off of 3 us against the 1.19 us dead time leaves a phase
+    // at maximum duty with its low side on for 1.8 us inside the sample window
     // (ADC_CUR_WINDOW_TICKS), and while its current flows into the bridge the
     // shunt carries nothing during the dead time, so the phase reads low and the loop
     // pushes harder. That is a torque reversal at speed. Raising min_off

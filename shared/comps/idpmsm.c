@@ -62,7 +62,7 @@
 * ```c
 * ud = r * id + V0 * dproj(id, com_pos, knee);
 * ```
-* - State 1.5 (nrt, the fit is too slow for a tick; bridge off): a grid over `knee` from 0.05 to 2.0 A in 0.025 A steps, at each knee a least squares fit of `r` and `V0` (of `V0` alone, with `r = r_known`, when `r_known > 0`); the knee with the smallest residual wins. Results: `dt_v0`, `dt_knee`, `dt_rms` (residual), `dt_top` (largest top dwell current) and `dt_k = dt_v0 / (dt_ideal * dc_volt)` (0 if `dc_volt` is not wired; `dt_ideal = 0` uses 2 us * `pwm_freq`).
+* - State 1.5 (nrt, the fit is too slow for a tick; bridge off): a grid over `knee` from 0.05 to 2.0 A in 0.025 A steps, at each knee a least squares fit of `r` and `V0` (of `V0` alone, with `r = r_known`, when `r_known > 0`); the knee with the smallest residual wins. Results: `dt_v0`, `dt_knee`, `dt_rms` (residual), `dt_top` (largest top dwell current) and `dt_k = dt_v0 / (dt_ideal * dc_volt)` (0 if `dc_volt` is not wired; `dt_ideal = 0` uses 1.19 us * `pwm_freq`).
 * - Choosing `r_known`: with `r_known` > 0 the r stage runs with it from the first dwell (no slope bootstrap), the fit finds only the dead time curve (`V0` -> `drop_k`, and the knee) and the printed `conf0.r` is `r_known`. The drive's own IGBT and shunt slope (a few tens of mOhm) then ends up in the dead time curve, so no drive-fitted `r` is needed for the compensation. Use the per phase resistance of a Y winding, line to line / 2, measured at the drive end of the motor cable with the cable connected (the cable is in the current loop too), cold, with the temperature noted (copper +0.393 %/K; a 6 A run warms the winding about 3 %). A lead-nulled DMM reading is good enough; a four wire reading (bench supply 2-3 A through U-V, voltage sensed at the cable ends, `r = V_UV / (2 I)`, both polarities averaged, all three pairs within 1 %) only tightens the last 1-2 %. A fixed `r_known` is steadier than the fit, which reads high at higher `test_cur` as the winding heats (X: 0.659 at 6 A cold, 0.769 at 12 A), so use it for runs at 12 A.
 * - `r_ok` needs `dt_top > test_cur / 2`, `r > 0.001` and `V0 >= 0`. If yes, `r` takes the fit and `avg_test_volt = r * test_cur + V0 * dproj(test_cur, 0, knee)` (limited to `pwm_volt / 2`) is kept as the bias voltage for the l test and the state goes to 1.3, otherwise straight to the report 1.4.
 *
@@ -153,7 +153,7 @@ HAL_PIN(l_id);      // *output*, resulting current amplitude on d (A)
 HAL_PIN(l_vq);      // *output*, injected voltage amplitude on q (V)
 HAL_PIN(l_iq);      // *output*, resulting current amplitude on q (A)
 HAL_PIN(r_known);   // *parameter*, known winding resistance (ohm): fit only V0 and the knee, 0 = fit r too
-HAL_PIN(dt_ideal);  // *parameter*, ideal dead time volts per link volt, 0 = 2 us * pwm_freq (0.03 at 15 kHz), default 0
+HAL_PIN(dt_ideal);  // *parameter*, ideal dead time volts per link volt, 0 = 1.19 us * pwm_freq (0.018 at 15 kHz), default 0
 HAL_PIN(pwm_freq);  // *input*, F3 PWM and rt rate (Hz), from hv0.pwm_freq, 0 = 15000
 HAL_PIN(dt_v0);     // *output*, fitted per phase dead time volts at the link (V)
 HAL_PIN(dt_knee);   // *output*, fitted knee of the dead time curve (A), result for hv0.drop_knee
@@ -320,7 +320,7 @@ struct idpmsm_ctx_t {
 // hv0.u_fb/v_fb come through io.c's u = a * adc + (1 - a) * u per f3 tick,
 // a = 750 / f (0.05 at 15 kHz, tau 1.33 ms), which the coast undoes
 #define HV_IO_ALPHA(f) (750.0 / (f))
-#define HV_DEADTIME 2.0e-6  // f3 PWM_DEADTIME [s]
+#define HV_DEADTIME 1.194e-6  // f3 PWM_DEADTIME [s], 172 ticks at 144 MHz
 // the f3 sends one word of its state block per packet, so u_fb and v_fb
 // each refresh every HV_STATE_WORDS rt periods: a zero order hold that
 // scales the back emf by sinc(w T / 2)

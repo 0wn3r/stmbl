@@ -15,7 +15,10 @@ expect max hv0.iq_fb < 15.5
 # boost fades on the rotor speed while the field runs slip_max below it, so
 # u_cmd drops to ~5 V, the flux collapses (i_mr 19 -> 1 A) and the rotor
 # hunts +-15 rad/s around zero for ~2 s before it settles. The alpha 0.5
-# plant (28 Oct) hunts +-18.5 rad/s over the same window.
+# plant (28 Oct) hunted +-18.5 rad/s over the same window at u_boost 18 and
+# 2 us dead time. At 1.19 us dead time 18 V over-fluxed it (i_mr 11 A at
+# rest) and it hunted +-55 rad/s without settling; u_boost 11 keeps i_mr
+# near id_n and the rotor stops without a hunt.
 expect absmax plant.vel < 20 from 18.6 to 21
 expect absmax plant.vel < 1 from 21.5
 run 22.5

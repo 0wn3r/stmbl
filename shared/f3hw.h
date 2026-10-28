@@ -29,10 +29,11 @@
 #define PWM_W TIM8->CCR1
 
 #define PWM_TIM_CLK 144000000.0  // TIM8 clock, prescaler 0, CKD div 1
-// BDTR.DTG code, not a tick count: 196 = 0b110_00100 is (32 + 4) * 8 = 288
-// ticks = 2.0us. DTG_TICKS decodes the four DTG ranges into the ticks ARR
-// counts (valid while tim8 runs at CKD = DIV1).
-#define PWM_DEADTIME 196
+// BDTR.DTG code, not a tick count: 150 = 0b10_010110 is (64 + 22) * 2 = 172
+// ticks = 1.19us, about 20 % above the IRAM256-2067A's 1us minimum. DTG_TICKS
+// decodes the four DTG ranges into the ticks ARR counts (valid while tim8 runs
+// at CKD = DIV1).
+#define PWM_DEADTIME 150
 #define DTG_TICKS(v) ((v) < 0x80 ? (v) : (v) < 0xC0 ? ((64 + ((v)&0x3F)) * 2) : (v) < 0xE0 ? ((32 + ((v)&0x1F)) * 8) : ((32 + ((v)&0x1F)) * 16))
 #define PWM_DEADTIME_TICKS DTG_TICKS(PWM_DEADTIME)
 // PWM and F3 rt rate, set at build time (stm32f303/Makefile PWM_FREQ). The
