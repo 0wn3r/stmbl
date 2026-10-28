@@ -4,26 +4,33 @@
 # static load 4.59. Gravity outweighs the friction here, so both readings
 # are positive.
 title id_brk against known stiction and gravity
+# V4 (IRAM256-2067A): gravity, friction and their feedforwards at half the
+# Kira Z, so the standstill current fits the module (the full 10.8 A hold
+# heats one IGBT past the 140 C trip, fault 17). The torques and currents in
+# the text above are the full-load values; the lines below are halved.
 config conf/fanuc_a6-3000.txt
+f4 conf0.o = 2.29535
+f4 conf0.f = 1.34598
+f4 conf0.d = 0.004181
 f4 pid0.hold_en = 0
-plant f=2.691968 fs=0.4 d=0.008362
+plant f=1.34598 fs=0.2 d=0.004181
 f4 link id_brk
 f4 fault0.en = 0
 at 0.1 f4 fault0.en = 1
 # gravity comes once the loop holds: the plant has no brake
-at 0.15 plant load=-4.5907
+at 0.15 plant load=-2.29535
 trace idm0.state idm0.torque_ext pid0.torque_cmd pid0.pos_error plant.pos_mm plant.vel
 expect max fault0.last_fault < 0.5 from 0.15
 expect final idm0.brk_res > 0.5
 expect final idm0.state > 1.45
-expect final idm0.brk_t_pos > 7.55
-expect final idm0.brk_t_pos < 7.85
-expect final idm0.brk_t_neg > 1.35
-expect final idm0.brk_t_neg < 1.65
-expect final idm0.brk_fs > 2.95
-expect final idm0.brk_fs < 3.25
-expect final idm0.brk_o > 4.45
-expect final idm0.brk_o < 4.75
+expect final idm0.brk_t_pos > 3.775
+expect final idm0.brk_t_pos < 3.925
+expect final idm0.brk_t_neg > 0.675
+expect final idm0.brk_t_neg < 0.825
+expect final idm0.brk_fs > 1.475
+expect final idm0.brk_fs < 1.625
+expect final idm0.brk_o > 2.225
+expect final idm0.brk_o < 2.375
 # the axis moves win and comes back; nothing runs away
 expect p2p plant.pos_mm < 0.05 from 1.0
 run 20

@@ -1,17 +1,20 @@
-# idacim rotating tr check against a plant whose tr (0.12) is 1.4x the
-# standstill estimate's region, on the spindle's FOC config.
+# idacim rotating tr check against a plant whose tr (0.093) is 1.33x the
+# config's 0.07, on the alpha 0.5 spindle's FOC config. jl 0.003 (spindle
+# and pulley through the belt): with the bare rotor the ramp through the
+# speed window is shorter than the 3 tr the check waits, and with 0.006 the
+# open loop field outruns the rotor.
 title idacim rotating tr check
-config conf/fanuc_a2_spindle_foc_enc.txt
+config conf/fanuc_a05_spindle_foc_enc.txt
 f4 link id_acim
 f4 fault0.en = 0
-f4 idacim0.test_cur = 16
-f4 idacim0.n_volt = 155
-f4 idacim0.n_freq = 78.4
-f4 idacim0.n_cur = 19
+f4 idacim0.test_cur = 9
+f4 idacim0.n_volt = 85
+f4 idacim0.n_freq = 100
+f4 idacim0.n_cur = 7
 f4 idacim0.n_pp = 2
 f4 idacim0.spin = 1
 f4 idacim0.rot_tr_vel = 600
-plant r=0.19 ld=0.0008 lmr=0.0124 tr=0.12 i_knee=0 lmr_sat=0 tr_sat=0 i_dip=0 lmr_dip=0 tr_dip=0 jm=0.0118 f=0.5 d=0.0013 dt_shape=1 dt_i0=0.85 dt_eff=1.77e-6
+plant jl=0.003 r=1.0 ld=0.0012 lmr=0.0157 tr=0.093 i_knee=0 lmr_sat=0 tr_sat=0 i_dip=0 lmr_dip=0 tr_dip=0 jm=0.0008 f=0.06 d=0.00016 dt_shape=1 dt_i0=0.85 dt_eff=1.77e-6
 at 0.1 f4 fault0.en = 1
 at 0.2 f4 idacim0.state = 1.2
 at 21 f4 idacim0.state = 4.2

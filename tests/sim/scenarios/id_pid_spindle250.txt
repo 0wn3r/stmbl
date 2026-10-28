@@ -1,7 +1,7 @@
 # id_pid (ids) gain search on the spindle config: regression for the gains it
 # keeps (13 Oct: vel_bw may also step down when its first raise fails).
 title id_pid on the spindle config from vel_bw 250, noisy encoder (down search)
-config conf/fanuc_a2_spindle_foc_enc.txt
+config conf/fanuc_a05_spindle_foc_enc.txt
 plant enc_noise=0.001
 f4 fault0.en = 0
 f4 conf0.vel_bw = 250
@@ -13,7 +13,9 @@ at 0.1 f4 fault0.en = 1
 trace ids0.state ids0.param ids0.vel_bw ids0.vel_d ids0.pos_bw ids0.cost ids0.noise plant.vel
 expect max fault0.last_fault < 0.5 from 0.15
 expect final ids0.state > 1.35
-expect final ids0.vel_bw < 150
+# alpha 0.5 plant (28 Oct): the search steps down to 188; the bound only
+# checks that it steps down from 250
+expect final ids0.vel_bw < 230
 expect final ids0.vel_d > 0
 expect final ids0.pos_bw > 0
 expect final ids0.noise > -1

@@ -2,8 +2,8 @@
 # config's (a cold rotor): k = tr_model / tr_true = 0.771, and
 # the frame stay on the flux.
 title flux_obs trim, plant tr 1.3x the model, 600 rad/s
-config conf/fanuc_a2_spindle_foc_enc.txt
-plant tr=0.1314
+config conf/fanuc_a05_spindle_foc_enc.txt
+plant tr=0.091
 f4 link flux_obs
 f4 flux_obs0.kp_s = 20
 f4 flux_obs0.ki_s = 2
@@ -11,7 +11,7 @@ f4 angle0.slip = flux_obs0.slip
 f4 ramp0.vel_ext_cmd = 0
 at 0.02 f4 ramp0.en = 1
 at 0.4 f4 ramp0.vel_ext_cmd = 600
-at 8.0 plant load=-3
+at 8.0 plant load=-0.4
 at 16.0 plant load=0
 at 20.0 f4 ramp0.vel_ext_cmd = 0
 trace plant.vel flux_obs0.k flux_obs0.pos_err flux_obs0.slip acim_flux0.slip hv0.iq_fb plant.th_flux

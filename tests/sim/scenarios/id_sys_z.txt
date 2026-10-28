@@ -5,26 +5,33 @@
 # load 4.59), at id_sys's soft gains instead of the drive's own (idm0.brk 1;
 # the default 0 skips it).
 title id_sys on Z with the breakaway test
+# V4 (IRAM256-2067A): gravity, friction and their feedforwards at half the
+# Kira Z, so the standstill current fits the module (the full 10.8 A hold
+# heats one IGBT past the 140 C trip, fault 17). The torques and currents in
+# the text above are the full-load values; the lines below are halved.
 config conf/fanuc_a6-3000.txt
+f4 conf0.o = 2.29535
+f4 conf0.f = 1.34598
+f4 conf0.d = 0.004181
 f4 pid0.hold_en = 0
-plant f=2.691968 fs=0.4 d=0.008362
+plant f=1.34598 fs=0.2 d=0.004181
 f4 link id_sys
 f4 idm0.brk = 1
 f4 fault0.en = 0
 at 0.1 f4 fault0.en = 1
-at 0.15 plant load=-4.5907
+at 0.15 plant load=-2.29535
 trace idm0.state idm0.inertia idm0.friction idm0.damping idm0.offset idm0.torque_ext pid0.torque_cmd plant.pos_mm
 expect max fault0.last_fault < 0.5 from 0.15
 expect final idm0.state > 1.45
 expect final idm0.brk_res > 0.5
-expect final idm0.offset > 4.45
-expect final idm0.offset < 4.75
-expect final idm0.friction > 2.55
-expect final idm0.friction < 2.85
-expect final idm0.brk_t_pos > 7.55
-expect final idm0.brk_t_pos < 7.85
-expect final idm0.brk_t_neg > 1.35
-expect final idm0.brk_t_neg < 1.65
-expect final idm0.brk_o > 4.45
-expect final idm0.brk_o < 4.75
+expect final idm0.offset > 2.225
+expect final idm0.offset < 2.375
+expect final idm0.friction > 1.275
+expect final idm0.friction < 1.425
+expect final idm0.brk_t_pos > 3.775
+expect final idm0.brk_t_pos < 3.925
+expect final idm0.brk_t_neg > 0.675
+expect final idm0.brk_t_neg < 0.825
+expect final idm0.brk_o > 2.225
+expect final idm0.brk_o < 2.375
 run 220

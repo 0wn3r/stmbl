@@ -1,7 +1,7 @@
 # Spindle FOC on the encoder into field weakening: 0 -> 838 rad/s (8000 rpm)
 # and back to 0. acim_fw0 should hold the duty near its setpoint.
 title Spindle FOC (encoder), field weakening to 838 rad/s
-config conf/fanuc_a2_spindle_foc_enc.txt
+config conf/fanuc_a05_spindle_foc_enc.txt
 f4 ramp0.vel_ext_cmd = 0
 at 0.02 f4 ramp0.en = 1
 at 0.4 f4 ramp0.vel_ext_cmd = 838

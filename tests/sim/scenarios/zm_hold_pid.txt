@@ -8,21 +8,28 @@
 # 0.9 s before the error is inside hold_arm and the hold starts, so a 0.9 s
 # dwell ends before the hold; the rest error is then about hold_arm.
 title Z standstill hold in pid (hold_en 1), no dob, all feedforwards
+# V4 (IRAM256-2067A): gravity, friction and their feedforwards at half the
+# Kira Z, so the standstill current fits the module (the full 10.8 A hold
+# heats one IGBT past the 140 C trip, fault 17). The torques and currents in
+# the text above are the full-load values; the lines below are halved.
 config conf/fanuc_a6-3000.txt
-plant f=2.195 fst=0.894 vs=0.539 fh=0.701 fh_n=0.285 vh=4.66 d=0.0089 fs=0.2 fs_n=-0.6
+f4 conf0.o = 2.29535
+f4 conf0.f = 1.34598
+f4 conf0.d = 0.004181
+plant f=1.0975 fst=0.447 vs=0.539 fh=0.3505 fh_n=0.1425 vh=4.66 d=0.00445 fs=0.1 fs_n=-0.3
 lcnc scale 10
 at 0.05 lcnc enable 1
-at 0.06 plant load=-4.48
+at 0.06 plant load=-2.24
 f4 pid0.hold_en = 1
-f4 pid0.hold_o = 4.59
+f4 pid0.hold_o = 2.295
 at 0.1 lcnc move 20 73 1000
 at 3.1 lcnc move -20 73 1000
 at 6.1 lcnc move 20 73 1000
 trace lcnc.pos plant.pos_mm plant.vel pid0.pos_error pid0.torque_cmd pid0.torque_sum pid0.ff_torque_cmd pid0.hold hv0.iq_fb
 expect max fault0.last_fault < 0.5 from 0.06
-expect mean hv0.iq_fb > 9.5 from 2.95 to 3.1
-expect mean hv0.iq_fb < 12 from 2.95 to 3.1
-expect mean hv0.iq_fb > 9.5 from 5.95 to 6.1
-expect mean hv0.iq_fb < 12 from 5.95 to 6.1
+expect mean hv0.iq_fb > 4.75 from 2.95 to 3.1
+expect mean hv0.iq_fb < 6 from 2.95 to 3.1
+expect mean hv0.iq_fb > 4.75 from 5.95 to 6.1
+expect mean hv0.iq_fb < 6 from 5.95 to 6.1
 expect absmax pid0.pos_error < 0.0002 from 2.95 to 3.1
 run 9.1

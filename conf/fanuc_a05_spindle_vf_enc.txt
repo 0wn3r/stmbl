@@ -1,0 +1,60 @@
+# Fanuc alpha 0.5 induction spindle motor, TENV
+# [plate] A06B-0866-B380, delta, 4 poles, PF 0.65,
+#   85-200 V (85 V at 3000 rpm, 100 Hz), S1 0.55 kW
+#   3000-8000 rpm 7.0 A, S2 15 min 1.1 kW 11 A
+# [plate] B-65152E: S1 0.55 kW 7 A rms (9.9 pk),
+#   15 min / S3 40 % 1.1 kW 11 A rms (15.6 pk),
+#   1.75 Nm S1 / 3.5 Nm S3 to base 3000 rpm,
+#   max 8000 rpm, J 0.00048 kgm2, 1.32 kW max
+#   during acceleration, MZ sensor 64 teeth
+# Fanuc amp SPM-2.2 (200 V), model code 100;
+#   B-65160E/02 app. C (conventional / HRV):
+#   4100 3000/3200, 4102 5500/6524, 4103 5500/0,
+#   4110 2155/1886, 4111 26/361, 4112 652/200,
+#   4113 1000/1900, 4114 10/0, 4115 5/100
+# [est] the manuals give no R, L, Tr or Im: the
+#   electrical values below are estimates from
+#   the plate (flux 0.11 Vs from 85 V at 100 Hz,
+#   magnetizing 7 A pk; S1 torque then needs
+#   6.5 A pk q current, 9.6 A pk in all). Run
+#   idacim on the motor and replace every [est].
+# sized for the v4.0 board: 7 A DC at standstill
+#   keeps the IRAM256-2067A under its derate
+# variant: V/f with encoder slip control.
+# speed: vf0.vel_cmd [rad/s mech]; enable: fault0.en
+link vf_enc
+# encoder: 512 line sin/cos (magnetic) on fb0;
+#   iabs_pos keeps the interpolation after the index
+link enc_fb0
+conf0.mot_fb_res = 512
+enc_fb0.ires = 32
+fb_switch0.mot_pos = enc_fb0.ipos
+fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
+adc0.sin_gain = 1.5 # magnetic encoder, low amp
+adc0.cos_gain = 1.5
+enc_fb0.vel = vel0.vel
+# drive: v4.0 board, IRAM256-2067A (30 A peak)
+link ocdac
+ocdac0.cur = 20 # 1.3 x max_ac_cur, measure the map first
+conf0.max_ac_cur = 15 # [plate] S3 15.6 A pk
+conf0.max_dc_cur = 8 # 1.32 kW at 300 V is 4.4 A
+iit0.cur_boost = 1.515 # S1 9.9 A pk
+iit0.max_time = 900 # S3 for 15 min
+hv0.drop_k = 0.885 # dead time comp, fit per board
+hv0.drop_knee = 0.85
+conf0.polecount = 2 # [plate]
+conf0.max_vel = 838 # [plate] 8000 rpm
+conf0.max_acc = 100 # raise after id_pid
+conf0.out_rev = 1 # [est]
+conf0.r = 1.0 # [est]
+conf0.l = 0.0012 # [est] leakage, Fanuc 4116 scaled on the alpha 2
+conf0.j = 0.0008 # [est] rotor + pulley
+vf0.u_n = 69.4 # [plate] 85 V rms line = 69.4 V phase peak
+vf0.vel_n = 314.16 # [plate] base 3000 rpm
+vf0.u_boost = 18 # [est] r x id_n plus the alpha 2 dead time share
+vf0.boost_vel = 100 # [est] r i matters to about 1/3 of base speed
+vf0.slip_n = 6.6 # [est] iq / (tr id) at S1, rad/s mech
+vf0.cur_n = 9.9 # [plate] S1 pk
+vf0.acc = conf0.max_acc
+vf0.dec = conf0.max_acc
+fault0.en = 0 # set 1 to run

@@ -1,7 +1,7 @@
 # id_pid (ids) gain search on the spindle config: regression for the gains it
 # keeps (13 Oct: vel_bw may also step down when its first raise fails).
 title id_pid on the spindle config
-config conf/fanuc_a2_spindle_foc_enc.txt
+config conf/fanuc_a05_spindle_foc_enc.txt
 f4 fault0.en = 0
 f4 link id_pid
 f4 pid0.pos_en = 1

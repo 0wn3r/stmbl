@@ -30,7 +30,7 @@
 * - At speed the networks average over the electrical cycle; at standstill the leg carrying DC heats on its own, which a mean value model over a sine would understate about 3.3x.
 *
 * {{% hint warning %}}
-* The IRAM256-2067A defaults are first values from its datasheet (May 2014), not yet fitted to its loss and temperature charts or checked on the bench: `rth_i` and `rth_d` are the maximum Rth(J-C) (3.6 and 5.1 K/W), the conduction drops are split from the one point the datasheet gives (7.5 A), `ed` is an estimate (the datasheet folds the diode's recovery into the IGBT's Eon) and the Foster shape is borrowed, as the datasheet has no Zth curve. Check `temp` against the datasheet's Fig. 9 (Tj = 1.26 * T_therm + 27 degC at full load) and trim on the hardware. They do not include the heatsink, which is covered by `case_temp` from the NTC. `pos` is used as linked, without `hv0.adv`.
+* The IRAM256-2067A defaults come from its datasheet (May 2014) and are not yet checked on the bench: `rth_i` and `rth_d` are the maximum Rth(J-C) (3.6 and 5.1 K/W), the conduction drops are split from the one point the table gives (7.5 A, 25 C), `ed` is an estimate (the datasheet folds the diode's recovery into the IGBT's Eon), and `v_tc`, `ei_tc` and `ed_tc` are fitted so the total loss matches the datasheet's loss curves at Tj 150 C (Fig. 6 and 7, within 4 %). The Foster shape is borrowed, as the datasheet has no Zth curve. At standstill one IGBT carries the full phase current: about 18 A DC from 40 C reaches the 125 C derate in a fraction of a second. Check `temp` against the datasheet's Fig. 9 (Tj = 1.26 * T_therm + 27 degC at full load) and trim on the hardware. They do not include the heatsink, which is covered by `case_temp` from the NTC. `pos` is used as linked, without `hv0.adv`.
 * {{% /hint %}}
 */
 
@@ -109,20 +109,22 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   PIN(f_sw)   = 15000.0;  // the f3 PWM rate, the templates link hv0.pwm_freq
   PIN(e_volt) = 300.0;
-  PIN(v_tc)   = 0.00107;  // VCE(on) 1.5 V to 1.7 V between 25 C and 150 C, 7.5 A
+  // the tcs are fitted to the datasheet's loss curves at Tj 150 C (Fig. 6 and 7,
+  // 400 V, PF 0.6, 2-20 kHz, 1-12 A rms), which sit 27 % (conduction) and 67 %
+  // (switching) above the table values; the 25 C values are the table's
+  PIN(v_tc)   = 0.00349;
 
   PIN(vi)    = 0.645;  // 1.5 V at 7.5 A, split 0.43 knee to 0.57 slope
   PIN(ri)    = 0.114;
   PIN(ei)    = 39.5e-6;  // 395 uJ at 400 V, 7.5 A, 25 C, scaled to 300 V
-  PIN(ei_tc) = 0.00354;  // 395 uJ to 570 uJ between 25 C and 150 C
+  PIN(ei_tc) = 0.0113;
   PIN(rth_i) = 3.6;      // maximum Rth(J-C) per IGBT
 
-  // fitted at 150 C (VF 1.4 V at 7.5 A) and divided back by the shared v_tc:
-  // the diode's drop falls with temperature (1.8 V at 25 C)
+  // 1.24 V at 7.5 A and 25 C, so 1.77 V at 150 C with the shared v_tc
   PIN(vd)    = 0.531;
   PIN(rd)    = 0.0939;
   PIN(ed)    = 3.3e-6;  // not in the datasheet: an Erec share of ei
-  PIN(ed_tc) = 0.00665;
+  PIN(ed_tc) = 0.016;  // the 3x clamp at 150 C
   PIN(rth_d) = 5.1;  // maximum Rth(J-C) per diode
 
   // no Zth curve in the datasheet: a module Foster shape to start from
