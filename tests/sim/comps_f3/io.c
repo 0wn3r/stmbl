@@ -65,7 +65,7 @@ HAL_PIN(hv_temp);
 // disabled. hv_temp is read while HV_EN is low: enabled, or short braking.
 // Otherwise the last value is held and decays toward the coolest live reading
 // since power up, since the IPM only heats while switching.
-// hv_temp_ok: 0 never read, 1 live, 2 held.
+// hv_temp_ok: 0 never read, 1 live.
 HAL_PIN(hv_temp_ok);
 //motor temperature
 HAL_PIN(mot_temp);

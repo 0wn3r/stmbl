@@ -133,7 +133,7 @@ HAL_PIN(uq_fb);  // *input*, Q-axis output voltage (V), from curpid0.uq, sent to
 
 // state data to LS
 HAL_PIN(hv_temp);  // *input*, Power stage temperature (degC), from io0, sent to the F4
-HAL_PIN(hv_temp_ok);  // *input*, io0.hv_temp_ok, 0 = never read, 1 = live, 2 = held, sent to the F4
+HAL_PIN(hv_temp_ok);  // *input*, io0.hv_temp_ok, 0 = never read, 1 = live, sent to the F4
 HAL_PIN(mot_temp);  // *input*, Motor temperature (degC), from io0, sent to the F4
 HAL_PIN(core_temp);  // *input*, Core temperature, not measured, sent to the F4 as 0
 HAL_PIN(fault_in);  // *input*, HV fault code from io0.fault, sent to the F4

@@ -79,7 +79,7 @@ HAL_PIN(uq_fb);
 
 // state data to LS
 HAL_PIN(hv_temp);
-HAL_PIN(hv_temp_ok);  // io0.hv_temp_ok: 0 never read, 1 live, 2 held
+HAL_PIN(hv_temp_ok);  // io0.hv_temp_ok: 0 never read, 1 live
 HAL_PIN(mot_temp);
 HAL_PIN(core_temp);  // not measured, sends 0
 HAL_PIN(fault_in);  //fault code send to f4

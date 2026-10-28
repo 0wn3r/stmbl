@@ -14,7 +14,7 @@
 
 /**
 * ## Brief
-* `io` is the hardware I/O of the F3 (HV board). It reads the phase currents, phase voltages, DC link voltage and temperatures from the ADCs, calibrates the current offsets at boot, rebuilds a phase current the ADC could not sample, switches the power stage on and off, raises the HV fault codes (overcurrent, overvoltage, overtemperature, driver fault) and runs the short-circuit brake. It also drives the status LED, the brake output and the DAC reference of the overcurrent comparators. It is loaded by `stm32f303/src/main.c` as `io0` (rt_prio 1, so it runs right after `ls0` and `angle0`). The F3 rt runs once per PWM period, at `PWM_FREQ`, a build option (10, 15 or 20 kHz, default 15 kHz); tick counts below scale with it where noted.
+* `io` is the hardware I/O of the F3 on the STMBL v4.0 board with an IRAM256-2067A power module. It reads the phase currents, phase voltages, DC link voltage and temperatures from the ADCs, calibrates the current offsets at boot, rebuilds a phase current the ADC could not sample, switches the power stage on and off, raises the HV fault codes (overcurrent, overvoltage, overtemperature, driver fault) and runs the short-circuit brake. It also drives the status LED, the brake output and the DAC reference of the overcurrent comparators. It is loaded by `stm32f303/src/main.c` as `io0` (rt_prio 1, so it runs right after `ls0` and `angle0`). The F3 rt runs once per PWM period, at `PWM_FREQ`, a build option (10, 15 or 20 kHz, default 15 kHz); tick counts below scale with it where noted.
 *
 * ## Component Explanation
 *
@@ -43,27 +43,27 @@
 * - Tracking while disabled: the shunt amplifiers drift as the board warms, so the offsets keep following the readings while the bridge is off. Only when `hv_en` = 0 and no short brake, after the bridge has been off for 20 ms, and while every phase reads under 1 A (a motor coasting above the link voltage drives diode current; then the tracking waits). Each tick moves the offsets by `period / ofs_tau` of the reading, a first order low pass, and the enable edge freezes them. An offset that drifts more than `ofs_max` from its boot value raises `HV_CURRENT_OFFSET_FAULT`, which stays until reset as the boot check's does.
 *
 * 5. **Faults** (rt):
-* - `HV_TEMP_ERROR`: `hv_temp` > 110 degC (`ABS_MAX_TEMP`) for about 0.33 ms (`PWM_FREQ / 3000` ticks, 5 at 15 kHz).
+* - `HV_TEMP_ERROR`: `hv_temp` > 100 degC (`ABS_MAX_TEMP`) for about 0.33 ms (`PWM_FREQ / 3000` ticks, 5 at 15 kHz).
 * - `HV_VOLT_ERROR`: `udc` > 400 V (`ABS_MAX_VOLT`) for about 0.33 ms.
-* - `HV_OVERCURRENT_FILTERED`: `iabs` > 0.95 * 35 A for about 0.33 ms, a filtered peak value.
-* - `HV_OVERCURRENT_PEAK`: `iabs` > `oc_lim` in two ticks in a row (one sample over it is noise: a rebuilt phase carries the noise of the other two), or `iabs` > 35 A in a single tick (`ABS_MAX_CURRENT`, the shunt measurement range, not a module rating). This is the main software trip, the one that follows the configured current:
+* - `HV_OVERCURRENT_FILTERED`: `iabs` > 0.95 * 30 A for about 0.33 ms, a filtered peak value.
+* - `HV_OVERCURRENT_PEAK`: `iabs` > `oc_lim` in two ticks in a row (one sample over it is noise: a rebuilt phase carries the noise of the other two), or `iabs` > 30 A in a single tick (`ABS_MAX_CURRENT`, the IRAM256-2067A's peak current; the shunts read to about 37 A). This is the main software trip, the one that follows the configured current:
 * ```c
-* oc_lim = max_cur > 0 ? CLAMP(oc_k * max_cur, oc_min, 35) : 35;
+* oc_lim = max_cur > 0 ? CLAMP(oc_k * max_cur, oc_min, 30) : 30;
 * ```
-* - `HV_FAULT_ERROR`: the driver's fault pin (PB7, active low) for about 0.33 ms while enabled, unless `ignore_fault_pin` is set.
+* - `HV_FAULT_ERROR`: the IRAM's FLT/EN node (PB7, active low: the module pulls it low on an ITRIP fault) for about 0.33 ms while enabled, unless `ignore_fault_pin` is set (the F4's default, as the IRAM pulls it on 15 V ripple too).
 * - `HV_OVERCURRENT_HW`: the bridge is enabled but TIM8's MOE bit has been cleared or a break flag (BIF/B2IF) is set. The flags catch a break that lands between the enable edge's MOE and driver enable writes and leaves MOE set again once the comparator releases. The comparators COMP2 (U, PA7), COMP4 (V, PB0) and COMP1 (W, PA1) compare the phase currents with the DAC reference (`dac`, on DAC1 channel 1, output buffer off) and trip the TIM8 break inputs in hardware (COMP4 on BRK, COMP1 and COMP2 on BRK2), all three through the break digital filter (0xC, fDTS/16 with N = 8, about 0.9 us).
 * - `HV_UNDERVOLT_ERROR`: the same break, but taken with the PVD active: the F3's 3.3 V, which comes from HV, fell below about 2.7 V (PVD level 6, main.c), which breaks TIM8 in hardware through SYSCFG PVD_LOCK. The break interrupt latches it and `io`'s nrt relabels the `HV_OVERCURRENT_HW` that rt latched.
-* - Second shutdown path: the break also raises `TIM8_BRK_IRQHandler` (main.c, NVIC priority 0; the rt on TIM8_UP runs at 1 and SysTick at 14, so it preempts the rt). It clears MOE, sets the driver enable pin PA15 high (the IPM's ITRIP) within about a microsecond instead of at the next rt tick (one to two PWM periods later, 67 to 133 us at 15 kHz), so the IPM turns its gate driver off on its own and holds it off for at least 40 us, and then switches the break interrupt (BIE) off so the still-set flag cannot re-enter. `io`'s nrt re-arms it, with the break flags cleared, whenever the bridge is not enabled and not braking; the fault itself is still reported by rt as above.
+* - Second shutdown path: the break also raises `TIM8_BRK_IRQHandler` (main.c, NVIC priority 0; the rt on TIM8_UP runs at 1 and SysTick at 14, so it preempts the rt). It clears MOE and drives the driver enable pin PA15 low (the IRAM's FLT/EN) within about a microsecond instead of at the next rt tick (one to two PWM periods later, 67 to 133 us at 15 kHz), so the IRAM's own driver turns all six switches off too, and then switches the break interrupt (BIE) off so the still-set flag cannot re-enter. `io`'s nrt re-arms it, with the break flags cleared, whenever the bridge is not enabled and not braking; the fault itself is still reported by rt as above.
 * - The 0.33 ms filters use `err_filter` with a limit of `PWM_FREQ / 3000` (5 at 15 kHz): +1 per tick with the error, -0.001 without (-0.01 for the fault pin), and trip at 99 % of the limit (4.95 at 15 kHz).
 * - `fault` shows the current fault code (0 = none) every tick.
 *
 * 6. **Enable** (rt):
-* - On the rising edge of `hv_en` stale break flags are cleared and the break interrupt is re-armed (a break while idle is not this enable's; a comparator still active keeps MOE off, which the `HV_OVERCURRENT_HW` check reports), then TIM8 MOE is set and the driver enable pin (PA15) is pulled low (enabled). `ls0` holds `hv_en` at 0 until the F4 has sent its whole configuration (after a boot, or after a link gap of 10 ms or more).
-* - When a fault is set while enabled, MOE is cleared (all six outputs go to their idle state at once, as the comparators do in hardware) and the driver enable pin is set high, in the same tick, a fault pin trip included. The fault stays latched until `hv_en` goes to 0.
-* - With `hv_en` = 0 and no braking, MOE is cleared, the driver enable pin is set high, and the fault is cleared (unless `sbrake` is still requested, see below). `HV_CURRENT_OFFSET_FAULT` is the exception: it is found at boot (or by the offset tracking, item 4) and stays until reset, also over later trip codes (an overcurrent from the bad offset cannot hide it).
+* - On the rising edge of `hv_en` stale break flags are cleared and the break interrupt is re-armed (a break while idle is not this enable's; a comparator still active keeps MOE off, which the `HV_OVERCURRENT_HW` check reports), then TIM8 MOE is set and the driver enable pin (PA15, the IRAM's FLT/EN through 1 kOhm) is set high (enabled). `ls0` holds `hv_en` at 0 until the F4 has sent its whole configuration (after a boot, or after a link gap of 10 ms or more).
+* - When a fault is set while enabled, MOE is cleared (all six outputs go to their idle state at once, as the comparators do in hardware) and the driver enable pin is pulled low, in the same tick, a fault pin trip included. The fault stays latched until `hv_en` goes to 0.
+* - With `hv_en` = 0 and no braking, MOE is cleared, the driver enable pin is pulled low, and the fault is cleared (unless `sbrake` is still requested, see below). `HV_CURRENT_OFFSET_FAULT` is the exception: it is found at boot (or by the offset tracking, item 4) and stays until reset, also over later trip codes (an overcurrent from the bad offset cannot hide it).
 *
 * 7. **Short-circuit braking** (rt, while `hv_en` = 0):
-* - When `sbrake` > 0 (from the F4's flag, or from `ls0` on a link loss), the offset calibration is done, and no fault has been seen since the last rising edge of `hv_en`, `io` brakes: `sbrake_on` = 1, which makes `hv0` hold all compares at 0, so all three low sides are on and the back EMF drives current round the windings; the energy stays in the motor. The driver enable pin is pulled low.
+* - When `sbrake` > 0 (from the F4's flag, or from `ls0` on a link loss), the offset calibration is done, and no fault has been seen since the last rising edge of `hv_en`, `io` brakes: `sbrake_on` = 1, which makes `hv0` hold all compares at 0, so all three low sides are on and the back EMF drives current round the windings; the energy stays in the motor. The driver enable pin is set high.
 * - The first 2 ticks keep MOE off, so the zero compares reach the timer first; stale break flags are cleared when braking starts.
 * - After that the current is chopped per tick: `iabs` above the limit clears MOE for the next tick (the current then flows back into the DC link through the diodes), otherwise MOE is set.
 * ```c
@@ -74,14 +74,14 @@
 * - While braking, the fault pin (unfiltered), a TIM8 break flag (`HV_OVERCURRENT_HW`) and all the checks of item 5 are watched. A fault stops the braking for good (until the next enable edge), turns MOE and the driver off, and stays reported in `fault` until `sbrake` goes to 0, so the F4 sees it and drops the request instead of retrying.
 *
 * 8. **Temperatures, LED and brake** (nrt):
-* - The thermistor voltages are converted into degC with a beta model (85 kOhm at 25 degC, B = 4092), for `hv_temp` (3.9 kOhm pullup, ADC4 rank 2) and for `mot_temp` (10 kOhm pullup behind a 51k/10k divider, ADC4 rank 3). A resistance below 500 Ohm (above about 200 degC) reads as 0 degC. The logarithm is a single precision approximation (error well below 0.001 K). `mot_temp` is filtered with 1 % new value per nrt call.
-* - The IPM's NTC shares the VFO pin, which the module pulls low while the driver enable pin (HV_EN) is high. So `hv_temp` is updated only while HV_EN is low and the pin is above 0.3 V: while enabled, more than `PWM_FREQ / 200` rt ticks (5 ms) after the enable edge, or while short-circuit braking, 5 ms (by `tick_ms()`) after braking started (the low sides heat then too). The first reading after power up or after a hold is taken as is, later ones are filtered with 1 % per nrt call.
-* - Otherwise `hv_temp` is held and decays toward the coolest live reading since power up, with a time constant of 90 s, so a fan or derating keyed to it lets go after the bridge stops. Before the first reading `hv_temp` reads 0.
+* - The thermistor voltages are converted into degC with a beta model. `hv_temp` is the IRAM's internal NTC on its own pin (Vth, 47 kOhm at 25 degC, B = 4050, 10 kOhm pullup R115, ADC4 rank 2); it reads in any state, enabled or not. `mot_temp` is the motor sensor (10 kOhm pullup behind a 51k/10k divider, ADC4 rank 3, 85 kOhm at 25 degC, B = 4092). A resistance below 500 Ohm (above about 200 degC) reads as 0 degC. The logarithm is a single precision approximation (error well below 0.001 K).
+* - The first `hv_temp` reading after power up is taken as is, later ones and `mot_temp` are filtered with 1 % new value per nrt call. `hv_temp_ok` is 0 before the first reading and 1 after it.
 * - The LED blinks `led` times (it is wired to `ls0.fault`), or 2 times while the HAL is not running normally.
 * - If the brake circuit on PB2 reads high at start, `brk_present` is set to 1 and the pin becomes an output. `brk` > 0 then drives it low, otherwise high.
 *
 * {{% hint warning %}}
-* - Both thermistors use the same NTC constants. This is specific to the HV board and to the motor sensor it was built for.
+* - The motor sensor constants (`MOT_NTC_R0`, `MOT_NTC_B`) are build time values: set them for your motor's sensor.
+* - The thermistor sits on the module substrate, not on the dies: the datasheet's Fig. 9 gives Tj = 1.26 * T_therm + 27 degC at full load. `ipm` on the F4 models the rise above it.
 * - `brk`, `oc_k`, `oc_min`, `sbrake_cur` and `recon` are not wired in main.c and not carried by the F4 link, so they can only be changed from the F3 terminal.
 * {{% /hint %}}
 */
@@ -100,10 +100,10 @@ HAL_PIN(iabs);  // *output*, Largest absolute phase current (A)
 HAL_PIN(recon);  // *parameter*, > 0 rebuilds a phase that could not be sampled from the other two, default 1
 HAL_PIN(recon_phase);  // *output*, Phase rebuilt this tick, 0 = none, 1 = u, 2 = v, 3 = w
 
-HAL_PIN(max_cur);  // *input*, Rated maximum current for the software trip and the brake chop (A), from ls0.oc_cur, 0 = trip at 35 A only
+HAL_PIN(max_cur);  // *input*, Rated maximum current for the software trip and the brake chop (A), from ls0.oc_cur, 0 = trip at 30 A only
 HAL_PIN(oc_k);  // *parameter*, Software overcurrent trip as a factor on max_cur, default 1.3
 HAL_PIN(oc_min);  // *parameter*, Lower limit for the software overcurrent trip (A), default 5
-HAL_PIN(oc_lim);  // *output*, Software overcurrent trip level in force, at most 35 A (A)
+HAL_PIN(oc_lim);  // *output*, Software overcurrent trip level in force, at most 30 A (A)
 
 //phase voltage
 HAL_PIN(u);  // *output*, U phase voltage (V), low pass filtered
@@ -118,8 +118,8 @@ HAL_PIN(vr);  // *output*, V phase voltage to ground (V), one unfiltered sample 
 HAL_PIN(wr);  // *output*, W phase voltage to ground (V), one unfiltered sample per PWM period, for emf0
 
 //driver temperature
-HAL_PIN(hv_temp);  // *output*, Power stage temperature (degC), live while enabled or braking, else held and decaying
-HAL_PIN(hv_temp_ok);  // *output*, hv_temp state, 0 = never read, 1 = live, 2 = held
+HAL_PIN(hv_temp);     // *output*, Power module NTC temperature (degC)
+HAL_PIN(hv_temp_ok);  // *output*, hv_temp state, 0 = never read, 1 = live
 //motor temperature
 HAL_PIN(mot_temp);  // *output*, Motor temperature (degC)
 
@@ -171,15 +171,11 @@ struct io_ctx_t {
   uint32_t mot_temp;
   uint32_t fault;
   uint32_t enabled;
-  uint32_t en_ticks;  // rt ticks since the enable edge, saturating
   uint32_t sbrake_ok;     // no trip since the last enable edge
   uint32_t sbrake_ticks;  // ticks since braking started
   int32_t lo_u;  // low-side half pulse of the previous tick, in timer ticks
   int32_t lo_v;
   int32_t lo_w;
-  float hv_temp_min;    // coolest live hv_temp since power up, the decay target
-  uint32_t hv_temp_ms;  // tick_ms() at the last nrt pass
-  uint32_t sbrake_ms;   // tick_ms() at the last nrt pass not braking
   uint32_t idle_ticks;  // ticks with the bridge off and no braking, saturating at the settle time
   float u_boot;         // the boot offsets, the reference for ofs_max
   float v_boot;
@@ -189,16 +185,14 @@ struct io_ctx_t {
 #define ARES 4096.0  // analog resolution, 12 bit
 #define ADC(a) ((a) / ARES * AREF)
 
-#define HV_TEMP_PULLUP 3900
+#define HV_TEMP_PULLUP 10000  // R115 to 3.3VP, the IRAM's NTC (Vth) to VSS
 #define HV_R(a) (HV_TEMP_PULLUP / (AREF / (a)-1))
+#define HV_NTC_R0 47000.0  // IRAM256-2067A internal NTC: 47 kOhm at 25 C
+#define HV_NTC_B 4050.0    // B(25/50)
 // u/v/w and udc low pass: 0.05 per tick at 15 kHz, tau 1.33 ms at any rate
 #define IO_LP_K (750.0 / PWM_FREQ)
 // err_filter trip: 5 bad ticks at 15 kHz, about 0.33 ms at any rate
 #define IO_ERR_TICKS (PWM_FREQ / 3000.0)
-#define HV_TEMP_SETTLE (PWM_FREQ / 200)  // rt ticks after enable before VFO counts as released, 5 ms
-#define HV_TEMP_SETTLE_MS 5  // the same after short braking starts [ms]
-#define HV_TEMP_MIN_V 0.3  // below this the pin is held low, not an NTC reading [V]
-#define HV_TEMP_TAU 90.0   // decay of the held value, X cooled 42.4 to 31.2 C in about 140 s [s]
 
 #define MOT_TEMP_PULLUP 10000
 #define MOT_TEMP_PULLMID 51000
@@ -206,6 +200,9 @@ struct io_ctx_t {
 #define MOT_TEMP_REF 15.26
 #define MOT_REF(a) ((a) * (MOT_TEMP_PULLMID + MOT_TEMP_PULLDOWN) / MOT_TEMP_PULLDOWN)
 #define MOT_R(a) (MOT_TEMP_PULLUP / (MOT_TEMP_REF / (a)-1))
+// motor sensor NTC, set for the motors this was built for: change for yours
+#define MOT_NTC_R0 85000.0
+#define MOT_NTC_B 4092.0
 
 #define VOLT(a) ((a) / (ARES) * (AREF) / (VDIVDOWN) * ((VDIVUP) + (VDIVDOWN)))
 //#define TEMP(a) (log10f((a) * (AREF) / (ARES) * (TPULLUP) / ((AREF) - (a) * (AREF) / (ARES))) * (-53.0) + 290.0)
@@ -239,14 +236,13 @@ static float ln_f(float x) {
   return e * 0.69314718 + 2.0 * s * (1.0 + s2 * (1.0 / 3.0 + s2 * (1.0 / 5.0 + s2 * (1.0 / 7.0))));
 }
 
-float r2temp(float r) {
+// NTC resistance to degC with the beta model, r0 at 25 degC
+float r2temp(float r, float r0, float b) {
     if (r < 500)  // above about 200 C, past any data on the part
       return 0;
 
-    const float B  = 4092.0;      // Beta coefficient
     const float T0 = 298.15;      // reference temp in Kelvin (25 degC)
-    const float R0 = 85000.0;     // resistance at 25 degC, in ohms
-    float tempK = 1.0 / (1.0 / T0 + (1.0 / B) * ln_f(r / R0));
+  float tempK = 1.0 / (1.0 / T0 + (1.0 / b) * ln_f(r / r0));
     return tempK - 273.15;        // convert to Celsius
 }
 
@@ -294,12 +290,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->overcurrent_error = 0;
   ctx->fault_pin_error   = 0;
   ctx->hv_temp           = 0;
-  ctx->hv_temp_min       = 0.0;
-  ctx->hv_temp_ms        = tick_ms();
-  ctx->sbrake_ms         = ctx->hv_temp_ms;
   ctx->mot_temp          = 0;
   ctx->enabled           = 0;
-  ctx->en_ticks          = 0;
   PIN(hv_temp_ok)        = 0.0;
   ctx->sbrake_ok         = 0;
   ctx->sbrake_ticks      = 0;
@@ -392,8 +384,7 @@ static void __attribute__((noinline)) io_enable_edge(struct io_ctx_t *ctx) {
   //set timer master out enable
   LL_TIM_EnableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-  //clear driver enable pin
-  LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
+  HV_EN_ON();
 #endif
   ctx->enabled   = 1;
   ctx->sbrake_ok = ctx->fault == NO_ERROR;
@@ -426,7 +417,7 @@ static void __attribute__((noinline)) io_sbrake(struct io_ctx_t *ctx, struct io_
     PIN(sbrake_on)    = 0.0;
     LL_TIM_DisableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-    LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+    HV_EN_OFF();
 #endif
   } else {
     float lim = PIN(sbrake_cur) > 0.0 ? PIN(sbrake_cur) : (PIN(max_cur) > 0.0 ? PIN(max_cur) : 10.0);
@@ -434,7 +425,7 @@ static void __attribute__((noinline)) io_sbrake(struct io_ctx_t *ctx, struct io_
 
     PIN(sbrake_on) = 1.0;
 #ifdef HV_EN_PIN
-    LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN);
+    HV_EN_ON();
 #endif
     // two ticks for hv0's zero compares to reach the timer
     if(ctx->sbrake_ticks < 2) {
@@ -550,11 +541,6 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->lo_w = lo_w;
     PIN(iabs)     = MAX3(ABS(PIN(iu)), ABS(PIN(iv)), ABS(PIN(iw)));
     ctx->hv_temp  = adc_34_buf[1];  // ADC4 rank 2: the second hv_temp sample, settled
-    if(!ctx->enabled) {
-      ctx->en_ticks = 0;
-    } else if(ctx->en_ticks < 0xFFFF) {
-      ctx->en_ticks++;
-    }
     ctx->mot_temp = adc_34_buf[2];  // ADC4 rank 3
 
     if(err_filter(&(ctx->overtemp_error), IO_ERR_TICKS, 0.001, PIN(hv_temp) > ABS_MAX_TEMP)) {
@@ -618,8 +604,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // puts all six outputs in their OSSI idle state at once (RM0316 table 122)
         LL_TIM_DisableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-        //set driver enable pin
-        LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+        HV_EN_OFF();
 #endif
       }
     } else if(PIN(sbrake) > 0.0 && ctx->sbrake_ok && ctx->offset_count > 200) {
@@ -636,8 +621,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(sbrake_on)    = 0.0;
       LL_TIM_DisableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-      //set driver enable pin
-      LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+      HV_EN_OFF();
 #endif
     }
 
@@ -698,33 +682,12 @@ void nrt_func(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     LL_TIM_EnableIT_BRK(TIM8);
   }
 
-  uint32_t now    = tick_ms();
-  float dt        = (now - ctx->hv_temp_ms) * 0.001;
-  ctx->hv_temp_ms = now;
-
-  // short braking keeps HV_EN low, so VFO carries the NTC then too, and the
-  // low side dies are heating
-  if(PIN(sbrake_on) <= 0.0) {
-    ctx->sbrake_ms = now;
-  }
-  int hv_en_low = (ctx->enabled && ctx->en_ticks > HV_TEMP_SETTLE) || (PIN(sbrake_on) > 0.0 && now - ctx->sbrake_ms >= HV_TEMP_SETTLE_MS);
-
-  float hv_v = ADC(ctx->hv_temp >> 16);
-  if(hv_en_low && hv_v > HV_TEMP_MIN_V) {
-    float t = r2temp(HV_R(hv_v));
-    // first reading since power up or after a hold: start from it, not from
-    // 0 or from the decayed estimate
-    PIN(hv_temp)     = PIN(hv_temp_ok) == 1.0 ? t * 0.01 + PIN(hv_temp) * 0.99 : t;
-    ctx->hv_temp_min = PIN(hv_temp_ok) > 0.0 ? MIN(ctx->hv_temp_min, PIN(hv_temp)) : t;
+  // the IRAM's NTC has its own pin (Vth), so it reads in any state
+  float t = r2temp(HV_R(ADC(ctx->hv_temp >> 16)), HV_NTC_R0, HV_NTC_B);
+  // first reading since power up: start from it, not from 0
+  PIN(hv_temp)    = PIN(hv_temp_ok) > 0.0 ? t * 0.01 + PIN(hv_temp) * 0.99 : t;
     PIN(hv_temp_ok)  = 1.0;
-  } else if(PIN(hv_temp_ok) > 0.0) {
-    // a frozen value never cools, so a fan or derate keyed to it never lets
-    // go: decay it toward the coolest reading seen. dt is a few ms against a
-    // 90 s tau, so a first order step needs no expf (not linked on the f3)
-    PIN(hv_temp) -= (PIN(hv_temp) - ctx->hv_temp_min) * MIN(dt / HV_TEMP_TAU, 1.0);
-    PIN(hv_temp_ok) = 2.0;
-  }
-  PIN(mot_temp) = r2temp(MOT_R(MOT_REF(ADC(ctx->mot_temp >> 16)))) * 0.01 + PIN(mot_temp) * 0.99;
+  PIN(mot_temp)   = r2temp(MOT_R(MOT_REF(ADC(ctx->mot_temp >> 16))), MOT_NTC_R0, MOT_NTC_B) * 0.01 + PIN(mot_temp) * 0.99;
 }
 
 hal_comp_t io_comp_struct = {

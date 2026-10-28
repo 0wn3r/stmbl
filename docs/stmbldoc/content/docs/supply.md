@@ -17,14 +17,13 @@ The STMBL board is designed to operate with a specific range of voltage and curr
 
 The following table summarizes the power supply specifications for the STMBL board:
 
-### PCB Version 5
+### PCB Version 4.0 (IRAM256-2067A)
 
 | Connector | Abs. MIN | MIN | TYP | MAX | Abs. MAX | Unit | Note |
 |-----------|----------|-----|-----|-----|----------|------|------|
 | 24V       | 0        | 15  | 24  | 25  | 26       | V    |      |
 | 24V       |          |     | 0.2 | 3   | 6        | A    | 1    |
 | HV        | 0        | >24 | 320 | 380 | 400      | V    | 4    |
-| HV        | -28      | -17 |     | 17  | 28       | A    | 2    |
 | CMD       | -7       | 0   |     | 5   | 12       | V    |      |
 | CMD       | -250     | -50 |     | 50  | 250      | mA   |      |
 | FB VPP    | 0        | 0   |     | 12  | 24       | V    |      |
@@ -37,14 +36,14 @@ The following table summarizes the power supply specifications for the STMBL boa
 | input     | -36      | -24 |     | 24  | 36       | V    |      |
 | IO        | 0        | 0   |     | 5   | 5        | V    |      |
 | UVW       | 0        | 0   |     | 380 | 400      | V    |      |
-| UVW       | -60      | -35 |     | 35  | 60       | A    | 5    |
-| UVW avg.  |          | -27 |     | 27  |          | A    | 2    |
+| UVW       | -30      | -28 |     | 28  | 30       | A    | 5    |
+| UVW rms   |          |     |     | 10  | 20       | A    | 2    |
 
 *Note 1: Depends on brake, fan and encoder consumption*  
-*Note 2: Depends on PCB and driver cooling*  
+*Note 2: Depends on PCB and driver cooling: the IRAM256-2067A is rated 20A rms at a 25°C case and 10A rms at 100°C*  
 *Note 3: For analog input*  
 *Note 4: MIN: while the drive is enabled, the DC link must stay above `conf0.low_dc_volt` (24V by default), or the drive gives fault 11. A 24V bench supply sits right at this limit, so for a low-voltage test set `conf0.low_dc_volt` lower, for example 12. Flashing firmware is not affected. MAX: with the default config, the current is reduced from `conf0.high_dc_volt` (350V) and the drive faults (11) above `conf0.max_dc_volt` (380V). Without the conf template, the fault component defaults are 370V and 390V. Abs. MAX: the F3 on the HV board trips at 400V.*  
-*Note 5: 35A peak is the range of the current shunts and a fixed F3 trip (fault 15). The usual trip is lower: 1.3 × `conf0.max_ac_cur`. 60A is the peak rating of the IKCM30F60GD module.*
+*Note 5: 30A peak (for under 100ms) is the rating of the IRAM256-2067A module and a fixed F3 trip (fault 15); the current shunts read to about 37A. The usual trip is lower: 1.3 × `conf0.max_ac_cur`, at most 30A.*
 
 ## Undervoltage and Regeneration
 
@@ -54,7 +53,7 @@ Regeneration: when the motor brakes, its energy flows back into the DC link and 
 
 ## Big Electrolytic Capacitors
 
-The STMBL board requires the use of big electrolytic capacitors in its power supply, particularly close to the HV board. On PCB version 5 they are not on the board: the board only has a film snubber capacitor, and the bulk capacitors go in the external rectifier module, as close as possible to the drives. These capacitors are essential for filtering and stabilizing the high-voltage power supply, ensuring smooth operation and reducing electrical noise. The specific capacitance values may vary depending on the exact application and motor load. Size them for the motor power and for the braking energy that the DC link has to absorb (see [Undervoltage and Regeneration](/docs/supply.md#undervoltage-and-regeneration)). If in doubt, consult a qualified engineer.
+The STMBL board requires the use of big electrolytic capacitors in its power supply, particularly close to the HV board. The v4.0 board carries two 270µF electrolytics next to the power module; for bigger motors and for braking add bulk capacitance in the supply, as close as possible to the drives. These capacitors are essential for filtering and stabilizing the high-voltage power supply, ensuring smooth operation and reducing electrical noise. The specific capacitance values may vary depending on the exact application and motor load. Size them for the motor power and for the braking energy that the DC link has to absorb (see [Undervoltage and Regeneration](/docs/supply.md#undervoltage-and-regeneration)). If in doubt, consult a qualified engineer.
 
 ## Safety Considerations
 

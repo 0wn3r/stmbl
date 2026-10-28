@@ -58,7 +58,7 @@ HAL_PIN(dc_cur);  // dc link current [A], estimated from power balance, negative
 
 // state data to LS
 HAL_PIN(hv_temp);
-HAL_PIN(hv_temp_ok);  // 0 never read (or an f3 that does not send it), 1 live, 2 held while the bridge is off
+HAL_PIN(hv_temp_ok);  // 0 never read (or an f3 that does not send it), 1 live
 HAL_PIN(mot_temp);
 HAL_PIN(core_temp);
 HAL_PIN(fault);  //fault from hv

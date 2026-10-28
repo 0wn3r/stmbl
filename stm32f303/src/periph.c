@@ -27,8 +27,8 @@ static void gpio_af(GPIO_TypeDef *port, uint32_t pins, uint32_t af) {
   LL_GPIO_Init(port, &(LL_GPIO_InitTypeDef){.Pin = pins, .Mode = LL_GPIO_MODE_ALTERNATE, .Speed = LL_GPIO_SPEED_FREQ_LOW, .OutputType = LL_GPIO_OUTPUT_PUSHPULL, .Pull = LL_GPIO_PULL_NO, .Alternate = af});
 }
 
-// No HSE: LED on for good, nothing else configured. Error_Handler can't be
-// used this early, GPIOA has no clock yet.
+// No HSE: LED on for good, nothing else configured (HV_EN stays low).
+// Error_Handler can't be used this early.
 static void hse_failed(void) {
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
   LL_GPIO_SetOutputPin(LED_PORT, LED_PIN);
@@ -42,6 +42,12 @@ static void hse_failed(void) {
 // SysTick 1 kHz, priority 14.
 void clock_init(void) {
   LL_FLASH_EnablePrefetch();
+  // After reset PA15 is JTDI with its pull-up on, which pulls the IRAM's
+  // FLT/EN towards run. Drive it low (module off) before anything else; the
+  // pwm pins are inputs and the IRAM's own input pull-downs hold its gates off.
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
+  HV_EN_OFF();
+  LL_GPIO_SetPinMode(HV_EN_PORT, HV_EN_PIN, LL_GPIO_MODE_OUTPUT);
   NVIC_SetPriorityGrouping(3);  // 4 bits preemption, no subpriority
   // SYSCFG on for the OPAMPs and comparators, fault handlers at the top priority
   LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
@@ -55,8 +61,8 @@ void clock_init(void) {
   // oscillators. A dead HSE crystal must not leave the F3 silent: give it
   // 200000 polls (about 25 ms at 72 MHz, over 100 ms at the 8 MHz HSI this
   // normally runs on; a crystal starts in a few ms) and then stop with the
-  // LED on. TIM8 is not set up yet, so its pins are inputs and HV_EN's pull-up
-  // keeps the IPM off.
+  // LED on. TIM8 is not set up yet, so its pins are inputs and HV_EN, low
+  // since the start of clock_init, keeps the IPM off.
   LL_RCC_HSE_Enable();
   for(uint32_t n = 0; !LL_RCC_HSE_IsReady(); n++) {
     if(n > 200000) {
@@ -185,13 +191,12 @@ void tim8_init(void) {
 
   // dead time, BRK (COMP4, V) and BRK2 (COMP1 W, COMP2 U) active high, no
   // automatic output. Filter 0xC: fDTS/16, N = 8, 0.89 us (0xF: 1.78 us).
-  // The IM06B50GC1 allows about 3 us from overcurrent to off, 1.43 us of it
-  // inside the module after ITRIP. On X (C38 3.3 uF, sense caps) 0xC trips
-  // 3-5 A earlier than 0xF at the same hv0.dac from switching ringing, so the
-  // dac goes up: 0xC at 255 trips where 0xF did at 215 (19.5-21 A); 0xA
-  // tripped at 1 A at 150. RM0316 20.3.16: "BRK2 must only be used with OSSR =
-  // OSSI = 1" (outputs to their idle level, all switches off, when MOE
-  // drops).
+  // The IRAM256-2067A's short circuit rating is 3 us at Tj 100 C (5 us at
+  // 25 C), and FLT/EN adds about 200 ns once the break interrupt drops it.
+  // Shorter filters trip on switching ringing: measure hv0.dac against the
+  // current on the board (iddac) before relying on it. RM0316 20.3.16:
+  // "BRK2 must only be used with OSSR = OSSI = 1" (outputs to their idle
+  // level, all switches off, when MOE drops).
   // One write for all of BDTR (RM0316 20.4.20): the LOCK bits are frozen by
   // the first write after reset, so a lock set by a later write never takes.
   // BK2P and BK2E in that same write is RM0316 20.3.16 procedure 2 (BDTR

@@ -24,21 +24,17 @@
 # checked 13 Oct: 20 to +-838 rad/s, no fault
 # vf0.k_vel 1 with vel_src 1: the field follows
 # the estimated swing; 0 hunts (fault 14 at 100)
-# 2 Nov: drop_k from idacim
 # variant: open loop V/f, no encoder needed.
 # speed: vf0.vel_cmd [rad/s mech]; enable: fault0.en
 link vf
-# drive: IM06B50GC1 bridge, water cooled
-link ipm_im06b50gc1
+# drive: v4.0 board, IRAM256-2067A (30 A peak)
 link ocdac
-ocdac0.dac0 = 128 # 0xC break filter map, 6 Oct
-ocdac0.k = 6.48
-ocdac0.cur = 36 # above the F3 software trips
-conf0.max_ac_cur = 32 # S2 peak; F3 trips 33.25
+ocdac0.cur = 30 # measure the map first (ocdac)
+conf0.max_ac_cur = 28 # under the module's 30 A peak
 conf0.max_dc_cur = 30
 iit0.cur_boost = 1.1896 # S1 26.9 A pk
 iit0.max_time = 1452 # S2 32 A for 30 min
-hv0.drop_k = 0.98 # [idacim] 8.65 V @ 16 A, 294 V (2 Nov)
+hv0.drop_k = 0.885 # dead time comp, fit per board
 hv0.drop_knee = 0.85
 conf0.polecount = 2 # [plate]
 conf0.max_vel = 838 # [plate] 8000 rpm

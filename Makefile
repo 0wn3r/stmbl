@@ -33,8 +33,6 @@ SOURCES += src/config.c
 # SOURCES += src/hal_conf.c
 SOURCES += src/hal_tbl.c
 
-HWVERSION = v5
-
 # Generate documentation as part of 'make all'.
 # 'make DOCS=0' skips it; 'make docs' still builds it explicitly.
 #

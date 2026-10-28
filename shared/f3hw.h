@@ -1,9 +1,14 @@
 #include "stm32f3xx_ll_gpio.h"
 
-//stmbl
-#define AREF 3.362  // analog reference voltage, measured on the X board
+//stmbl v4.0, IRAM256-2067A
+#define AREF 3.338  // analog reference voltage
+//PA15 drives the IRAM's FLT/EN through R129 (1k): high runs the module, low
+//turns all six switches off (FLT/EN filter about 200 ns). The IRAM pulls the
+//same node low on an ITRIP fault, which PB7 reads.
 #define HV_EN_PIN LL_GPIO_PIN_15
 #define HV_EN_PORT GPIOA
+#define HV_EN_ON() LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN)
+#define HV_EN_OFF() LL_GPIO_ResetOutputPin(HV_EN_PORT, HV_EN_PIN)
 //fault pin cannot be used, as it is sometimes reset by the iram due to 15v ripple
 #define HV_FAULT_PIN LL_GPIO_PIN_7
 #define HV_FAULT_PORT GPIOB
@@ -55,9 +60,14 @@ _Static_assert(PWM_RES * 11 / 10 < 65536, "hv0 ARR clamp overflows TIM8");
 // In timer ticks.
 #define ADC_CUR_WINDOW_TICKS ((int32_t)((ADC_CUR_SAMPLES * 74.0 / 72e6 + 0.5e-6) * PWM_TIM_CLK))
 
-#define ABS_MAX_TEMP 110.0
+// IRAM256-2067A: the thermistor sits on the module substrate, and the
+// datasheet's Fig. 9 gives Tj = 1.26 * T_therm + 27 C at full load, so 100 C
+// keeps the IGBTs near their 150 C limit.
+#define ABS_MAX_TEMP 100.0
 #define ABS_MAX_VOLT 400.0
-#define ABS_MAX_CURRENT 35.0  // shunt measurement range (3 mOhm, +-35 A), not a module rating
+// IRAM256-2067A peak phase current (30 A, under 100 ms). The shunts read to
+// about 37 A.
+#define ABS_MAX_CURRENT 30.0
 
 //io board
 //#define USB_CONNECT_PIN LL_GPIO_PIN_15

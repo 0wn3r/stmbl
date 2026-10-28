@@ -66,15 +66,15 @@ void Error_Handler(void);
 void bridge_off(void) {
   LL_TIM_DisableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-  LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+  HV_EN_OFF();
 #endif
 }
 
 // Independent watchdog on the 40 kHz LSI, kicked by hal.c at the end of every
 // rt run while the nrt loop keeps coming round (HAL_WATCHDOG). It fires on an
 // rt stop (overrun or error), a hang with irqs off, and an nrt stuck for 1 s;
-// after the reset the pwm pins are inputs and HV_EN's pull-up holds the gates
-// off.
+// after the reset the pwm pins are inputs, which the IRAM's input pull-downs
+// read as off, and clock_init drives HV_EN low first thing.
 void hal_init_watchdog(float time) {
   // RM0316 25.3.4: any other KR write between 0x5555 and the RLR write
   // re-locks PR/RLR, and the IWDG then runs at the 409 ms reset value. So the
@@ -105,16 +105,16 @@ void hal_reset_watchdog() {
 volatile uint32_t pvd_trip = 0;
 
 // Second shutdown path: a comparator break (BRK or BRK2, after the 0xC
-// digital filter) has already cleared MOE in hardware. Raise HV_EN (IPM
-// ITRIP) here, within about a microsecond, instead of waiting for io.c's
-// next rt tick. The IPM then turns its gate driver off on its own and holds
-// it off for at least 40 us. BIE is switched off so the still-set break
+// digital filter) has already cleared MOE in hardware. Drop HV_EN (the
+// IRAM's FLT/EN) here, within about a microsecond, instead of waiting for
+// io.c's next rt tick, so the module's own driver turns all six switches off
+// too. BIE is switched off so the still-set break
 // flag can't re-enter; io.c's nrt re-arms it once the bridge is idle.
 // io.c's rt keeps using MOE and the flags to report HV_OVERCURRENT_HW.
 void TIM8_BRK_IRQHandler() {
   LL_TIM_DisableAllOutputs(TIM8);
 #ifdef HV_EN_PIN
-  LL_GPIO_SetOutputPin(HV_EN_PORT, HV_EN_PIN);
+  HV_EN_OFF();
 #endif
   if(LL_PWR_IsActiveFlag_PVDO()) {  // after HV_EN: the shutdown comes first
     pvd_trip = 1;

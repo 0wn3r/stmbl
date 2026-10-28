@@ -19,7 +19,7 @@
 * 2. **Voltage**:
 * - `u_cmd` = u_n * abs(vel + slip) / vel_n plus a boost u_boost that fades linearly to 0 at boost_vel. Phase peak volts, like every volt mode d_cmd.
 * - Capped at duty * pwm_volt (hv0.pwm_volt, live from the dc link): above that speed the flux falls as 1/f, field weakening, and `u_lim` is 1.
-* - The vf template sets u_boost 12 V: it covers the dead time drop (no compensation in volt mode) plus r * the magnetizing current, so the encoder path starts from rest on the slip frequency alone (spindle IM06B50GC1, drop about 8.7 V).
+* - The vf template sets u_boost 12 V: it covers the dead time drop (no compensation in volt mode) plus r * the magnetizing current, so the encoder path starts from rest on the slip frequency alone (Fanuc alpha2 spindle, dead time drop about 8.7 V; it depends on the power module, set it per board).
 *
 * 3. **Stop at 0**:
 * - A `vel_cmd` below 0.5 rad/s (either sign) counts as 0, so noise on a 0 command does not keep the boost and the speed PI running. Once the command is 0 and the ramp has reached `vel` 0, `u_cmd` is 0 and, with the encoder, the slip and its integrator are 0 too, so the field stops and the rotor runs down. The damping states reset there as well, so `damp` and `vel_e` are exactly 0 and the next start begins clean. Without this the boost drove a dc current into the limit at standstill (21 A on the spindle), which only heats a cage motor, and the encoder path's speed PI on 0 hunted with the field near 0 Hz (spindle, 12-13 Oct: +-17 rad/s, 29 A peaks).

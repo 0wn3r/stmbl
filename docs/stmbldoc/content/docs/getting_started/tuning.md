@@ -31,7 +31,7 @@ STMBL can measure most motor and axis parameters itself. Each measurement is an 
 | Induction motor (ACIM) | [id_acim](#standstill-test-id_acim) (standstill, optional rotating test), then run it with [V/f](#run-it-with-vf), [V/f with an encoder](#run-it-with-vf-and-an-encoder) or [FOC](#run-it-with-foc); with an encoder also id_mot, id_sys, id_pid ([speed mode](#speed-mode-spindle) for a spindle) |
 | Sensorless PMSM / ACIM | identify as above, then [obs_check, sl_pmsm, sl_acim, id_sys_sl](#sensorless) |
 
-On an STMBL v5 HV board also set the [overcurrent trip threshold](#overcurrent-trip-threshold-hv0dac).
+Also set the [overcurrent trip threshold](#overcurrent-trip-threshold-hv0dac).
 
 ### How every stage is run
 
@@ -56,10 +56,10 @@ On an STMBL v5 HV board also set the [overcurrent trip threshold](#overcurrent-t
 
 ## Overcurrent Trip Threshold (hv0.dac)
 
-The v5 HV board has a hardware overcurrent comparator, set by `hv0.dac`.
+The F3 has a hardware overcurrent comparator per phase, set by `hv0.dac`.
 
 {{% hint warning %}}
-The default `hv0.dac = 2500` stands for about 350 A, so the comparator is effectively off and only the F3 software trip (`io0.oc_lim`) protects the bridge. Set a real level only on a board with the 1 nF caps on the current sense lines: without them switching ringing trips the comparator far below the set current. Then the default is a ceiling, not a setting: set it per axis as below.
+The default `hv0.dac = 2500` stands for about 350 A, so the comparator is effectively off and only the F3 software trip (`io0.oc_lim`) protects the bridge. Switching ringing on the current sense lines trips the comparator below the current the dac stands for in theory, so measure the map on your board first (`id_dac`, below). Then the default is a ceiling, not a setting: set it per axis as below.
 {{% /hint %}}
 
 Two ways to set it:
@@ -68,10 +68,10 @@ Two ways to set it:
 
 ```python
 link ocdac
-ocdac0.cur = 20 # trip current [A peak]
+ocdac0.cur = 28 # trip current [A peak]
 ```
 
-`ocdac` converts the current with a linear map (`ocdac0.dac0`, `ocdac0.k`) fitted on one bench board. Check it on your hardware before relying on it; `ocdac0.cur_out` shows the current the clamped dac really stands for. See [ocdac](/docs/hal_components/ocdac.md).
+`ocdac` converts the current with a linear map (`ocdac0.dac0`, `ocdac0.k`); its defaults are the theory for the v4.0 board, which trips lower than set on a real board. Check it on your hardware before relying on it; `ocdac0.cur_out` shows the current the clamped dac really stands for. See [ocdac](/docs/hal_components/ocdac.md).
 
 **id_dac (measure it on your board):** a one shot search that prints `hv0.dac` for a trip at `iddac0.cur`.
 
@@ -514,7 +514,7 @@ The same limits as stator (electrical) frequency f_el, in Hz, for any motor at 1
 - Field weakening: flux scale about base / speed, torque limit `p_max` / speed.
 - Sensorless low end: the observer's emf is about w_el x `lmr` x `id_n`. Put `sl_seq0.w_hand` where this is about 5 x `obs0.e_min`: w_el = 5 x `e_min` / (`lmr` x `id_n`).
 
-**Example**, a Fanuc alpha2 spindle (measured on the bench or computed from the formulas above): pp 2, plate 78.4 Hz (2352 rpm), IM06B50GC1, 296 V link, 15 kHz, `id_n` 19 A, ls 14 mH, `lmr` 12.6 mH, `l` 0.92 mH.
+**Example**, a Fanuc alpha2 spindle (measured on the bench with a 50 A power module, or computed from the formulas above; on the v4.0 board's IRAM256-2067A the currents are capped at 28 A peak): pp 2, plate 78.4 Hz (2352 rpm), 296 V link, 15 kHz, `id_n` 19 A, ls 14 mH, `lmr` 12.6 mH, `l` 0.92 mH.
 
 - `pwm_volt` = 296 / sqrt(3) x 0.91 = 155 V (computed). Base speed for `acim_fw0.duty_setpoint` 0.8: 0.8 x 155 / (0.014 x 19) = 468 rad/s el = 234 rad/s = 2230 rpm (computed). At the default `duty_setpoint` 0.9 the same formula gives 524 rad/s el = 262 rad/s = 2500 rpm. Measured: duty 0.82 at 246 rad/s (2352 rpm), no load, id 18.8 A.
 - V/f: `u_n` 126.6 V at `vel_n` 246.3; the cap 0.9 x 155 = 140 V is reached near 272 rad/s, 2600 rpm (computed). `u_boost` 14.5 V from idacim, r x `id_n` plus the dead time drop (r x `id_n` alone, 3.7 V, did not start the motor), fades out by `boost_vel` 20 rad/s (190 rpm); rated slip 6.1 rad/s. On the bench V/f ran from 20 to 838 rad/s (8000 rpm) and back, with the speed estimate damping of the example config below; without it the rotor hunted at about 9 Hz from about 75 rad/s.

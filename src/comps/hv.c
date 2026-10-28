@@ -16,7 +16,7 @@
 * ## Brief
 * `hv` runs on the F4 logic board and is its end of the UART link to the F3 power (HV) board. Every rt period it sends the current/voltage command, the commutation angle and velocity, the short brake flags and one word of current loop configuration to the F3, and unpacks the F3 reply (dq feedback, fault code and one word of state such as DC link voltage and temperatures). It also carries the `hv` terminal pass-through, the `hv_update` F3 firmware update and the `hv_verify` read back of the F3 flash. The F3 side of the link is the F3 `ls` component (stm32f303/src/comps/ls.c); the F3 bridge driver that shares this name is stm32f303/src/comps/hv.c, documented as page hv_f3.
 *
-* Typical wiring (conf/template/pid.txt + pmsm.txt): `hv0.en = fault0.en_out`, `hv0.sbrake = fault0.sbrake`, `hv0.sbrake_arm = fault0.sbrake_en`, `hv0.pos = angle0.pos`, `hv0.vel = angle0.vel`, `hv0.q_cmd = pmsm_ttc0.cur`, `hv0.d_cmd = pmsm_ttc0.id`, `hv0.scale = fault0.scale`, the motor constants from `conf0`, and `fault0.hv_error = hv0.fault`, `fault0.dc_volt = hv0.dc_volt`, `fault0.dc_cur = hv0.dc_cur`, `iit0.cur = hv0.abs_cur`. conf/template/id_pmsm.txt links the `emf_*` pins and `pwm_freq` to `idpmsm0`, the IPM templates (e.g. conf/template/ipm_im06b50gc1.txt) read `ipm0.f_sw = hv0.pwm_freq`, conf/template/id_tune.txt drives `drop_k` from `idtune0`.
+* Typical wiring (conf/template/pid.txt + pmsm.txt): `hv0.en = fault0.en_out`, `hv0.sbrake = fault0.sbrake`, `hv0.sbrake_arm = fault0.sbrake_en`, `hv0.pos = angle0.pos`, `hv0.vel = angle0.vel`, `hv0.q_cmd = pmsm_ttc0.cur`, `hv0.d_cmd = pmsm_ttc0.id`, `hv0.scale = fault0.scale`, the motor constants from `conf0`, and `fault0.hv_error = hv0.fault`, `fault0.dc_volt = hv0.dc_volt`, `fault0.dc_cur = hv0.dc_cur`, `iit0.cur = hv0.abs_cur`. conf/template/id_pmsm.txt links the `emf_*` pins and `pwm_freq` to `idpmsm0`, conf/template/ipm.txt reads `ipm0.f_sw = hv0.pwm_freq`, conf/template/id_tune.txt drives `drop_k` from `idtune0`.
 *
 * ## Component Explanation
 *
@@ -107,7 +107,7 @@ HAL_PIN(cur_ff);            // *parameter*, current loop resistance feed forward
 HAL_PIN(cur_ind);           // *parameter*, current loop BEMF / cross coupling feed forward gain
 HAL_PIN(max_y);             // *parameter*, sent to the F3 but unused there
 HAL_PIN(max_cur);           // *parameter*, max phase current (A peak), sent multiplied by scale
-HAL_PIN(dac);               // *parameter*, F3 overcurrent comparator DAC value (0..4095), default 2500 = comparator off (about 350 A); set it with id_dac or ocdac only on a board with the 1 nF sense caps
+HAL_PIN(dac);         // *parameter*, F3 overcurrent comparator DAC value (0..4095), default 2500 = comparator off (about 350 A); set it with ocdac from a map measured with id_dac on the board
 HAL_PIN(drop_k);            // *parameter*, dead time compensation, fraction of the ideal loss, 0 = off, default 0
 HAL_PIN(drop_knee);         // *parameter*, dead time compensation curve knee (A peak), 0 = latched sign
 HAL_PIN(vlim_mode);         // *parameter*, F3 current loop voltage limit, 0 = d first (default), 1 = proportional (curpid)
@@ -129,7 +129,7 @@ HAL_PIN(dc_cur);            // *output*, DC link current (A), estimated from pow
 
 // state data to LS
 HAL_PIN(hv_temp);           // *output*, power stage temperature (deg C)
-HAL_PIN(hv_temp_ok);        // *output*, 0 = never read (or an F3 that does not send it), 1 = live, 2 = held while the bridge is off
+HAL_PIN(hv_temp_ok);        // *output*, 0 = never read (or an F3 that does not send it), 1 = live
 HAL_PIN(mot_temp);          // *output*, motor temperature input of the F3 board
 HAL_PIN(core_temp);         // *output*, F3 chip temperature (deg C)
 HAL_PIN(fault);             // *output*, fault code from the F3, or HV_TIMEOUT_ERROR (9) when the link is lost

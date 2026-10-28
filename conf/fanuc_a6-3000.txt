@@ -1,8 +1,7 @@
 # Fanuc alpha 6/3000, vertical axis with a
 # holding brake, ball screw 10 mm/rev, no
 # counterweight, absolute Fanuc encoder,
-# LinuxCNC on sserial. Kira Z axis, 21 Oct 2026,
-# IKCM30F60GD (water cooled) power board.
+# LinuxCNC on sserial. Kira Z axis, 21 Oct 2026.
 #
 # Sources, marked per line:
 #   [plate] nameplate / Fanuc datasheet
@@ -55,7 +54,7 @@ hv0.adv = 0.000364 # [id] id_tune
 # limits
 conf0.max_vel = 314 # [plate] 3000 rpm
 conf0.max_acc = 21000
-conf0.max_ac_cur = 25 # [board] IKCM30 board
+conf0.max_ac_cur = 25 # [board] under the 30 A module peak
 conf0.max_force = 10.5 # [calc] 25 A x Kt
 # [calc] DC current at 25 A pk and 3000 rpm:
 #   10.5 Nm x 314 rad/s + copper ~3.6 kW / 280 V
@@ -65,10 +64,9 @@ iit0.cur_boost = 1.768 # [calc] 25 / 14.1 A pk
 # [calc] max_time = tc / (cur_boost^2 x 50/70)
 iit0.max_time = 1344 # [plate] tc 50 min
 # over current comparator: drive specific,
-# measure per board (id_dac, three phases)
-ocdac0.dac0 = 147 # [board] 300 deg phase
-ocdac0.k = 5.65 # [board]
-ocdac0.cur = 32.5 # 1.3 x max_ac_cur
+# measure the map per board (id_dac, three
+# phases) and set ocdac0.dac0 and ocdac0.k
+ocdac0.cur = 30 # [board] the module's peak
 # brake on out0, released only while enabled
 io0.out0 = fault0.mot_brake
 fault0.brake_during_phasing = 1

@@ -23,38 +23,28 @@
 #   (idacim_rot_tr df22b814)
 # checked 13 Oct: +-838 rad/s, holds 0 (field
 # stops at a 0 command), no fault
-# 2 Nov: drop_k from idacim
 # variant: V/f with encoder slip control.
 # speed: vf0.vel_cmd [rad/s mech]; enable: fault0.en
 link vf_enc
 # encoder: 512 line sin/cos (magnetic) on fb0;
 #   iabs_pos keeps the interpolation after the index
-#   amplitude window checked at any speed
 link enc_fb0
 conf0.mot_fb_res = 512
 enc_fb0.ires = 32
 fb_switch0.mot_pos = enc_fb0.ipos
 fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
-enc_fb0.min_amp = 0.25 # amp 0.40-0.54: signal check at any speed
-enc_fb0.max_amp = 0.9
-enc_fb0.amp_vel = 0
-enc_fb0.amp_inst = 1 # each sample, amp0 lags 2 ms
-enc_fb0.amp_n = 2 # 0.4 ms
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
 enc_fb0.vel = vel0.vel
-# drive: IM06B50GC1 bridge, water cooled
-link ipm_im06b50gc1
+# drive: v4.0 board, IRAM256-2067A (30 A peak)
 link ocdac
-ocdac0.dac0 = 128 # 0xC break filter map, 6 Oct
-ocdac0.k = 6.48
-ocdac0.cur = 36 # above the F3 software trips
-conf0.max_ac_cur = 32 # S2 peak; F3 trips 33.25
+ocdac0.cur = 30 # measure the map first (ocdac)
+conf0.max_ac_cur = 28 # under the module's 30 A peak
 conf0.max_dc_cur = 30
 iit0.cur_boost = 1.1896 # S1 26.9 A pk
 iit0.max_time = 1452 # S2 32 A for 30 min
-hv0.drop_k = 0.98 # [idacim] 8.65 V @ 16 A, 294 V (2 Nov)
+hv0.drop_k = 0.885 # dead time comp, fit per board
 hv0.drop_knee = 0.85
 conf0.polecount = 2 # [plate]
 conf0.max_vel = 838 # [plate] 8000 rpm

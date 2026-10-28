@@ -7,7 +7,7 @@
 
 /**
 * ## Brief
-* `ipm` estimates the junction temperatures of the power module (IPM) on the F4 board, so the drive can derate and trip on die temperature between the fast overcurrent trips and the slow module NTC. It adds a modelled temperature rise of each of the twelve dies (per leg: high and low IGBT, high and low diode) to the NTC reading. Loaded by conf/template/ipm.txt, which the motor templates (pid, mpid, uf and vf) link at their end, so a config does not link it again (a second `link ipm` loads an `ipm1` nothing reads): its inputs come from `hv0` (`ipm0.id = hv0.id_fb`, ..., `ipm0.case_temp = hv0.hv_temp`, `ipm0.pos = hv0.pos`) and `fault0.ipm_temp = ipm0.temp` feeds the derate (`conf0.high_ipm_temp`) and the IPM_TEMP_ERROR trip (`conf0.max_ipm_temp`) in `fault`. The defaults are for the IKCM30F60GD fitted to v5.0 (conf/template/ipm_ikcm30f60gd.txt repeats them); link conf/template/ipm_im06b50gc1.txt after the motor template for the IM06B50GC1.
+* `ipm` estimates the junction temperatures of the power module (IPM) on the F4 board, so the drive can derate and trip on die temperature between the fast overcurrent trips and the slow module NTC. It adds a modelled temperature rise of each of the twelve dies (per leg: high and low IGBT, high and low diode) to the NTC reading. Loaded by conf/template/ipm.txt, which the motor templates (pid, mpid, uf and vf) link at their end, so a config does not link it again (a second `link ipm` loads an `ipm1` nothing reads): its inputs come from `hv0` (`ipm0.id = hv0.id_fb`, ..., `ipm0.case_temp = hv0.hv_temp`, `ipm0.pos = hv0.pos`) and `fault0.ipm_temp = ipm0.temp` feeds the derate (`conf0.high_ipm_temp`) and the IPM_TEMP_ERROR trip (`conf0.max_ipm_temp`) in `fault`. The defaults are for the IRAM256-2067A fitted to the v4.0 board.
 *
 * ## Component Explanation
 * Everything runs in `rt`. There is no `rt_start`, so the die temperatures survive a disable (the module does not cool because the drive stopped).
@@ -17,7 +17,7 @@
 * - `id`, `iq`, `ud`, `uq` are turned into the three phase currents and voltages with an amplitude invariant inverse Park and Clarke transform at that angle.
 * - Leg duty = `CLAMP(0.5 + u_phase / dc_volt, 0, 1)`; the common mode of the modulation is ignored. `dc_volt` is taken as at least 1 V.
 *
-* 2. **Losses per die** (after the CIPOS Mini application note):
+* 2. **Losses per die** (the equations of Infineon's CIPOS Mini application note, AN2016-10, which hold for any three phase IGBT module):
 * - Current out of the leg flows through the high IGBT for the duty and the low diode for the rest; current into the leg through the low IGBT for the rest and the high diode for the duty. Dies not carrying the current get no loss.
 * - Conduction: `duty_share * kvt * (v0 * |i| + r0 * i^2)` with `vi`/`ri` for the IGBT and `vd`/`rd` for the diode, `kvt = 1 + v_tc * (Tj - 25)`.
 * - Switching: `e * f_sw * dc_volt / e_volt * |i| * ket` with `ei` (IGBT Eon + Eoff per amp) or `ed` (diode Erec per amp), `ket = 1 + ei_tc (or ed_tc) * (Tj - 25)`. Both temperature factors are clamped to 0.5..3 and use each die's own last junction temperature.
@@ -30,7 +30,7 @@
 * - At speed the networks average over the electrical cycle; at standstill the leg carrying DC heats on its own, which a mean value model over a sine would understate about 3.3x.
 *
 * {{% hint warning %}}
-* `rth_i` and `rth_d` are the datasheet Rth(J-C) times a factor that makes the model reproduce the module's SOA chart (1.5 for the IKCM30F60GD, 3.6 for the IM06B50GC1). They do not include the heatsink, which is covered by `case_temp` from the NTC; trim them against the real hardware. `pos` is used as linked, without `hv0.adv`.
+* The IRAM256-2067A defaults are first values from its datasheet (May 2014), not yet fitted to its loss and temperature charts or checked on the bench: `rth_i` and `rth_d` are the maximum Rth(J-C) (3.6 and 5.1 K/W), the conduction drops are split from the one point the datasheet gives (7.5 A), `ed` is an estimate (the datasheet folds the diode's recovery into the IGBT's Eon) and the Foster shape is borrowed, as the datasheet has no Zth curve. Check `temp` against the datasheet's Fig. 9 (Tj = 1.26 * T_therm + 27 degC at full load) and trim on the hardware. They do not include the heatsink, which is covered by `case_temp` from the NTC. `pos` is used as linked, without `hv0.adv`.
 * {{% /hint %}}
 */
 
@@ -45,14 +45,12 @@ rise above it.
 Each of the twelve dies (per leg: high and low IGBT, high and low diode) runs
 its own three pole Foster network on its instantaneous loss: conduction from
 the leg current and duty, switching from the current and link voltage, after
-the CIPOS Mini application note. At speed the networks average the cycle; at
+Infineon's CIPOS Mini application note. At speed the networks average the cycle; at
 standstill the one leg carrying dc heats on its own, which a mean value model
 over a sine understates about 3.3x.
 
-rth_i and rth_d are the datasheet Rth(J-C) times a factor that reproduces an
-SOA chart with this model (1.5 for the IKCM30F60GD, calibrated on the
-IM535-U6D's chart). Trim them against the real heatsink. Defaults are for the
-IKCM30F60GD fitted to v5.0.
+Defaults are first datasheet values for the IRAM256-2067A on the v4.0
+board; trim them against the real heatsink.
 */
 
 // in
@@ -74,14 +72,14 @@ HAL_PIN(vi);     // *parameter*, IGBT on state knee voltage at 25 C (V)
 HAL_PIN(ri);     // *parameter*, IGBT on state slope resistance at 25 C (Ohm)
 HAL_PIN(ei);     // *parameter*, IGBT (Eon + Eoff) per amp switched at e_volt, 25 C (J/A)
 HAL_PIN(ei_tc);  // *parameter*, rise of that energy with junction temperature (1/K)
-HAL_PIN(rth_i);  // *parameter*, IGBT junction to case thermal resistance, SOA scaled (K/W)
+HAL_PIN(rth_i);  // *parameter*, IGBT junction to case thermal resistance (K/W)
 
 // diode
 HAL_PIN(vd);     // *parameter*, diode forward knee voltage at 25 C (V)
 HAL_PIN(rd);     // *parameter*, diode forward slope resistance at 25 C (Ohm)
 HAL_PIN(ed);     // *parameter*, diode Erec per amp recovered at e_volt, 25 C (J/A)
 HAL_PIN(ed_tc);  // *parameter*, rise of that energy with junction temperature (1/K)
-HAL_PIN(rth_d);  // *parameter*, diode junction to case thermal resistance, SOA scaled (K/W)
+HAL_PIN(rth_d);  // *parameter*, diode junction to case thermal resistance (K/W)
 
 // junction to case impedance shape, three pole Foster network: shared time
 // constants, separate splits; the last share is what the first two leave
@@ -111,23 +109,23 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   PIN(f_sw)   = 15000.0;  // the f3 PWM rate, the templates link hv0.pwm_freq
   PIN(e_volt) = 300.0;
-  PIN(v_tc)   = 0.00155;  // 1.55 V to 1.85 V between 25 C and 150 C
+  PIN(v_tc)   = 0.00107;  // VCE(on) 1.5 V to 1.7 V between 25 C and 150 C, 7.5 A
 
-  PIN(vi)    = 0.667;  // 1.55 V at 20 A, split 0.43 knee to 0.57 slope
-  PIN(ri)    = 0.0442;
-  PIN(ei)    = 56.65e-6;  // (698 + 435) uJ at 300 V, 20 A, 25 C
-  PIN(ei_tc) = 0.00316;   // 1133 uJ to 1580 uJ between 25 C and 150 C
-  PIN(rth_i) = 2.37;      // 1.58 K/W times 1.5
+  PIN(vi)    = 0.645;  // 1.5 V at 7.5 A, split 0.43 knee to 0.57 slope
+  PIN(ri)    = 0.114;
+  PIN(ei)    = 39.5e-6;  // 395 uJ at 400 V, 7.5 A, 25 C, scaled to 300 V
+  PIN(ei_tc) = 0.00354;  // 395 uJ to 570 uJ between 25 C and 150 C
+  PIN(rth_i) = 3.6;      // maximum Rth(J-C) per IGBT
 
-  // fitted at 150 C and divided back by the shared v_tc: the diode's own
-  // drop barely moves with temperature
-  PIN(vd)    = 0.729;
-  PIN(rd)    = 0.0306;
-  PIN(ed)    = 4.75e-6;  // 95 uJ at 300 V, 20 A, 25 C
-  PIN(ed_tc) = 0.00665;  // 95 uJ to 174 uJ between 25 C and 150 C
-  PIN(rth_d) = 3.08;     // 2.05 K/W times 1.5
+  // fitted at 150 C (VF 1.4 V at 7.5 A) and divided back by the shared v_tc:
+  // the diode's drop falls with temperature (1.8 V at 25 C)
+  PIN(vd)    = 0.531;
+  PIN(rd)    = 0.0939;
+  PIN(ed)    = 3.3e-6;  // not in the datasheet: an Erec share of ei
+  PIN(ed_tc) = 0.00665;
+  PIN(rth_d) = 5.1;  // maximum Rth(J-C) per diode
 
-  // the GD's Zth(J-C); the diode shares scaled as the IM535-U6D's lead its IGBT's
+  // no Zth curve in the datasheet: a module Foster shape to start from
   PIN(tau1) = 0.00041;
   PIN(tau2) = 0.0143;
   PIN(tau3) = 0.229;

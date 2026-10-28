@@ -23,41 +23,25 @@
 #   (idacim_rot_tr df22b814)
 # checked 13 Oct: I/f start, +-838 rad/s both
 # ways, no fault (encoder only as a check)
-# 2 Nov: drop_k from idacim, cur_ff + cur_ind 1
-#   (bench A/B on curpid 3f237ef)
-# 2 Nov bench (6297044, 61d97df): 0 to 830 rad/s
-#   2.6 s at max_acc 500, handover 30 rad/s,
-#   peak 24.6 A, no fault. sl_seq0.acc 100 is the
-#   I/f start only (500 gave a 31 A handover
-#   spike); acc_run = conf0.max_acc (sl_acim).
-#   fluxopt0.min stays 1: 0.6 peaked 30.3 A.
-#   vel_bw 59.85 kept (id_pid 49.46 was worse).
-#   Above ~5500 rpm the speed lags the ramp up to
-#   65 rad/s: pid on acim_fw0.t_lim (power limit).
 # variant: rotor flux FOC sensorless (S3): I/f
 # start, observer above w_hand. No encoder.
 # i_f, align, w_hand, hyst, obs0.bw derived
 link pid
 link acim_foc
 link sl_acim
-# drive: IM06B50GC1 bridge, water cooled
-link ipm_im06b50gc1
+# drive: v4.0 board, IRAM256-2067A (30 A peak)
 link ocdac
-ocdac0.dac0 = 128 # 0xC break filter map, 6 Oct
-ocdac0.k = 6.48
-ocdac0.cur = 36 # above the F3 software trips
-conf0.max_ac_cur = 32 # S2 peak; F3 trips 33.25
+ocdac0.cur = 30 # measure the map first (ocdac)
+conf0.max_ac_cur = 28 # under the module's 30 A peak
 conf0.max_dc_cur = 30
 iit0.cur_boost = 1.1896 # S1 26.9 A pk
 iit0.max_time = 1452 # S2 32 A for 30 min
-hv0.drop_k = 0.98 # [idacim] 8.65 V @ 16 A, 294 V (2 Nov)
+hv0.drop_k = 0.885 # dead time comp, fit per board
 hv0.drop_knee = 0.85
 conf0.polecount = 2 # [plate]
 conf0.max_vel = 838 # [plate] 8000 rpm
 conf0.lq = 0 # acim_foc: l is the leakage only
 conf0.psi = 0 # hv0.psi comes from acim_flux0
-conf0.cur_ff = 1 # r feed forward
-conf0.cur_ind = 1 # emf + cross coupling ff (fluxopt)
 conf0.max_acc = 97.5 # 65% of the belt's 150
 conf0.max_sat = 5
 acim_fw0.duty = hv0.duty
@@ -72,10 +56,6 @@ ramp0.max_vel = conf0.max_vel
 ramp0.max_acc = conf0.max_acc
 ramp0.max_dec = conf0.max_acc
 ramp0.en_delay = 0.3 # flux builds before the ramp
-ramp0.j = 0.0131 # conf0.j + j_sys, with tool
-ramp0.p_acc = 2700 # drive power - drag at max_vel
-ramp0.p_dec = 3000 # regen power when braking
-sl_seq0.acc = 100 # I/f start only
 fault0.en = ramp0.en_out
 pid0.pos_en = 0
 conf0.j_sys = 0

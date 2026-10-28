@@ -71,9 +71,8 @@ conf0.low_dc_volt = 200
 iit0.cur_boost = 2.5 # cont. 6.5 A pk = Is
 iit0.max_time = 605 # [plate] tt 45 min
 # over current comparator: drive specific,
-# measure per board (ocdac map, 6 Oct)
-ocdac0.dac0 = 144
-ocdac0.k = 6.53
+# measure the map per board (id_dac) and set
+# ocdac0.dac0 and ocdac0.k
 ocdac0.cur = 21.2 # 1.3 x max_ac_cur
 # stopping
 fault0.rstop_en = 1 # regen stop first
