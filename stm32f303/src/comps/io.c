@@ -40,6 +40,7 @@
 * 4. **Offset calibration** (rt, at start):
 * - Ticks 0..99 are skipped. Ticks 100..199 average the current readings into the offsets. At tick 200, an offset above 5 A raises `HV_CURRENT_OFFSET_FAULT`. After that the offsets are output on `uo`, `vo`, `wo`, and normal operation starts. This takes about 13 ms at 15 kHz (20 ms at 10 kHz, 10 ms at 20 kHz). Before that, the bridge cannot be enabled.
 * - The motor must not carry current while this runs (the F4 does not enable the bridge this early after boot).
+* - Tracking while disabled: the shunt amplifiers drift as the board warms, so the offsets keep following the readings while the bridge is off. Only when `hv_en` = 0 and no short brake, after the bridge has been off for 20 ms, and while every phase reads under 1 A (a motor coasting above the link voltage drives diode current; then the tracking waits). Each tick moves the offsets by `period / ofs_tau` of the reading, a first order low pass, and the enable edge freezes them. An offset that drifts more than `ofs_max` from its boot value raises `HV_CURRENT_OFFSET_FAULT`, which stays until reset as the boot check's does.
 *
 * 5. **Faults** (rt):
 * - `HV_TEMP_ERROR`: `hv_temp` > 110 degC (`ABS_MAX_TEMP`) for about 0.33 ms (`PWM_FREQ / 3000` ticks, 5 at 15 kHz).
@@ -59,7 +60,7 @@
 * 6. **Enable** (rt):
 * - On the rising edge of `hv_en` stale break flags are cleared and the break interrupt is re-armed (a break while idle is not this enable's; a comparator still active keeps MOE off, which the `HV_OVERCURRENT_HW` check reports), then TIM8 MOE is set and the driver enable pin (PA15) is pulled low (enabled). `ls0` holds `hv_en` at 0 until the F4 has sent its whole configuration (after a boot, or after a link gap of 10 ms or more).
 * - When a fault is set while enabled, MOE is cleared (all six outputs go to their idle state at once, as the comparators do in hardware) and the driver enable pin is set high, in the same tick, a fault pin trip included. The fault stays latched until `hv_en` goes to 0.
-* - With `hv_en` = 0 and no braking, MOE is cleared, the driver enable pin is set high, and the fault is cleared (unless `sbrake` is still requested, see below). `HV_CURRENT_OFFSET_FAULT` is the exception: it is found once at boot and stays until reset, also over later trip codes (an overcurrent from the bad offset cannot hide it).
+* - With `hv_en` = 0 and no braking, MOE is cleared, the driver enable pin is set high, and the fault is cleared (unless `sbrake` is still requested, see below). `HV_CURRENT_OFFSET_FAULT` is the exception: it is found at boot (or by the offset tracking, item 4) and stays until reset, also over later trip codes (an overcurrent from the bad offset cannot hide it).
 *
 * 7. **Short-circuit braking** (rt, while `hv_en` = 0):
 * - When `sbrake` > 0 (from the F4's flag, or from `ls0` on a link loss), the offset calibration is done, and no fault has been seen since the last rising edge of `hv_en`, `io` brakes: `sbrake_on` = 1, which makes `hv0` hold all compares at 0, so all three low sides are on and the back EMF drives current round the windings; the energy stays in the motor. The driver enable pin is pulled low.
@@ -123,9 +124,9 @@ HAL_PIN(hv_temp_ok);  // *output*, hv_temp state, 0 = never read, 1 = live, 2 = 
 HAL_PIN(mot_temp);  // *output*, Motor temperature (degC)
 
 //ADC offset outputs
-HAL_PIN(uo);  // *output*, U current offset from the boot calibration (A)
-HAL_PIN(vo);  // *output*, V current offset from the boot calibration (A)
-HAL_PIN(wo);  // *output*, W current offset from the boot calibration (A)
+HAL_PIN(uo);  // *output*, U current offset in use (A), from the boot calibration, tracked while disabled
+HAL_PIN(vo);  // *output*, V current offset in use (A)
+HAL_PIN(wo);  // *output*, W current offset in use (A)
 
 //DAC value for comparators
 HAL_PIN(dac);  // *input*, Overcurrent comparator reference, raw DAC value 0..4095, from ls0.dac
@@ -148,6 +149,8 @@ HAL_PIN(brk);  // *input*, Brake output, > 0 drives the brake pin low, not wired
 HAL_PIN(sbrake);  // *input*, Short-circuit braking request while hv_en = 0, from ls0.sbrake
 HAL_PIN(sbrake_cur);  // *parameter*, Braking chop threshold (A), 0 = max_cur (10 A if that is 0), at most 0.8 * oc_lim, default 0
 HAL_PIN(sbrake_on);  // *output*, 1 while braking, to hv0.sbrake which holds all compares at 0
+HAL_PIN(ofs_tau);  // *parameter*, Offset tracking time constant while disabled (s), 0 = boot calibration only, default 2
+HAL_PIN(ofs_max);  // *parameter*, Largest offset drift from the boot value before HV_CURRENT_OFFSET_FAULT (A), default 0.5
 
 
 volatile uint32_t adc_12_buf[ADC_SEQ_LEN];
@@ -177,6 +180,10 @@ struct io_ctx_t {
   float hv_temp_min;    // coolest live hv_temp since power up, the decay target
   uint32_t hv_temp_ms;  // tick_ms() at the last nrt pass
   uint32_t sbrake_ms;   // tick_ms() at the last nrt pass not braking
+  uint32_t idle_ticks;  // ticks with the bridge off and no braking, saturating at the settle time
+  float u_boot;         // the boot offsets, the reference for ofs_max
+  float v_boot;
+  float w_boot;
 };
 
 #define ARES 4096.0  // analog resolution, 12 bit
@@ -280,6 +287,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->w_offset          = 0.0;
   ctx->fault             = NO_ERROR;
   ctx->offset_bad        = 0;
+  ctx->idle_ticks        = 0;
   ctx->oc_ticks          = 0;
   ctx->overtemp_error    = 0;
   ctx->overvoltage_error = 0;
@@ -323,6 +331,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(sbrake_on)  = 0.0;
   PIN(oc_k)   = 1.3;
   PIN(oc_min) = 5.0;
+  PIN(ofs_tau) = 2.0;
+  PIN(ofs_max) = 0.5;
 }
 
 // Rare paths of rt_func, kept out of CCM (8 KB, full): they run from flash
@@ -339,11 +349,37 @@ static void __attribute__((noinline)) io_offset(struct io_ctx_t *ctx, uint32_t a
     ctx->v_offset += AMP((float)(a34 & 0xFFFF) / (float)ADC_CUR_SAMPLES, SHUNT_GAIN) / 100.0;
     ctx->offset_count++;
   } else {
+    ctx->u_boot = ctx->u_offset;
+    ctx->v_boot = ctx->v_offset;
+    ctx->w_boot = ctx->w_offset;
     if(ABS(ctx->u_offset) > 5.0 || ABS(ctx->v_offset) > 5.0 || ABS(ctx->w_offset) > 5.0) {
       ctx->fault      = HV_CURRENT_OFFSET_FAULT;
       ctx->offset_bad = 1;
     }
     ctx->offset_count++;
+  }
+}
+
+// offset tracking while the bridge is off (doc item 4), from flash: it only
+// runs while disabled
+#define IO_OFS_SETTLE (PWM_FREQ / 50)  // 20 ms with the bridge off
+static void __attribute__((noinline)) io_ofs_track(struct io_ctx_t *ctx, struct io_pin_ctx_t *pins) {
+  if(ctx->idle_ticks < IO_OFS_SETTLE) {
+    ctx->idle_ticks++;
+    return;
+  }
+  if(ctx->offset_bad || ABS(PIN(iu)) > 1.0 || ABS(PIN(iv)) > 1.0 || ABS(PIN(iw)) > 1.0) {
+    return;
+  }
+  // a reading i = offset - sample, so the offset moves by -k i
+  float k = 1.0 / (PIN(ofs_tau) * (float)PWM_FREQ);
+  ctx->u_offset -= k * PIN(iu);
+  ctx->v_offset -= k * PIN(iv);
+  ctx->w_offset -= k * PIN(iw);
+  float m = PIN(ofs_max);
+  if(ABS(ctx->u_offset - ctx->u_boot) > m || ABS(ctx->v_offset - ctx->v_boot) > m || ABS(ctx->w_offset - ctx->w_boot) > m) {
+    ctx->fault      = HV_CURRENT_OFFSET_FAULT;
+    ctx->offset_bad = 1;
   }
 }
 
@@ -444,6 +480,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     PIN(iw)       = -AMPN(a12 & 0xFFFF) + ctx->w_offset;  // 1u
     PIN(iu)       = -AMPN(a12 >> 16) + ctx->u_offset;
     PIN(iv)       = -AMPN(a34 & 0xFFFF) + ctx->v_offset;
+    if(!ctx->enabled && PIN(sbrake_on) <= 0.0 && PIN(ofs_tau) > 0.0) {
+      io_ofs_track(ctx, pins);
+    } else {
+      ctx->idle_ticks = 0;
+    }
     PIN(wr)       = (float)(adc_12_buf[ADC_SEQ_LEN - 1] & 0xFFFF) * VOLT_K;
     PIN(vr)       = (float)(adc_12_buf[ADC_SEQ_LEN - 1] >> 16) * VOLT_K;
     PIN(ur)       = (float)(adc_34_buf[ADC_SEQ_LEN - 1] & 0xFFFF) * VOLT_K;
