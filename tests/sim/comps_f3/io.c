@@ -101,6 +101,8 @@ HAL_PIN(brk);
 HAL_PIN(sbrake);      // request, in
 HAL_PIN(sbrake_cur);  // chop threshold [A]; 0 = max_cur, or 10 A without it
 HAL_PIN(sbrake_on);   // braking now, out; hv0 holds all compares at 0 on it
+HAL_PIN(ofs_tau);  // offset tracking while disabled: not modelled here (the sim offsets are exact)
+HAL_PIN(ofs_max);
 
 struct io_ctx_t {
   float u_offset;

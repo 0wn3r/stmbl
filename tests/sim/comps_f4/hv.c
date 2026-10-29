@@ -39,6 +39,7 @@ HAL_PIN(max_cur);
 HAL_PIN(dac);
 HAL_PIN(drop_k);     // dead time compensation, fraction of the ideal
 HAL_PIN(drop_knee);  // dead time compensation curve knee [A], 0 = latched sign
+HAL_PIN(vlim_mode);  // f3 current loop voltage limit, 0 = d first, 1 = proportional
 HAL_PIN(emf_run);  // f3 emf0 back emf map: 1 sum, 0 hold, -1 clear
 HAL_PIN(emf_sel);  // which emf0 result comes back in emf_val
 HAL_PIN(emf_pp);   // pole pairs, for emf0's per pole bins
@@ -160,6 +161,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->config.pins.drop_knee = PIN(drop_knee);
   ctx->config.pins.unused0   = 0.0;
   ctx->config.pins.oc_cur    = PIN(max_cur);
+  ctx->config.pins.vlim_mode = PIN(vlim_mode);
 
   PIN(value) = 0.0;
 

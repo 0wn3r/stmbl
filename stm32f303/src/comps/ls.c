@@ -19,13 +19,13 @@
 *
 * 1. **Wiring on the F3** (fixed in main.c):
 * - Commands out: `d_cmd`/`q_cmd` to `curpid0.id_cmd/iq_cmd` (and to `hv0` for the dead time compensation), `pos` to `dq0` and `emf0`, `pos_v` (see below) to `idq0`, `vel` to `curpid0`, `en` to `curpid0.en`, `io0.hv_en` and `emf0.en`, `cmd_mode` to `curpid0` and `hv0`, `phase_mode` to `dq0`, `idq0` and `hv0`, `sbrake` to `io0.sbrake`.
-* - Configuration out: `r`, `l` (as `ld`), `lq`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_cur` and `pwm_volt` to `curpid0`, `oc_cur` (as `max_cur`), `dac` and `ignore_fault_pin` to `io0`, `drop_k`, `drop_knee` and `arr` to `hv0`, `emf_run`/`emf_sel`/`emf_pp` to `emf0.run/sel/pp`, `fault` to `io0.led`.
+* - Configuration out: `r`, `l` (as `ld`), `lq`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_cur` and `pwm_volt` to `curpid0`, `oc_cur` (as `max_cur`), `dac` and `ignore_fault_pin` to `io0`, `drop_k`, `drop_knee` and `arr` to `hv0`, `vlim_mode` to `curpid0`, `emf_run`/`emf_sel`/`emf_pp` to `emf0.run/sel/pp`, `fault` to `io0.led`.
 * - Feedback in: `id_fb`/`iq_fb`/`y` from `dq0`, `ud_fb`/`uq_fb` from `curpid0`, `dc_volt` (`io0.udc`), `udc_duty` (`io0.udc_duty`), `hv_temp`, `hv_temp_ok`, `mot_temp`, `u_fb`/`v_fb`/`w_fb` and `fault_in` from `io0`, `emf_val` from `emf0.val`, `duty_max` from `hv0.duty_max`.
 *
 * 2. **Receiving** (rt):
 * - The RX DMA writes each 32 byte `packet_to_hv_t` into the context. When all 32 bytes have arrived, the packet is accepted if `slave_addr` is 0, `len` matches and the CRC is right.
 * - The header command is handled: `WRITE_CONF` stores the float into `f3_config_data_t` at `conf_addr`, `READ_CONF` sets the address of the next state word to send, `DO_RESET` resets the F3, `BOOTLOADER` sets a backup register flag and resets into the bootloader. Addresses past this image's config are ignored (the F4 may be newer than the F3 image; the layout is append only).
-* - The process data goes to `phase_mode`, `cmd_mode`, `ignore_fault_pin`, `sbrake`, `sbrake_arm`, `pos` and `vel`, the d/q command becomes the new ramp target (item 4), and all configuration words go to their pins (`r`, `l`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_y`, `max_cur`, `dac`, `drop_k`, `lq`, `emf_run`, `emf_sel`, `emf_pp`, `drop_knee`, `oc_cur`). A nonzero terminal byte is pushed into the F3's terminal RX buffer (read by `term0`).
+* - The process data goes to `phase_mode`, `cmd_mode`, `ignore_fault_pin`, `sbrake`, `sbrake_arm`, `pos` and `vel`, the d/q command becomes the new ramp target (item 4), and all configuration words go to their pins (`r`, `l`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_y`, `max_cur`, `dac`, `drop_k`, `lq`, `emf_run`, `emf_sel`, `emf_pp`, `drop_knee`, `oc_cur`, `vlim_mode`). A nonzero terminal byte is pushed into the F3's terminal RX buffer (read by `term0`).
 * - Only one tick per packet sees a new one. In the others `pos` is extrapolated with `pos += vel * period` (not wrapped), until the timeout (`2 * PWM_TICKS_PER_PACKET - 1` ticks, 5 at 15 kHz).
 * - After a whole packet has been taken (good or bad), the RX DMA is re-armed in the same tick instead of waiting for the idle line: at 10 and 20 kHz the tick can come before the idle flag, and the old packet would have been taken a second time.
 *
@@ -121,6 +121,7 @@ HAL_PIN(emf_run);  // *output*, emf0 control from the F4 config, 1 = sum, 0 = ho
 HAL_PIN(emf_sel);  // *output*, emf0 result number to return in emf_val, from the F4 config
 HAL_PIN(emf_pp);  // *output*, Pole pairs for emf0's per pole bins, from the F4 config
 HAL_PIN(drop_knee);  // *output*, Dead time compensation curve knee (A) from the F4 config, 0 = latched sign, for hv0
+HAL_PIN(vlim_mode);  // *output*, Current loop voltage limit mode from the F4 config (hv0.vlim_mode), for curpid0
 
 // process data to LS
 HAL_PIN(dc_volt);  // *input*, DC link voltage (V), from io0.udc, sent to the F4
@@ -267,6 +268,7 @@ static void hw_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   config.pins.emf_sel = 0.0;
   config.pins.emf_pp  = 0.0;
   config.pins.drop_knee = 0.0;
+  config.pins.vlim_mode = 0.0;
   PIN(v_lead) = 1.5;
   PIN(ramp)   = 1.0;
   PIN(sbrake_time) = 1.0;
@@ -403,6 +405,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(emf_sel) = config.pins.emf_sel;
       PIN(emf_pp)  = config.pins.emf_pp;
       PIN(drop_knee) = config.pins.drop_knee;
+      PIN(vlim_mode) = config.pins.vlim_mode;
       ctx->timeout = 0;
       PIN(crc_ok)
       ++;
