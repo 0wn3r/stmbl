@@ -82,6 +82,7 @@ conf0.l = 0.000747 # [idacim]
 acim_flux0.tr = 0.101055 # [idacim]
 acim_flux0.lmr = 0.01298 # [idacim]
 acim_foc0.id_n = 18.738 # [idacim]
+acim_foc0.max_cur_0 = 30 # IM06B50GC1 IC 35 A DC
 acim_flux0.i_n = 18.738 # [idacim]
 acim_flux0.lmr_sat = 0.060129 # [idacim]
 acim_flux0.i_knee = 8.81171 # [idacim]

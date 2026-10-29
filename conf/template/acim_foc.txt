@@ -5,6 +5,9 @@
 # field weakening: acim_fw0.duty = hv0.duty (optional)
 # optional, all off by default; values that fit any motor:
 # acim_foc0.k_boost 2, acim_foc0.boost_max 0.3 (flux boost)
+# acim_foc0.max_cur_0: current limit at 0 Hz output, up to
+# max_cur at acim_foc0.f_lf (2 Hz), for a module whose IGBT
+# DC rating is below max_cur (IM06B50GC1: 30)
 # acim_flux0.tr_flux_min 0.95, tr_acc_max 0.3 (tr MRAS gates;
 # tr_ki is per motor, spindle 1e-4; tr_iq_min about 0.03 x id_n
 # to adapt at no load)
@@ -52,6 +55,7 @@ fluxopt0.polecount = conf0.polecount
 acim_foc0.scale = fluxopt0.scale
 acim_foc0.t_lim = acim_fw0.t_lim
 acim_foc0.i_mr = acim_flux0.i_mr
+acim_foc0.vel = angle0.vel
 acim_foc0.lmr = acim_flux0.lmr_act
 acim_flux0.i_n = acim_foc0.id_n
 acim_foc0.max_cur = conf0.max_ac_cur

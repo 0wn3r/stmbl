@@ -17,6 +17,14 @@
 *   the d command once; after that `ready` stays 1 until the next disable.
 * - q: torque / (3/2 * pp * lmr * i_mr), limited so |i| stays within max_cur
 *   with d taking priority.
+* - Low output frequency limit (optional, 0 < `max_cur_0` < `max_cur`): near
+*   standstill the currents are almost DC, so one IGBT carries the peak
+*   current all the time instead of for part of a cycle. A module's DC
+*   rating per switch (IC) can be below the peak a sine current may reach
+*   (IM06B50GC1: IC 35 A, IO 50 A). The current limit is then max_cur_0 at
+*   `vel` 0, rising linearly to max_cur at `f_lf` output frequency; d keeps
+*   priority, so the flux stays and only the torque is cut. ipm0's
+*   junction model stays the thermal protection on top.
 * - Flux boost (optional, `k_boost` > 0): while the flux is below the
 *   ramped d command, d gets k_boost * (d - i_mr) on top, so i_mr rises in
 *   about tr / (1 + k_boost) instead of tr: faster torque after field
@@ -37,6 +45,7 @@ HAL_PIN(torque);     // *input*, torque command [Nm]
 HAL_PIN(scale);      // *input*, flux fraction from acim_fw, 1 = rated
 HAL_PIN(t_lim);      // *input*, torque limit from acim_fw [Nm], 0 = none
 HAL_PIN(i_mr);       // *input*, magnetizing current from acim_flux [A]
+HAL_PIN(vel);        // *input*, output frequency, angle0.vel [rad/s electrical]
 
 HAL_PIN(id_n);       // *parameter*, rated magnetizing current [A peak]
 HAL_PIN(id_rate);    // *parameter*, d current ramp [A/s]
@@ -45,6 +54,8 @@ HAL_PIN(lmr);        // *parameter*, Lm^2/Lr [H]
 HAL_PIN(polecount);  // *parameter*, pole pairs
 HAL_PIN(k_boost);    // *parameter*, flux boost gain, 0 = off
 HAL_PIN(boost_max);  // *parameter*, largest boost as a fraction of id_n, 0 = only the current limit
+HAL_PIN(max_cur_0);  // *parameter*, current limit at 0 Hz output [A peak], 0 = off (max_cur at any frequency)
+HAL_PIN(f_lf);       // *parameter*, output frequency where max_cur_0 has risen to max_cur [Hz], default 2
 
 HAL_PIN(d_cmd);      // *output*, to hv0.d_cmd
 HAL_PIN(q_cmd);      // *output*, to hv0.q_cmd
@@ -66,6 +77,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(max_cur)   = 10.0;
   PIN(lmr)       = 0.0165;
   PIN(polecount) = 2.0;
+  PIN(f_lf)      = 2.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -73,6 +85,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct acim_foc_pin_ctx_t *pins = (struct acim_foc_pin_ctx_t *)pin_ptr;
 
   float max_cur = MAX(PIN(max_cur), 0.1);
+  if(PIN(max_cur_0) > 0.0 && PIN(max_cur_0) < max_cur) {  // near DC one IGBT carries the peak
+    float x = ABS(PIN(vel)) / (2.0 * M_PI * MAX(PIN(f_lf), 0.1));
+    max_cur = PIN(max_cur_0) + (max_cur - PIN(max_cur_0)) * MIN(x, 1.0);
+  }
   float id_tgt  = CLAMP(PIN(id_n) * CLAMP(PIN(scale), 0.0, 1.0), 0.0, max_cur);
   float id      = ctx->id;
   float ready   = PIN(ready);
