@@ -27,7 +27,8 @@ One command per line, `#` comments, optional `at T` prefix (seconds):
 
 Motor: `plant motor=0` PMSM (dq, r ld lq psi pp), `motor=1` induction motor (inverse-gamma
 in the stator frame: r, ld = leakage sigma*Ls, lmr, tr, with acim_flux's saturation shape i_n,
-i_knee, lmr_sat, tr_sat, i_dip, lmr_dip, tr_dip as a static psi(i_m) curve). An ACIM config
+i_knee, lmr_sat, tr_sat, i_dip, lmr_dip, tr_dip as a static psi(i_m) curve, and tr_load: the rotor
+resistance across the flux grows by 1 + tr_load (i_q / i_m)^2, as acim_flux's slip). An ACIM config
 (acim_flux0 or vf0 present) selects motor=1 and fills these from acim_flux0/acim_foc0. Extra plant
 signals: psi_r, i_mr, lm, tr_act, th_flux, slip. Dead-time loss shape: `dt_shape=0` tanh(i/dt_i0),
 `1` hv.c's 1-1/(1+|i|/dt_i0)^2. Encoder: encf0 (fanuc) or enc_fb0 (sin/cos, res x ires counts).
@@ -53,7 +54,7 @@ packet-to-F3 time.
 - `s_*`: spindle: FOC encoder with load, FOC field weakening to 838 rad/s, sensorless FOC
   (I/f start, reverse), V/f open loop, V/f encoder.
 - `id_*`: identification regression against plants with known values: idpmsm, id_mot (idm), id_sys on Z with the breakaway test, id_brk (idm brk_only), id_brk_limit (current limited below the breakaway torque: brk_res -2),
-  idacim (standstill + rotating). Each file's comments give the result against the truth.
+  idacim (standstill + rotating; `id_acim_rot_tr_load`: the slip's load growth, acim_flux0.tr_load). Each file's comments give the result against the truth.
 
 ## Limits
 

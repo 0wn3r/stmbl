@@ -52,6 +52,16 @@
 *
 * `en` = 0 clears the flux, so every enable starts from a demagnetized rotor.
 *
+* ## Slip under load, off by default
+* With `tr_load` > 0 the slip grows with the load ratio x = iq / |i_mr|:
+*
+*     slip = iq / (tr_act * i_mr) * (1 + tr_load * x^2), the factor at most 3
+*
+* The flux lag keeps tr_act. Fanuc's alpha spindle drives raise their slip
+* gain the same way, by up to 1.84 at full load (a table on iq / flux, 9D20
+* firmware, 29 Oct 2026), which a tr measured at light load misses. idacim's
+* rotating tr check with `rot_tr_loads` 1 measures it at three loads.
+*
 * ## tr adaptation (reactive power MRAS), off by default
 * tr changes with rotor temperature. With `tr_ki` > 0 the model runs on
 * `tr_est`, which integrates the reactive power residual
@@ -137,6 +147,7 @@ HAL_PIN(u_res);      // *output*, q voltage residual [V]
 HAL_PIN(i_dip);      // *parameter*, lmr and tr change below this i_mr [A], 0 = no dip; keep below i_knee
 HAL_PIN(lmr_dip);    // *parameter*, fraction lmr loses at zero flux, (1 - lmr_dip * y)
 HAL_PIN(tr_dip);     // *parameter*, fraction tr loses at zero flux, (1 - tr_dip * y), negative = tr rises
+HAL_PIN(tr_load);    // *parameter*, slip gain growth with load, slip x (1 + tr_load (iq / i_mr)^2), 0 = off
 
 struct acim_flux_ctx_t {
   float w;    // last synchronous speed
@@ -239,6 +250,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // demagnetized rotor asks for a bounded slip instead of an infinite one
   float i_div = MAX(ABS(i_mr), MAX(PIN(i_min), 0.01));
   float slip  = PIN(iq) / (tr * i_div);
+  if(PIN(tr_load) > 0.0) {
+    float x = PIN(iq) / i_div;
+    slip *= MIN(1.0 + PIN(tr_load) * x * x, 3.0);
+  }
   if(i_mr < 0.0) {
     slip = -slip;
   }

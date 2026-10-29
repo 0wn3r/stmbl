@@ -8,7 +8,7 @@
 
 /**
 * ## Brief
-* `idacim` identifies an AC induction motor. A standstill test measures the stator resistance `r` (with the inverter dead time voltage `drop` separated from it), the leakage inductance `l` (sigma*Ls) by injection at two frequencies around the current loop's crossover, and the rotor time constant `tr` and rotor side magnetizing inductance `lmr` (Lm^2/Lr) by d current steps; an optional current ladder (`knee`) fits how tr changes with flux. From these and the motor plate it computes a `vf` parameter set. An optional rotating test spins the rotor open loop; with an encoder it first reads `tr` and the inertia from up and down speed ramps at two currents, can check `tr` with the rotor turning under FOC (`rot_tr_vel`), then sweeps the flux, each level at the ramps' top emf and at half that speed, and fits the magnetizing curve (`acim_flux0.lmr`, `lmr_sat`, `i_knee`, `tr_sat`, `i_dip`, `lmr_dip`, `tr_dip`, `acim_foc0.id_n`). A separate pole pair test reads `conf0.polecount` and the direction. It runs on the F4 board, drives `hv0` directly and is loaded by the `id_acim` template.
+* `idacim` identifies an AC induction motor. A standstill test measures the stator resistance `r` (with the inverter dead time voltage `drop` separated from it), the leakage inductance `l` (sigma*Ls) by injection at two frequencies around the current loop's crossover, and the rotor time constant `tr` and rotor side magnetizing inductance `lmr` (Lm^2/Lr) by d current steps; an optional current ladder (`knee`) fits how tr changes with flux. From these and the motor plate it computes a `vf` parameter set. An optional rotating test spins the rotor open loop; with an encoder it first reads `tr` and the inertia from up and down speed ramps at two currents, can check `tr` with the rotor turning under FOC (`rot_tr_vel`), also at three loads for the slip's load growth (`rot_tr_loads`), then sweeps the flux, each level at the ramps' top emf and at half that speed, and fits the magnetizing curve (`acim_flux0.lmr`, `lmr_sat`, `i_knee`, `tr_sat`, `i_dip`, `lmr_dip`, `tr_dip`, `acim_foc0.id_n`). A separate pole pair test reads `conf0.polecount` and the direction. It runs on the F4 board, drives `hv0` directly and is loaded by the `id_acim` template.
 *
 * ## Component Explanation
 *
@@ -75,7 +75,7 @@
 * ```
 * - The 2x2 solve needs the pairs to differ enough in flux (determinant over 0.2 of `a0 b1`); D goes to `rot_delay` and a tr within 0.3..3 times the standstill `tr` to `rot_tr_ramp`, with the first pair's lmr times `1 + (ws tr)^2`. From then on the sweep uses this tr and lmr in place of the standstill ones. (The standstill steps read the spindle's tr as 0.078-0.093 s, where its orientation needs about 0.12 at every flux.)
 * - `4.5` rotating tr check, after the ramps when `rot_tr_vel > 0` (off by default; the rotor runs up to `rot_tr_vel`): FOC on the encoder with the test's own rotor flux model at the standstill tr (`i_mr` low passed from `id_fb` with tr, `slip = iq / (tr i_mr)`). The frame turns with the encoder position plus that slip, not with `vel_fb`, whose lag on a ramp is a frame speed error as large as the one looked for (vel1: 1.8 ms; simulated k 0.99 from the true angles for 1.06). The d current is held at what gives 0.8 of the plate emf at `rot_tr_vel` (at least 1.5 `i_min`, at most `id_n`; a flux that follows the speed tilts the angle with the ramp's sign, simulated k 0.87 for 1), and `q_cmd = +-ia` (`min(0.6 id_n, sqrt(imax^2 - id^2))`, no speed loop) ramps the rotor up to `rot_tr_vel` and down to 0.7 of it. After one unmeasured pair, 3 pairs are measured where the speed is between 0.76 and 0.94 of `rot_tr_vel` and at least `3 tr` into the ramp.
-* - There the emf is large against the dead time and r errors, so `e = u - r i - j w l i = j w psi_r` gives the flux angle in the frame (the dead time loses 4/pi of `drop` along the current and is taken out; simulated k 0.975 for 1.056 without it). With the model's tr off by `k = tr_true / tr` the frame settles where `tan(phi - delta) = k tan(phi)` (phi the current's angle, delta the flux's). An offset `b` on the angle (dead time, voltage timing) is the same on the up and the down ramp, where phi changes sign, so `b` is found by bisection where both ramps give the same `k`; this needs at least 100 samples on each ramp and phi of opposite sign. A `k` in 0.3..3 gives `rot_tr = k tr`, `rot_tr_k`, `rot_tr_imr`, `rot_tr_lmr` (`abs(e) / w / i_mr`) and `rot_tr_b`; they are printed as comments only. The report also gives the same without the dead time correction and a torque balance `(T_up - T_down) = J (a_up - a_down)` with `T = 1.5 pp psi abs(i) sin(phi - delta)`, whose J against `rot_j` tells which flux angle is right.
+* - There the emf is large against the dead time and r errors, so `e = u - r i - j w l i = j w psi_r` gives the flux angle in the frame (the dead time loses 4/pi of `drop` along the current and is taken out; simulated k 0.975 for 1.056 without it). With the model's tr off by `k = tr_true / tr` the frame settles where `tan(phi - delta) = k tan(phi)` (phi the current's angle, delta the flux's). An offset `b` on the angle (dead time, voltage timing) is the same on the up and the down ramp, where phi changes sign, so `b` is found by bisection where both ramps give the same `k`; this needs at least 100 samples on each ramp and phi of opposite sign. A `k` in 0.3..3 gives `rot_tr = k tr`, `rot_tr_k`, `rot_tr_imr`, `rot_tr_lmr` (`abs(e) / w / i_mr`) and `rot_tr_b`; they are printed as comments only. With `rot_tr_loads = 1` the check runs again with `q_cmd` at 0.45 and 0.3 of `id_n` (a level the current limit would bring within 20 % of the first is skipped), each with its own unmeasured pair, and gives `rot_ld_x` (iq / i_mr in the flux's frame, `k` times the model's) and `rot_ld_k` per level. acim_flux's `tr_load` makes the slip `iq / (tr i_mr) * (1 + tr_load x^2)`, so `1 / k` is a straight line in `x^2`; the least squares line gives `rot_tr_load` (slope over intercept), printed as `acim_flux0.tr_load` to append with three levels and a value in 0..2. Fanuc's alpha spindle firmware raises its slip gain with load by up to 1.84. The levels go down from the first, not up: with no load but the inertia a higher torque runs the window through in less than the `3 tr` wait (simulated spindle at `id_n` on q: 0.1 s), and the lowest level must still beat the friction, or its ramp times out and the test goes on to the sweep. The report also gives the same without the dead time correction and a torque balance `(T_up - T_down) = J (a_up - a_down)` with `T = 1.5 pp psi abs(i) sin(phi - delta)`, whose J against `rot_j` tells which flux angle is right.
 * - Then `q_cmd = -ia` brakes the rotor (d current rising to keep 0.8 of the plate emf) until it is under `rot_vel` of plate speed, where the open loop field takes over at the rotor's speed and the sweep starts. A ramp that does not reach its end within 15 s goes on to the next phase; 30 s without getting under `rot_vel` switches the bridge off, the rotor coasts and the state goes to `4.7`.
 * - `4.3` flux sweep: d current at 1.15, 1.0, 0.9, 0.75, 0.6, 0.45, 0.35, 0.25 of `id_n`, from the top down, limited to `i_min` .. `0.85 * sqrt(2) * n_cur` (levels that would repeat a limit are skipped; without an encoder it stops at 0.45). With an encoder each level runs where its emf is the ramps' top one, at `w_hi * id_n / i`, at most `rot_vmax` of plate speed (but not under `w_hi`): the field weakening range, where acim_flux uses these levels. An inverter voltage error is a larger part of a small emf; at one speed for all levels (0.4 of plate speed) the spindle read lmr at 5.5 A as 6.6 mH and 9.4 at 0.9, against about 12 from a flux observer at 838 rad/s. Without an encoder every level runs at `rot_vel`.
 * - Each level settles `max(6 tr, 0.3 s)` and averages 0.5 s. At no load `uq = r iq + w psi_s`, so the rotor flux is `(uq - r iq) / w - l id`; with an encoder it is corrected for the slip angle (with tr scaled by the point's own lmr against the lmr that tr belongs to, the ramps' or the standstill one). A point with slip x tr over 0.35 (0.6 with the ramps' tr, which holds further) is dropped and ends the pass; a filtered slip x tr over 1 (near pull out) ends it too.
@@ -211,6 +211,10 @@ HAL_PIN(rot_tr_k);  // *output*, rot_tr over the standstill tr
 HAL_PIN(rot_tr_imr);  // *output*, magnetizing current the check ran at (A)
 HAL_PIN(rot_tr_lmr);  // *output*, lmr at rot_tr_imr from the emf (H)
 HAL_PIN(rot_tr_b);  // *output*, flux angle offset shared by the up and down ramps (rad)
+HAL_PIN(rot_tr_loads);  // *parameter*, 1 = repeat the rotating tr check at 0.45 and 0.3 of id_n on q and fit acim_flux0.tr_load, default 0
+HAL_PIN(rot_tr_load);  // *output*, slip gain growth with load (iq / i_mr)^2 from the tr check's load levels, result for acim_flux0.tr_load
+HAL_PINA(rot_ld_x, 3);  // *output*, iq / i_mr in the flux frame of each load level of the tr check
+HAL_PINA(rot_ld_k, 3);  // *output*, true over model tr of each load level, 0 = no solution
 HAL_PIN(rot_tr_ramp);  // *output*, tr at the ramps' current (id_n) from the open loop ramps (s), 0 = not measured, moved to rot_id_n for acim_flux0.tr
 HAL_PIN(rot_lag);  // *output*, lag of vel_fb behind pos_fb on the ramps (s)
 HAL_PIN(rot_delay);  // *output*, delay from field command to position feedback found on the ramps (s)
@@ -236,6 +240,7 @@ HAL_PIN(avg_test_volt);  // *output*, voltage that holds test_cur incl. dead tim
 // scratch pins mean two different things at once.
 #define SW_N 8             // rotating test: flux sweep levels
 #define FO_CYC 3           // rotating tr check: measured up and down ramp pairs
+#define FO_LV 3            // rotating tr check: load levels with rot_tr_loads
 
 struct idacim_ctx_t {
   // leakage injection
@@ -317,9 +322,10 @@ struct idacim_ctx_t {
   float fo_t;           // time in this ramp [s]
   uint8_t fo_ph;        // 0 up, 1 down, 2 down and out
   uint8_t fo_cyc;       // window crossings down
-  float fo_s[2][6];     // up / down: sums of flux angle, current angle, i_mr, emf / w / i_mr; angle and emf / w / i_mr without the dead time
-  uint32_t fo_n[2];
-  float fo_a[2][4];     // up / down: sums of acceleration [rad/s^2 mech], |i|, emf / w [Vs], iq
+  float fo_s[FO_LV][2][6];  // per load level, up / down: sums of flux angle, current angle, i_mr, emf / w / i_mr; angle and emf / w / i_mr without the dead time
+  uint32_t fo_n[FO_LV][2];
+  float fo_a[FO_LV][2][4];  // per load level, up / down: sums of acceleration [rad/s^2 mech], |i|, emf / w [Vs], iq
+  uint8_t fo_lv;        // load level of the tr check
   float fo_wl;          // last w_r
   uint32_t sw_cnt;      // samples summed
   float s_uq, s_iq, s_id, s_slip;  // sums
@@ -349,6 +355,8 @@ struct idacim_ctx_t {
 // of the d current at plate flux; the low ones reach into field weakening,
 // where acim_flux's knee sits, and stop at i_min
 static const float sw_frac[SW_N] = {0.25, 0.35, 0.45, 0.6, 0.75, 0.9, 1.0, 1.15};
+// rotating tr check: q current of each load level, fraction of id_n (the first is the plain check)
+static const float fo_frac[FO_LV] = {0.6, 0.45, 0.3};
 
 #define L_BIAS_SETTLE 1.0  // leakage test: first settle, the dc bias rides the slow rotor pole [s]
 #define L_SETTLE 0.2       // leakage test: settle after changing frequency [s]
@@ -774,6 +782,92 @@ static void vf_set(struct idacim_pin_ctx_t *pins) {
 // ws, and a current fed cage then gives T = 1.5 pp lmr i^2 ws tr / (1 +
 // (ws tr)^2). The same ramp up and down cancels friction:
 // J = (T_up - T_down) / (alpha_up - alpha_down), friction = (T_up + T_down) / 2.
+// rotating tr check, load level lv: iq / i_mr of the check's own model
+// over both ramps
+static float fo_x(struct idacim_ctx_t *ctx, int lv) {
+  float x = 0.0;
+  for(int u = 0; u < 2; u++) {
+    float n = (float)MAX(ctx->fo_n[lv][u], 1);
+    x += 0.5 * ABS(ctx->fo_a[lv][u][3] / n) / MAX(ctx->fo_s[lv][u][2] / n, 0.5);
+  }
+  return x;
+}
+
+// rotating tr check, load level lv: k = true over model tr, with the angle
+// offset shared by the up and down ramp found by bisection (as for the
+// first level in rot_report); 0 = no solution
+static float fo_k(struct idacim_ctx_t *ctx, int lv) {
+  if(ctx->fo_n[lv][0] < 100 || ctx->fo_n[lv][1] < 100) {
+    return 0.0;
+  }
+  float d[2], p[2];
+  for(int u = 0; u < 2; u++) {
+    d[u] = ctx->fo_s[lv][u][0] / (float)ctx->fo_n[lv][u];
+    p[u] = ctx->fo_s[lv][u][1] / (float)ctx->fo_n[lv][u];
+  }
+  if(ABS(tanf(p[0])) <= 0.05 || ABS(tanf(p[1])) <= 0.05 || p[0] * p[1] >= 0.0) {
+    return 0.0;
+  }
+  float lo = MAX(-0.6, -1.52 - (p[1] - d[1])), hi = MIN(0.6, 1.52 - (p[0] - d[0])), b = 0.0;
+  for(int it = 0; it < 40; it++) {
+    b        = 0.5 * (lo + hi);
+    float f  = tanf(p[0] - d[0] + b) / tanf(p[0]) - tanf(p[1] - d[1] + b) / tanf(p[1]);
+    float fl = tanf(p[0] - d[0] + lo) / tanf(p[0]) - tanf(p[1] - d[1] + lo) / tanf(p[1]);
+    if((f > 0.0) == (fl > 0.0)) {
+      lo = b;
+    } else {
+      hi = b;
+    }
+  }
+  float k = tanf(p[0] - d[0] + b) / tanf(p[0]);
+  return k > 0.3 && k < 3.0 ? k : 0.0;
+}
+
+// tr check at several loads: acim_flux runs the slip on tr / (1 + tr_load
+// x^2), x = iq / i_mr in the flux's own frame, so the true tr over the
+// check's fixed model tr is k = k0 / (1 + tr_load x^2), and 1 / k is a
+// straight line in x^2. The check's frame is off by the angle it measures:
+// tan(phi - delta) = k tan(phi), so the true x is k times the model's (with
+// the model's x the sim read tr_load 0.061 for 0.1, with k x 0.107)
+static void fo_load_fit(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) {
+  float sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+  int n = 0;
+  for(int lv = 0; lv < FO_LV; lv++) {
+    if(lv > 0) {
+      PINA(rot_ld_k, lv) = fo_k(ctx, lv);
+      PINA(rot_ld_x, lv) = fo_x(ctx, lv) * PINA(rot_ld_k, lv);
+    }
+    float x = PINA(rot_ld_x, lv), k = PINA(rot_ld_k, lv);
+    if(lv > 0 && ctx->fo_n[lv][0] == 0) {
+      printf("<font color='green'># load level %f x id_n: skipped (current limit) or not run</font>\n", fo_frac[lv]);
+      continue;
+    }
+    printf("<font color='green'># load level %f x id_n: iq/i_mr %f, tr %f x the model's%s</font>\n", fo_frac[lv], x, k, k > 0.0 ? "" : " (no solution)");
+    if(k > 0.0) {
+      float x2 = x * x, y = 1.0 / k;
+      sx += x2;
+      sy += y;
+      sxx += x2 * x2;
+      sxy += x2 * y;
+      n++;
+    }
+  }
+  float den = n * sxx - sx * sx;
+  if(n < 2 || den <= 1e-6 * MAX(n * sxx, 1e-6)) {
+    printf("<font color='red'># tr_load: fewer than two load levels with a solution</font>\n");
+    return;
+  }
+  float sl  = (n * sxy - sx * sy) / den;
+  float a   = (sy - sl * sx) / n;
+  float trl = a > 0.0 ? sl / a : 0.0;
+  PIN(rot_tr_load) = trl;
+  if(n >= 3 && trl >= 0.0 && trl <= 2.0) {
+    printf("acim_flux0.tr_load = %f <font color='green'># append to config, slip x (1 + tr_load (iq / i_mr)^2)</font>\n", trl);
+  } else {
+    printf("<font color='red'># tr_load %f from %d levels: not used (needs 3 levels and 0..2)</font>\n", trl, n);
+  }
+}
+
 static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) {
   int n    = (int)PIN(sw_n);
   float pp = PIN(n_pp);
@@ -1083,14 +1177,17 @@ static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) 
     }
   }
   PIN(rot_tr) = PIN(rot_tr_k) = PIN(rot_tr_imr) = PIN(rot_tr_lmr) = PIN(rot_tr_b) = 0.0;
+  for(int lv = 0; lv < FO_LV; lv++) {
+    PINA(rot_ld_x, lv) = PINA(rot_ld_k, lv) = 0.0;
+  }
   if(PIN(rot_tr_vel) > 0.0) {
-    if(ctx->fo_n[0] < 100 || ctx->fo_n[1] < 100) {
-      printf("<font color='red'># rotating tr check: too few samples (%f up, %f down), the speed window %f..%f rad/s mech was not ramped through</font>\n", (float)ctx->fo_n[0], (float)ctx->fo_n[1], 0.7 * PIN(rot_tr_vel), PIN(rot_tr_vel));
+    if(ctx->fo_n[0][0] < 100 || ctx->fo_n[0][1] < 100) {
+      printf("<font color='red'># rotating tr check: too few samples (%f up, %f down), the speed window %f..%f rad/s mech was not ramped through</font>\n", (float)ctx->fo_n[0][0], (float)ctx->fo_n[0][1], 0.7 * PIN(rot_tr_vel), PIN(rot_tr_vel));
     } else {
       float d[2], p[2];
       for(int u = 0; u < 2; u++) {
-        d[u] = ctx->fo_s[u][0] / (float)ctx->fo_n[u];
-        p[u] = ctx->fo_s[u][1] / (float)ctx->fo_n[u];
+        d[u] = ctx->fo_s[0][u][0] / (float)ctx->fo_n[0][u];
+        p[u] = ctx->fo_s[0][u][1] / (float)ctx->fo_n[0][u];
       }
       // tan(p - d + b) / tan(p) the same on both ramps: b by bisection
       // both tangents stay off their poles over the bracket
@@ -1107,13 +1204,13 @@ static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) 
         }
       }
       k = ok ? tanf(p[0] - d[0] + b) / tanf(p[0]) : 0.0;
-      float imr = 0.5 * (ctx->fo_s[0][2] / (float)ctx->fo_n[0] + ctx->fo_s[1][2] / (float)ctx->fo_n[1]);
-      float lm  = 0.5 * (ctx->fo_s[0][3] / (float)ctx->fo_n[0] + ctx->fo_s[1][3] / (float)ctx->fo_n[1]);
+      float imr = 0.5 * (ctx->fo_s[0][0][2] / (float)ctx->fo_n[0][0] + ctx->fo_s[0][1][2] / (float)ctx->fo_n[0][1]);
+      float lm  = 0.5 * (ctx->fo_s[0][0][3] / (float)ctx->fo_n[0][0] + ctx->fo_s[0][1][3] / (float)ctx->fo_n[0][1]);
       printf("<font color='green'># rotating tr check %f..%f rad/s mech: flux angle %f / %f, current angle %f / %f rad (up / down), offset %f rad, i_mr %f A, lmr from the emf %f mH</font>\n",
              0.7 * PIN(rot_tr_vel), PIN(rot_tr_vel), d[0], d[1], p[0], p[1], b, imr, lm * 1000.0);
       {
         // the same without the dead time correction, for comparison
-        float d0 = ctx->fo_s[0][4] / (float)ctx->fo_n[0], d1 = ctx->fo_s[1][4] / (float)ctx->fo_n[1];
+        float d0 = ctx->fo_s[0][0][4] / (float)ctx->fo_n[0][0], d1 = ctx->fo_s[0][1][4] / (float)ctx->fo_n[0][1];
         float l2 = MAX(-0.6, -1.52 - (p[1] - d1)), h2 = MIN(0.6, 1.52 - (p[0] - d0)), b2 = 0.0;
         for(int it = 0; it < 40; it++) {
           b2 = 0.5 * (l2 + h2);
@@ -1125,17 +1222,17 @@ static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) 
             h2 = b2;
           }
         }
-        float lm0 = 0.5 * (ctx->fo_s[0][5] / (float)ctx->fo_n[0] + ctx->fo_s[1][5] / (float)ctx->fo_n[1]);
+        float lm0 = 0.5 * (ctx->fo_s[0][0][5] / (float)ctx->fo_n[0][0] + ctx->fo_s[0][1][5] / (float)ctx->fo_n[0][1]);
         printf("<font color='green'># without the dead time (drop %f V): flux angle %f / %f, k %f, offset %f, lmr from the emf %f mH</font>\n", PIN(drop), d0, d1, tanf(p[0] - d0 + b2) / tanf(p[0]), b2, lm0 * 1000.0);
         // torque balance: (T_up - T_down) = J (a_up - a_down), T = 1.5 pp psi
         // |i| sin(current angle - flux angle); J from the inertia ramps says
         // which flux angle is right
         float acc_[2], im_[2], ps_[2];
         for(int u = 0; u < 2; u++) {
-          float nn = (float)ctx->fo_n[u];
-          acc_[u]  = ctx->fo_a[u][0] / nn;
-          im_[u]   = ctx->fo_a[u][1] / nn;
-          ps_[u]   = ctx->fo_a[u][2] / nn;
+          float nn = (float)ctx->fo_n[0][u];
+          acc_[u]  = ctx->fo_a[0][u][0] / nn;
+          im_[u]   = ctx->fo_a[0][u][1] / nn;
+          ps_[u]   = ctx->fo_a[0][u][2] / nn;
         }
         float da_ = acc_[0] - acc_[1];
         if(ABS(da_) > 1.0) {
@@ -1156,7 +1253,13 @@ static void rot_report(struct idacim_ctx_t *ctx, struct idacim_pin_ctx_t *pins) 
       } else {
         printf("<font color='red'># rotating tr check: no solution (k %f)</font>\n", k);
       }
+      PINA(rot_ld_k, 0) = ok && k > 0.3 && k < 3.0 ? k : 0.0;
+      PINA(rot_ld_x, 0) = fo_x(ctx, 0) * PINA(rot_ld_k, 0);
     }
+  }
+  PIN(rot_tr_load) = 0.0;
+  if(PIN(rot_tr_vel) > 0.0 && PIN(rot_tr_loads) > 0.0) {
+    fo_load_fit(ctx, pins);
   }
   printf("rotating test done\n");
 }
@@ -2287,13 +2390,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
               ctx->fo_ph  = 0;
               ctx->fo_cyc = 0;
               ctx->fo_wl = pp * ABS(vel);
-              for(int u = 0; u < 2; u++) {
-                ctx->fo_n[u] = 0;
-                for(int q = 0; q < 4; q++) {
-                  ctx->fo_a[u][q] = 0.0;
-                }
-                for(int q = 0; q < 6; q++) {
-                  ctx->fo_s[u][q] = 0.0;
+              ctx->fo_lv = 0;
+              for(int v = 0; v < FO_LV; v++) {
+                for(int u = 0; u < 2; u++) {
+                  ctx->fo_n[v][u] = 0;
+                  for(int q = 0; q < 4; q++) {
+                    ctx->fo_a[v][u][q] = 0.0;
+                  }
+                  for(int q = 0; q < 6; q++) {
+                    ctx->fo_s[v][u][q] = 0.0;
+                  }
                 }
               }
             } else if(PIN(state) < 4.55) {
@@ -2325,7 +2431,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
         // the way out
         float idw  = CLAMP(idr * 0.8 * wn / MAX(whm, 1.0), 1.5 * PIN(i_min), idr);
         float idc  = ctx->fo_ph == 2 ? CLAMP(idr * 0.8 * wn / MAX(w_r, 1.0), idw, idr) : idw;
-        float ia   = MIN(0.6 * idr, sqrtf(MAX(imax * imax - idc * idc, 0.0)));
+        float iam  = sqrtf(MAX(imax * imax - idw * idw, 0.0));
+        float ia   = MIN(fo_frac[ctx->fo_lv] * idr, iam);
         float trm  = MAX(PIN(tr), 0.005);
         PIN(d_cmd) = idc;
         PIN(q_cmd) = ctx->fo_ph == 0 ? ia : -ia;
@@ -2354,18 +2461,19 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           float e_d = PIN(ud_fb) - dt_ * idf - PIN(r) * idf + w_f * PIN(l) * iqf;
           float e_q = PIN(uq_fb) - dt_ * iqf - PIN(r) * iqf - w_f * PIN(l) * idf;
           int u     = ctx->fo_ph;
-          ctx->fo_s[u][0] += atan2f(-e_d, e_q);
-          ctx->fo_s[u][1] += atan2f(iqf, idf);
-          ctx->fo_s[u][2] += ctx->fo_imr;
-          ctx->fo_s[u][3] += sqrtf(e_d * e_d + e_q * e_q) / MAX(w_f, 1.0) / MAX(ctx->fo_imr, 0.5);
+          int lv    = ctx->fo_lv;
+          ctx->fo_s[lv][u][0] += atan2f(-e_d, e_q);
+          ctx->fo_s[lv][u][1] += atan2f(iqf, idf);
+          ctx->fo_s[lv][u][2] += ctx->fo_imr;
+          ctx->fo_s[lv][u][3] += sqrtf(e_d * e_d + e_q * e_q) / MAX(w_f, 1.0) / MAX(ctx->fo_imr, 0.5);
           float e_d0 = e_d + dt_ * idf, e_q0 = e_q + dt_ * iqf;
-          ctx->fo_s[u][4] += atan2f(-e_d0, e_q0);
-          ctx->fo_a[u][0] += (w_r - w_prev) / pp / period;
-          ctx->fo_a[u][1] += sqrtf(idf * idf + iqf * iqf);
-          ctx->fo_a[u][2] += sqrtf(e_d * e_d + e_q * e_q) / MAX(w_f, 1.0);
-          ctx->fo_a[u][3] += iqf;
-          ctx->fo_s[u][5] += sqrtf(e_d0 * e_d0 + e_q0 * e_q0) / MAX(w_f, 1.0) / MAX(ctx->fo_imr, 0.5);
-          ctx->fo_n[u]++;
+          ctx->fo_s[lv][u][4] += atan2f(-e_d0, e_q0);
+          ctx->fo_a[lv][u][0] += (w_r - w_prev) / pp / period;
+          ctx->fo_a[lv][u][1] += sqrtf(idf * idf + iqf * iqf);
+          ctx->fo_a[lv][u][2] += sqrtf(e_d * e_d + e_q * e_q) / MAX(w_f, 1.0);
+          ctx->fo_a[lv][u][3] += iqf;
+          ctx->fo_s[lv][u][5] += sqrtf(e_d0 * e_d0 + e_q0 * e_q0) / MAX(w_f, 1.0) / MAX(ctx->fo_imr, 0.5);
+          ctx->fo_n[lv][u]++;
         }
         if(ctx->fo_ph == 0 && (w_r >= whm || ctx->fo_t > 15.0)) {
           ctx->fo_ph = 1;
@@ -2374,6 +2482,17 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
           ctx->fo_cyc++;
           ctx->fo_t  = 0.0;
           ctx->fo_ph = ctx->fo_cyc > FO_CYC ? 2 : 0;
+          // load levels: the next one starts with its own unmeasured pair,
+          // a level the current limit would make too close to the first is skipped
+          float ia0 = MIN(fo_frac[0] * idr, iam);
+          while(ctx->fo_ph == 2 && PIN(rot_tr_loads) > 0.0 && ctx->fo_lv + 1 < FO_LV) {
+            ctx->fo_lv++;
+            float ian = MIN(fo_frac[ctx->fo_lv] * idr, iam);
+            if(ian < 0.8 * ia0 || ian > 1.2 * ia0) {
+              ctx->fo_cyc = 0;
+              ctx->fo_ph  = 0;
+            }
+          }
         } else if(ctx->fo_ph == 2 && w_r <= ctx->w_t) {
           // back under the plate frequency: the open loop field takes over
           // at the rotor's speed and ramps down

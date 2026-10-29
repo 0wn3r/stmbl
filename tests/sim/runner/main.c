@@ -366,6 +366,7 @@ static void plant_from_config(void) {
         {"lmr", "acim_flux0.lmr"}, {"tr", "acim_flux0.tr"}, {"i_n", "acim_foc0.id_n"},
         {"i_knee", "acim_flux0.i_knee"}, {"lmr_sat", "acim_flux0.lmr_sat"}, {"tr_sat", "acim_flux0.tr_sat"},
         {"i_dip", "acim_flux0.i_dip"}, {"lmr_dip", "acim_flux0.lmr_dip"}, {"tr_dip", "acim_flux0.tr_dip"},
+        {"tr_load", "acim_flux0.tr_load"},
     };
     for(unsigned i = 0; i < sizeof(a) / sizeof(a[0]); i++) {
       void *p = f4_side.pin(a[i].pin);

@@ -92,6 +92,7 @@ static param_t P[] = {
     {"i_dip", 0, 0, "ACIM: low induction dip below this [A]"},
     {"lmr_dip", 0, 0, "ACIM: fraction lmr loses at zero flux"},
     {"tr_dip", 0, 0, "ACIM: fraction tr loses at zero flux"},
+    {"tr_load", 0, 0, "ACIM: slip growth with load, as acim_flux0 (rotor resistance across the flux x (1 + tr_load (i_q / i_m)^2))"},
 };
 #define NP (sizeof(P) / sizeof(P[0]))
 
@@ -321,8 +322,21 @@ static void deriv(const double *x, double *dx, double h) {
     double im = acim_im(ps, &lm, &tr);
     double rr = lm / tr;
     double ima = ps > 1e-9 ? pa / ps * im : 0.0, imb = ps > 1e-9 ? pb / ps * im : 0.0;
-    double dpa = rr * (_id - ima) - we * pb;
-    double dpb = rr * (_iq - imb) + we * pa;
+    double ea = _id - ima, eb = _iq - imb;
+    double kl = 1.0;
+    if(PV(tr_load) > 0.0 && ps > 1e-9) {
+      // the rotor current across the flux (torque, slip) sees rr * kl, the
+      // one along it (flux lag) rr, as acim_flux's tr_load
+      double ua = pa / ps, ub = pb / ps;
+      double ip = ua * _iq - ub * _id;  // stator current across the flux
+      double x  = ip / fmax(im, 0.01);
+      kl        = fmin(1.0 + PV(tr_load) * x * x, 3.0);
+      double ep = -ub * ea + ua * eb;
+      ea += (kl - 1.0) * ep * -ub;
+      eb += (kl - 1.0) * ep * ua;
+    }
+    double dpa = rr * ea - we * pb;
+    double dpb = rr * eb + we * pa;
     if(x[8] > 0.5) {  // phases open: no stator current
       dx[0] = dx[1] = 0.0;
     } else {
@@ -334,7 +348,7 @@ static void deriv(const double *x, double *dx, double h) {
     te     = 1.5 * pp * (pa * _iq - pb * _id);
     im_now = im;
     lm_now = lm;
-    tr_now = tr;
+    tr_now = tr / kl;
   } else {
     dx[0] = (ud - r * _id + we * lq * _iq) / ld;
     dx[1] = (uq - r * _iq - we * (ld * _id + psi)) / lq;

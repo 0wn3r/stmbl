@@ -391,6 +391,8 @@ A red message that the rotor did not follow: lower `idacim0.rot_acc` or unload t
 
 Optional rotating tr check: `idacim0.rot_tr_vel` > 0 (top speed in rad/s mech, 0 = off by default) adds a run in FOC on the encoder with torque ramps between 0.7 and 1 x `rot_tr_vel`; it prints the rotating `tr` as a multiple of the standstill one and a torque balance inertia, as comments to compare, not lines to append.
 
+With `idacim0.rot_tr_loads = 1` as well, the check runs again with less torque (q current 0.45 and 0.3 x `id_n`) and fits how the slip grows with load; with all three levels it prints `acim_flux0.tr_load` to append (slip x (1 + tr_load (iq / i_mr)^2), 0 = off). The lowest level must still beat the spindle's drag at `rot_tr_vel`, otherwise it is skipped and nothing is printed to append.
+
 ### Pole Pairs and Direction
 
 `conf0.out_rev` is only found by the pole pair test, which is started by hand and needs an encoder (it compares the field speed with `vel1.vel`): rotor free, type `idacim0.state = 2`, then `idacim0.state = 2.2`. The field turns at `idacim0.test_vel` for 3 s. Append `conf0.polecount` and, if printed, `conf0.out_rev = 1`.
