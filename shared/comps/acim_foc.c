@@ -21,7 +21,8 @@
 *   standstill the currents are almost DC, so one IGBT carries the peak
 *   current all the time instead of for part of a cycle. A module's DC
 *   rating per switch (IC) can be below the peak a sine current may reach
-*   (IM06B50GC1: IC 35 A, IO 50 A). The current limit is then max_cur_0 at
+*   (IRAM256-2067A: about 7.5 A peak near DC at Tc 100 C, Fig. 5, against
+*   30 A peak). The current limit is then max_cur_0 at
 *   `vel` 0, rising linearly to max_cur at `f_lf` output frequency; d keeps
 *   priority, so the flux stays and only the torque is cut. ipm0's
 *   junction model stays the thermal protection on top.

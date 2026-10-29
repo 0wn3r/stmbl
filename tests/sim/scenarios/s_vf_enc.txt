@@ -2,7 +2,7 @@
 # plant carries the alpha 0.5 estimate's flux (the config has none).
 title Spindle V/f encoder, 0 -> 838 -> 0 rad/s
 config conf/fanuc_a05_spindle_vf_enc.txt
-plant lmr=0.0157 tr=0.07 i_n=7 f=0.06 d=0.00016
+plant lmr=0.0216 tr=0.04 i_n=5.1 f=0.06 d=0.00016
 f4 vf0.vel_cmd = 0
 at 0.1 f4 fault0.en = 1
 at 0.2 f4 vf0.vel_cmd = 838

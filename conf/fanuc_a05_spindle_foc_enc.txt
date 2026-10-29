@@ -13,12 +13,15 @@
 #   4110 2155/1886, 4111 26/361, 4112 652/200,
 #   4113 1000/1900, 4114 10/0, 4115 5/100
 # [est] the manuals give no R, L, Tr or Im: the
-#   electrical values below are estimates from
-#   the plate (flux 0.11 Vs from 85 V at 100 Hz,
-#   magnetizing 7 A pk; S1 torque then needs
-#   6.5 A pk q current, 9.6 A pk in all). Run
-#   idacim on the motor and replace every [est].
-# sized for the v4.0 board: 7 A DC at standstill
+#   electrical values below are estimates (flux
+#   0.11 Vs from 85 V at 100 Hz; magnetizing
+#   5.1 A pk from the SPM 9D20 firmware's 4110
+#   ratio to the alpha 2; tr 40 ms from 4113
+#   1000 vs 450, scaled by our measured alpha 2;
+#   S1 torque then needs 5.3 A pk q current,
+#   7.4 A pk in all). Run idacim on the motor
+#   and replace every [est].
+# sized for the v4.0 board: 5.1 A DC at rest
 #   keeps the IRAM256-2067A under its derate
 # variant: rotor flux FOC on the encoder (S1)
 link pid
@@ -30,6 +33,7 @@ conf0.mot_fb_res = 512
 enc_fb0.ires = 32
 fb_switch0.mot_pos = enc_fb0.ipos
 fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
+enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
 # drive: v4.0 board, IRAM256-2067A (30 A peak)
@@ -68,10 +72,14 @@ pid0.acc_ext_cmd = 0
 conf0.out_rev = 1 # [est]
 conf0.r = 1.0 # [est]
 conf0.l = 0.0012 # [est] leakage, Fanuc 4116 scaled on the alpha 2
-acim_flux0.tr = 0.07 # [est]
-acim_flux0.lmr = 0.0157 # [est] psi 0.11 / 7 A
-acim_foc0.id_n = 7 # [est]
-acim_flux0.i_n = 7 # [est]
+acim_flux0.tr = 0.04 # [est] Fanuc 4113
+acim_flux0.lmr = 0.0216 # [est] psi 0.11 / 5.1 A
+acim_foc0.id_n = 5.1 # [est] Fanuc 4110
+acim_flux0.i_n = 5.1 # [est]
+acim_foc0.max_cur_0 = 7.5 # IRAM near DC, Fig. 5 at Tc 100 C
+acim_foc0.k_boost = 2 # flux boost
+acim_foc0.boost_max = 0.3
+acim_foc0.k_cut = 2 # flux cut
 conf0.j = 0.0008 # [est] rotor + pulley
 conf0.j_sys = 0 # [est]
 conf0.f = 0.06 # [est]

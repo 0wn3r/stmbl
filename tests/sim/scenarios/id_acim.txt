@@ -11,18 +11,17 @@ f4 idacim0.n_freq = 100
 f4 idacim0.n_cur = 7
 f4 idacim0.n_pp = 2
 f4 idacim0.spin = 1
-plant jl=0 r=1.0 ld=0.0012 lmr=0.0157 tr=0.07 i_knee=0 lmr_sat=0 tr_sat=0 i_dip=0 lmr_dip=0 tr_dip=0 jm=0.0008 f=0.06 d=0.00016 dt_shape=1 dt_i0=0.85 dt_eff=1.057e-6
+plant jl=0 r=1.0 ld=0.0012 lmr=0.0216 tr=0.04 i_knee=0 lmr_sat=0 tr_sat=0 i_dip=0 lmr_dip=0 tr_dip=0 jm=0.0008 f=0.06 d=0.00016 dt_shape=1 dt_i0=0.85 dt_eff=1.057e-6
 at 0.1 f4 fault0.en = 1
 at 0.2 f4 idacim0.state = 1.2
 at 21 f4 idacim0.state = 4.2
 trace idacim0.state hv0.id_fb hv0.iq_fb plant.vel plant.i_mr
-# alpha 0.5 plant (estimated values, 28 Oct), results against its truth:
-#   r 0.951 (1.0, -5%), l 1.10 mH (1.2, -8.5%), tr 0.0670 (0.07, -4%),
-#   rot_tr_ramp 0.0686 (-2%), rot_lmr 15.92 mH (15.7, +1.4%), rot_id_n
-#   6.49 A (the plant's flux at 85 V, 100 Hz: 6.54), j 0.000797 (0.0008).
-#   With the 1.19 us dead time (28 Oct): r 0.923 (-7.7%), l 1.10 mH,
-#   tr 0.0728 (+4%), rot_tr_ramp 0.0689, rot_lmr 15.83 mH, rot_id_n 6.52 A,
-#   j 0.000798. The standstill tr error follows the dead time.
+# alpha 0.5 plant (29 Oct: tr 40 ms and 5.1 A magnetizing from the Fanuc
+#   SPM 9D20 data, lmr 21.6 mH), with the 1.19 us dead time, against its
+#   truth: r 0.924 (1.0, -7.6%), l 1.10 mH (1.2, -8.6%), tr 0.0414 (0.04,
+#   +3.4%), rot_tr_ramp 0.0386 (-3.4%), rot_lmr 21.71 mH (21.6, +0.5%),
+#   rot_id_n 4.84 A (the flux at 85 V, 100 Hz), j 0.000797 (0.0008).
+#   The standstill tr error follows the dead time (-4% at 2 us).
 #   On the alpha 2 plant (10 Oct) the errors were r -25% (dead time bias,
 #   larger against a 0.19 ohm r), l -8%, tr -5%, lmr +1.6%, j -5%.
 # The windows below hold those values, so a change in idacim shows up here.
@@ -31,14 +30,14 @@ expect final idacim0.r > 0.90
 expect final idacim0.r < 0.98
 expect final idacim0.l > 0.00104
 expect final idacim0.l < 0.00115
-expect final idacim0.tr > 0.064
-expect final idacim0.tr < 0.076
-expect final idacim0.rot_tr_ramp > 0.065
-expect final idacim0.rot_tr_ramp < 0.072
-expect final idacim0.rot_lmr > 0.0153
-expect final idacim0.rot_lmr < 0.0165
-expect final idacim0.rot_id_n > 6.2
-expect final idacim0.rot_id_n < 6.8
+expect final idacim0.tr > 0.037
+expect final idacim0.tr < 0.044
+expect final idacim0.rot_tr_ramp > 0.036
+expect final idacim0.rot_tr_ramp < 0.042
+expect final idacim0.rot_lmr > 0.0210
+expect final idacim0.rot_lmr < 0.0225
+expect final idacim0.rot_id_n > 4.6
+expect final idacim0.rot_id_n < 5.1
 expect final idacim0.rot_j > 0.00076
 expect final idacim0.rot_j < 0.00084
 run 120

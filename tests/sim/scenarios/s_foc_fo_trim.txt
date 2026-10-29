@@ -1,10 +1,10 @@
 # Spindle FOC on the encoder with the flux_obs slip trim, plant tr 1.3x the
-# config's (a cold rotor): k = tr_model / tr_true = 0.771, and
+# config's (a cold rotor): k = tr_model / tr_true = 0.769, and
 # the frame stay on the flux. k settles 3-4 % high: 0.794 at 2 us dead time,
 # 0.801 at 1.19 us (28 Oct).
 title flux_obs trim, plant tr 1.3x the model, 600 rad/s
 config conf/fanuc_a05_spindle_foc_enc.txt
-plant tr=0.091
+plant tr=0.052
 f4 link flux_obs
 f4 flux_obs0.kp_s = 20
 f4 flux_obs0.ki_s = 2

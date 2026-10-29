@@ -8,7 +8,7 @@
 # acim_foc0.k_cut 2 (flux follows field weakening faster)
 # acim_foc0.max_cur_0: current limit at 0 Hz output, up to
 # max_cur at acim_foc0.f_lf (2 Hz), for a module whose IGBT
-# DC rating is below max_cur (IM06B50GC1: 30)
+# DC rating is below max_cur (IRAM256-2067A: 7.5 at Tc 100 C)
 # acim_flux0.tr_flux_min 0.95, tr_acc_max 0.3 (tr MRAS gates;
 # tr_ki is per motor, spindle 1e-4; tr_iq_min about 0.03 x id_n
 # to adapt at no load)
