@@ -28,11 +28,17 @@
 * - Flux boost (optional, `k_boost` > 0): while the flux is below the
 *   ramped d command, d gets k_boost * (d - i_mr) on top, so i_mr rises in
 *   about tr / (1 + k_boost) instead of tr: faster torque after field
-*   weakening and a shorter magnetizing at enable. Only upward; going into
-*   field weakening is not sped up, so the acim_fw loop keeps its gain. The
+*   weakening and a shorter magnetizing at enable. The
 *   boost only takes current q does not need: |d| <= sqrt(max_cur^2 - q^2),
 *   and with `boost_max` > 0 never more than boost_max * id_n on top of d
 *   (0.3 keeps the enable peak near the current limit).
+* - Flux cut (optional, `k_cut` > 0): the same downward, once `ready`. While
+*   the flux is above the d command (going into field weakening), d is
+*   lowered by k_cut * (i_mr - d), at most to 0, so the flux follows acim_fw
+*   in about tr / (1 + k_cut). Without it the rotor flux lags the 1/speed
+*   target by tr and a fast run up saturates the voltage (spindle sim,
+*   300 to 838 rad/s at full power: duty above 0.95 for 320 ms, with
+*   k_boost 2 and k_cut 2 never; peak current 21.4 to 22.6 A).
 * - t_max: torque the current limit allows at the present flux, capped by
 *   acim_fw's t_lim when that is nonzero. Link pid0.max_torque and
 *   pid0.neg_min_torque to it.
@@ -54,6 +60,7 @@ HAL_PIN(lmr);        // *parameter*, Lm^2/Lr [H]
 HAL_PIN(polecount);  // *parameter*, pole pairs
 HAL_PIN(k_boost);    // *parameter*, flux boost gain, 0 = off
 HAL_PIN(boost_max);  // *parameter*, largest boost as a fraction of id_n, 0 = only the current limit
+HAL_PIN(k_cut);      // *parameter*, flux cut gain (d below the command while the flux is above it), 0 = off
 HAL_PIN(max_cur_0);  // *parameter*, current limit at 0 Hz output [A peak], 0 = off (max_cur at any frequency)
 HAL_PIN(f_lf);       // *parameter*, output frequency where max_cur_0 has risen to max_cur [Hz], default 2
 
@@ -62,7 +69,7 @@ HAL_PIN(q_cmd);      // *output*, to hv0.q_cmd
 HAL_PIN(t_max);      // *output*, available torque [Nm]
 HAL_PIN(t_min);      // *output*, -t_max
 HAL_PIN(ready);      // *output*, 1 = magnetized, torque allowed
-HAL_PIN(boost);      // *output*, d current added by the flux boost [A]
+HAL_PIN(boost);      // *output*, d current added by the flux boost [A], negative while the flux cut lowers d
 
 struct acim_foc_ctx_t {
   float id;  // ramped d command, without the boost
@@ -127,6 +134,11 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     if(PIN(boost_max) > 0.0) {
       boost = MIN(boost, PIN(boost_max) * MAX(PIN(id_n), 0.0));
     }
+  }
+
+  // flux cut: the same downward, so the flux follows field weakening
+  if(PIN(en) > 0.0 && ready > 0.0 && PIN(k_cut) > 0.0 && id < PIN(i_mr)) {
+    boost = -MIN(PIN(k_cut) * (PIN(i_mr) - id), id);
   }
 
   ctx->id    = id;

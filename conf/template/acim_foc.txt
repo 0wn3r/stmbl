@@ -5,6 +5,7 @@
 # field weakening: acim_fw0.duty = hv0.duty (optional)
 # optional, all off by default; values that fit any motor:
 # acim_foc0.k_boost 2, acim_foc0.boost_max 0.3 (flux boost)
+# acim_foc0.k_cut 2 (flux follows field weakening faster)
 # acim_foc0.max_cur_0: current limit at 0 Hz output, up to
 # max_cur at acim_foc0.f_lf (2 Hz), for a module whose IGBT
 # DC rating is below max_cur (IM06B50GC1: 30)

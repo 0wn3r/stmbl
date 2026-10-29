@@ -464,7 +464,7 @@ acim_flux0.lmr_sat = ... # rotating test
 acim_foc0.id_n = ...
 ```
 
-Then continue with [id_mot](#mechanical-parameters-id_mot), [id_sys](#load-inertia-id_sys) and [id_pid](#control-loop-id_pid) as for a PMSM. Optional extras (flux boost `acim_foc0.k_boost`, tr adaptation `acim_flux0.tr_ki`, a lower current limit near 0 Hz `acim_foc0.max_cur_0` for a module whose IGBT DC rating is below `conf0.max_ac_cur`, ...) are listed in the [acim_foc template](/docs/hal_templates/acim_foc.md); they are off by default and not tuned automatically.
+Then continue with [id_mot](#mechanical-parameters-id_mot), [id_sys](#load-inertia-id_sys) and [id_pid](#control-loop-id_pid) as for a PMSM. Optional extras (flux boost `acim_foc0.k_boost` and its downward twin `acim_foc0.k_cut`, tr adaptation `acim_flux0.tr_ki`, a lower current limit near 0 Hz `acim_foc0.max_cur_0` for a module whose IGBT DC rating is below `conf0.max_ac_cur`, ...) are listed in the [acim_foc template](/docs/hal_templates/acim_foc.md); they are off by default and not tuned automatically.
 
 - Run the speed command through a ramp with `ramp0.en_delay = 0.3` (as the spindle examples do): `acim_foc` gives no torque for about 280 ms after enable while the flux builds.
 - For a spindle tune `vel_bw` with [id_pid in speed mode](#speed-mode-spindle) (`pid0.pos_en = 0`), with `conf0.max_force = acim_foc0.t_max`.
