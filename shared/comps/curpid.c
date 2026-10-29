@@ -37,7 +37,9 @@
 * - `id_error`/`iq_error` show the error against the predicted current.
 *
 * 4. **Voltage vector limit** (rt):
-* - The sum is then limited as one vector of length `pwm_volt`, d first: `ud` is clamped to +-`pwm_volt`, and `uq` to what is left of the circle, `sqrt(pwm_volt^2 - ud^2)`. So d keeps what it needs for the flux (and field weakening), q gets the rest.
+* - The sum is then limited as one vector of length `pwm_volt`. With `vlim_mode` 0 (default), d first: `ud` is clamped to +-`pwm_volt`, and `uq` to what is left of the circle, `sqrt(pwm_volt^2 - ud^2)`. So d keeps what it needs for the flux (and field weakening), q gets the rest.
+* - With `vlim_mode` 1, proportional: a vector longer than `pwm_volt` is scaled down as a whole, keeping its angle, so d and q lose the same share (the way the Fanuc HRV loop limits it). Torque holds up better in deep field weakening, the d (flux) error grows instead.
+* - `sat` is 1 from the tick the unlimited vector reaches `pwm_volt` until it falls below (1 - `sat_hyst`) of it. In `vlim_mode` 1 the integrators stop integrating while `sat` is 1 (on top of the back-calculation), so they do not creep along the limit.
 * - Anti-windup by back-calculation: each integrator takes back what the limit cut from its axis, so it holds at the limit instead of winding up.
 * - `ud`/`uq` are the limited vector, which is what the PWM stage can pass, so the predictor, the integrators and the F4 (via `ls0.ud_fb/uq_fb`) all see the voltage actually applied. On the F3 `pwm_volt` is `duty_max * udc / sqrt(3)`, inside the SVM hexagon.
 *
@@ -50,7 +52,7 @@
 * - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage, phase mode and `hv0.duty_max`).
 *
 * {{% hint warning %}}
-* - The vector limit gives d priority: a large d demand (e.g. a d current step) can leave q with little or no voltage for that time.
+* - With `vlim_mode` 0 the vector limit gives d priority: a large d demand (e.g. a d current step) can leave q with little or no voltage for that time.
 * {{% /hint %}}
 */
 
@@ -100,12 +102,17 @@ HAL_PIN(vel);  // *input*, Electrical velocity (rad/s)
 HAL_PIN(id_error);  // *output*, D-axis current error (A), 0 in voltage mode
 HAL_PIN(iq_error);  // *output*, Q-axis current error (A), 0 in voltage mode
 
+HAL_PIN(vlim_mode);  // *parameter*, Voltage vector limit, 0 = d first (default), 1 = proportional with the integrators held while sat
+HAL_PIN(sat_hyst);   // *parameter*, sat clears below (1 - sat_hyst) * pwm_volt, default 0.05
+HAL_PIN(sat);        // *output*, 1 while the voltage vector is at the limit (with sat_hyst), 0 in voltage mode
+
 struct curpid_ctx_t {
   float id_error_sum;
   float iq_error_sum;
   float cur_scale;  // volt mode current limit, per unit
   float ld_last, ld_inv;  // 1 / ld, 1 / lq recomputed only when the pin changes:
   float lq_last, lq_inv;  // two divisions a tick otherwise, ~14 cycles each
+  uint32_t sat;           // the vector limit is in force, with hysteresis
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -120,7 +127,8 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(cur_bw) = 250.0;
   PIN(kci)    = 2000.0;  // per unit [1/s]: 1.3x overshoot cuts the voltage in ~1 ms at 15 kHz
   PIN(ksp)    = 1.0;
-  PIN(scale)  = 1.0;
+  PIN(scale)    = 1.0;
+  PIN(sat_hyst) = 0.05;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -198,7 +206,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float ud = LIMIT(ff * r * idc - kind * indd + PIN(cur_bw) * ld * id_error, max_volt);
   float uq = LIMIT(ff * r * iqc + kind * indq + PIN(cur_bw) * lq * iq_error, max_volt);
 
-  if(PIN(cur_bw) * r > 0.0) {
+  int prop = PIN(vlim_mode) > 0.0;
+  if(prop && ctx->sat) {
+    // held: only the back-calculation below moves them
+  } else if(PIN(cur_bw) * r > 0.0) {
     ctx->id_error_sum = LIMIT(ctx->id_error_sum + PIN(cur_bw) * r * id_error * period, max_volt - ud);
     ctx->iq_error_sum = LIMIT(ctx->iq_error_sum + PIN(cur_bw) * r * iq_error * period, max_volt - uq);
   } else {
@@ -216,15 +227,30 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // needs for the flux, q gets the rest of the circle. Back-calculation: an integrator
   // takes whatever the limit cut from its axis, so it holds at the limit
   // instead of winding up.
-  float ud_lim = LIMIT(ud, max_volt);
-  float uq_max = sqrtf(MAX(max_volt * max_volt - ud_lim * ud_lim, 0.0));
-  float uq_lim = LIMIT(uq, uq_max);
+  float u2 = ud * ud + uq * uq;
+  float m2 = max_volt * max_volt;
+  if(u2 >= m2) {
+    ctx->sat = 1;
+  } else if(u2 < m2 * (1.0 - PIN(sat_hyst)) * (1.0 - PIN(sat_hyst))) {
+    ctx->sat = 0;
+  }
+  float ud_lim, uq_lim;
+  if(prop) {
+    float k = u2 > m2 ? max_volt / sqrtf(u2) : 1.0;
+    ud_lim  = ud * k;
+    uq_lim  = uq * k;
+  } else {
+    ud_lim       = LIMIT(ud, max_volt);
+    float uq_max = sqrtf(MAX(m2 - ud_lim * ud_lim, 0.0));
+    uq_lim       = LIMIT(uq, uq_max);
+  }
   ctx->id_error_sum += ud_lim - ud;
   ctx->iq_error_sum += uq_lim - uq;
   ud = ud_lim;
   uq = uq_lim;
 
   if(PIN(cmd_mode) == VOLT_MODE) {
+    ctx->sat          = 0;
     ud                = idc;
     uq                = iqc;
     ctx->id_error_sum = 0.0;
@@ -234,6 +260,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   }
 
   if(PIN(en) <= 0.0) {
+    ctx->sat          = 0;
     ud                = 0.0;
     uq                = 0.0;
     ctx->id_error_sum = 0.0;
@@ -245,6 +272,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   PIN(id_error) = id_error;
   PIN(iq_error) = iq_error;
+  PIN(sat)      = ctx->sat;
 }
 
 hal_comp_t curpid_comp_struct = {

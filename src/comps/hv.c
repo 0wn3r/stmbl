@@ -39,7 +39,8 @@
 * - Both are wired from `fault0` (see the fault page for when it asks for braking). During an F3 update both flags are sent as 0.
 *
 * 4. **Config words (round robin)**:
-* - The F3 current loop parameters are sent one word per packet, cycling through `r`, `l`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_y`, `max_cur * scale`, `dac`, `drop_k`, `lq`, `emf_run`, `emf_sel`, `emf_pp`, `drop_knee`, an unused word (always 0, so an older F3 reads its removed observer as off) and `oc_cur` = `max_cur` (the layout of `f3_config_data_t` in shared/common.h, append only). A full update takes 17 rt periods.
+* - The F3 current loop parameters are sent one word per packet, cycling through `r`, `l`, `psi`, `cur_bw`, `cur_ff`, `cur_ind`, `max_y`, `max_cur * scale`, `dac`, `drop_k`, `lq`, `emf_run`, `emf_sel`, `emf_pp`, `drop_knee`, an unused word (always 0, so an older F3 reads its removed observer as off), `oc_cur` = `max_cur` and `vlim_mode` (the layout of `f3_config_data_t` in shared/common.h, append only). A full update takes 18 rt periods.
+* - `vlim_mode` picks how the F3 current loop limits its voltage vector (curpid): 0 (default) d first, q gets what is left, the right choice for servo axes; 1 proportional, the whole vector scaled down with its angle kept and the integrators held while at the limit (the Fanuc HRV way), a candidate for an induction spindle in deep field weakening.
 * - `max_cur` is multiplied by `scale` (the fault component's derating, 0..1) before sending; on the F3 it is the current loop command limit. The software overcurrent trip follows the unscaled `max_cur` (`oc_cur`), so a derated limit cannot pull the trip under the current and cause fault 15.
 * - Dead time compensation (F3 hv, 120 deg 3 phase only): `drop_k` scales the ideal dead time loss (dead time / pwm period x DC link voltage), 0 = off. The F3 adds it to the phase voltages before it takes the SVM offset. In current mode the sign per phase comes from the commanded phase currents; in voltage mode it is off unless the F3's own `hv0.drop_volt > 0` (not sent over the link, off by default), which takes the sign from the measured dq current low passed with `hv0.drop_vlp` (3 ms). With `drop_knee = 0` the sign latches outside a current band; `drop_knee > 0` (A) instead scales each phase by `k(i) = 1 - 1/(1 + |i|/drop_knee)^2`, which fades out at low current and cannot stick.
 * - `emf_run` (1 sum, 0 hold, -1 clear), `emf_sel` and `emf_pp` (pole pairs) drive the F3 `emf0` back EMF map, which sums the unfiltered phase voltages while the bridge is off and the rotor coasts; the result selected by `emf_sel` comes back in `emf_val`. Used by `idpmsm0`.
@@ -109,6 +110,7 @@ HAL_PIN(max_cur);           // *parameter*, max phase current (A peak), sent mul
 HAL_PIN(dac);               // *parameter*, F3 overcurrent comparator DAC value (0..4095), default 2500 = comparator off (about 350 A); set it with id_dac or ocdac only on a board with the 1 nF sense caps
 HAL_PIN(drop_k);            // *parameter*, dead time compensation, fraction of the ideal loss, 0 = off, default 0
 HAL_PIN(drop_knee);         // *parameter*, dead time compensation curve knee (A peak), 0 = latched sign
+HAL_PIN(vlim_mode);         // *parameter*, F3 current loop voltage limit, 0 = d first (default), 1 = proportional (curpid)
 HAL_PIN(emf_run);           // *input*, F3 emf0 back EMF map: 1 sum, 0 hold, -1 clear
 HAL_PIN(emf_sel);           // *input*, which emf0 result comes back in emf_val
 HAL_PIN(emf_pp);            // *parameter*, pole pairs, for emf0's per pole bins
@@ -367,6 +369,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // the trip limit stays at the rated current: following scale, an overshoot
   // past max_cur cut oc_lim below the current and tripped fault 15
   ctx->config.pins.oc_cur    = PIN(max_cur);
+  ctx->config.pins.vlim_mode = PIN(vlim_mode);
 
   uint32_t dma_count = MAX(sizeof(packet_from_hv_t), sizeof(packet_bootloader_t)) - LL_DMA_GetDataLength(UART_DRV_DMA, UART_DRV_RX_DMA_STREAM);
 

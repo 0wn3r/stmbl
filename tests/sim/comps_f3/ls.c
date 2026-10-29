@@ -67,6 +67,7 @@ HAL_PIN(emf_run);
 HAL_PIN(emf_sel);
 HAL_PIN(emf_pp);
 HAL_PIN(drop_knee);
+HAL_PIN(vlim_mode);
 
 // process data to LS
 HAL_PIN(dc_volt);
@@ -223,6 +224,7 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
       PIN(emf_sel)   = config.pins.emf_sel;
       PIN(emf_pp)    = config.pins.emf_pp;
       PIN(drop_knee) = config.pins.drop_knee;
+      PIN(vlim_mode) = config.pins.vlim_mode;
       ctx->timeout   = 0;
       PIN(crc_ok)
       ++;
