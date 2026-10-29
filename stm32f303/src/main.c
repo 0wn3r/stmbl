@@ -387,6 +387,7 @@ int main(void) {
   hal_parse("curpid0.pwm_volt = ls0.pwm_volt");
   hal_parse("curpid0.vel = ls0.vel");
   hal_parse("curpid0.en = ls0.en");
+  hal_parse("curpid0.vlim_mode = ls0.vlim_mode");
   hal_parse("curpid0.cmd_mode = ls0.cmd_mode");
   hal_parse("hv0.arr = ls0.arr");
   hal_parse("hv0.drop_k = ls0.drop_k");
