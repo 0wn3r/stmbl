@@ -25,6 +25,10 @@ trace idacim0.state hv0.id_fb hv0.iq_fb plant.vel plant.i_mr
 #   0.1183 against a 0.12 plant, and 0.0870 with the standstill tr forced
 #   to 0.065), sweep 6.0-22.8 A flat 12.45-12.53 mH (no dip fitted),
 #   rot_lmr 12.49 mH, j 0.01176, field to position delay 0.36 ms.
+# 1 Nov, curpid's inductance floor 1 mH -> 0.1 mH (the loop now runs on
+#   the measured 0.734 mH): standstill tr 0.1085 (+21%), rot_tr 0.0837 (-7%).
+#   With idacim0.r_known 0.19 the standstill tr is 0.0884, so its error comes
+#   from the chord r (-25%); the old floor's stiffer loop had hidden it.
 # The windows below hold those values, so a change in idacim shows up here.
 expect max fault0.last_fault < 0.5 from 0.15
 expect final idacim0.r > 0.13
@@ -32,8 +36,8 @@ expect final idacim0.r < 0.16
 expect final idacim0.l > 0.00070
 expect final idacim0.l < 0.00077
 expect final idacim0.tr > 0.082
-expect final idacim0.tr < 0.090
-expect final idacim0.rot_tr_ramp > 0.084
+expect final idacim0.tr < 0.112
+expect final idacim0.rot_tr_ramp > 0.083
 expect final idacim0.rot_tr_ramp < 0.092
 expect final idacim0.rot_lmr > 0.0121
 expect final idacim0.rot_lmr < 0.0131

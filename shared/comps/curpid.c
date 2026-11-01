@@ -49,6 +49,7 @@
 *
 * 6. **Parameters**:
 * - nrt_init defaults: `kci` 2000 1/s (a 1.3x overshoot cuts the voltage in about 1 ms at 15 kHz), `scale` 1. `ff` and `kind` default to 0.
+* - `r` is floored at 0.1 Ohm and `ld`/`lq` at 0.1 mH, so an unset (0) value cannot zero the gain or blow up the predictor's `1 / l`. The inductance floor used to be 1 mH, which silently raised motors below it (the a2 spindle, 0.747 mH): 34 % more proportional gain than `cur_bw` asks for and a predictor that corrected only 75 % of the step.
 * - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage, phase mode and `hv0.duty_max`).
 *
 * {{% hint warning %}}
@@ -82,8 +83,8 @@ HAL_PIN(pwm_volt);  // *input*, Maximum length of the output voltage vector (V)
 
 // d, q resistance and inductance
 HAL_PIN(r);   // *parameter*, Winding resistance (Ohm), min 0.1, default 0.5
-HAL_PIN(ld);  // *parameter*, D-axis inductance (H), min 0.001, default 0.01
-HAL_PIN(lq);  // *parameter*, Q-axis inductance (H), min 0.001, default 0.01
+HAL_PIN(ld);  // *parameter*, D-axis inductance (H), min 0.0001, default 0.01
+HAL_PIN(lq);  // *parameter*, Q-axis inductance (H), min 0.0001, default 0.01
 
 // torque constant
 HAL_PIN(psi);  // *parameter*, Magnet flux linkage (Vs/rad), default 0.05
@@ -136,8 +137,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct curpid_pin_ctx_t *pins = (struct curpid_pin_ctx_t *)pin_ptr;
 
   float r  = MAX(PIN(r), 0.1);
-  float ld = MAX(PIN(ld), 0.001);
-  float lq = MAX(PIN(lq), 0.001);
+  float ld = MAX(PIN(ld), 0.0001);
+  float lq = MAX(PIN(lq), 0.0001);
   if(ld != ctx->ld_last) {
     ctx->ld_last = ld;
     ctx->ld_inv  = 1.0 / ld;
