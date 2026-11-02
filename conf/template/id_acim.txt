@@ -19,6 +19,10 @@ hv0.lq = 0
 hv0.psi = idacim0.psi
 # identify with the dead time compensation off
 hv0.drop_k = 0
+# and the feed forward off: the r test grows r from ud/id,
+# which cur_ff would feed back into ud
+hv0.cur_ff = 0
+hv0.cur_ind = 0
 idacim0.ud_fb = hv0.ud_fb
 idacim0.id_fb = hv0.id_fb
 idacim0.uq_fb = hv0.uq_fb
