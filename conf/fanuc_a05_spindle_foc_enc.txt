@@ -36,6 +36,12 @@ fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
+# amplitude window checked at any speed, the alpha 2 sensor's values
+enc_fb0.min_amp = 0.25 # [est] alpha 2 amp 0.40-0.54
+enc_fb0.max_amp = 0.9
+enc_fb0.amp_vel = 0
+enc_fb0.amp_inst = 1 # each sample, amp0 lags 2 ms
+enc_fb0.amp_n = 2 # 0.4 ms
 # drive: v4.0 board, IRAM256-2067A (30 A peak)
 link ocdac
 ocdac0.cur = 20 # 1.3 x max_ac_cur, measure the map first
@@ -45,6 +51,8 @@ iit0.cur_boost = 1.515 # S1 9.9 A pk
 iit0.max_time = 900 # S3 for 15 min
 hv0.drop_k = 0.885 # dead time comp, fit per board
 hv0.drop_knee = 0.85
+conf0.cur_ff = 1 # r feed forward (as the alpha 2, bench 2 Nov)
+conf0.cur_ind = 1 # emf + cross coupling ff (fluxopt)
 conf0.polecount = 2 # [plate]
 conf0.max_vel = 838 # [plate] 8000 rpm
 conf0.lq = 0 # acim_foc: l is the leakage only

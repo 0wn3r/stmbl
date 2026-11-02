@@ -2,7 +2,9 @@
 # config's 0.04, on the alpha 0.5 spindle's FOC config. jl 0.003 (spindle
 # and pulley through the belt): with the bare rotor the ramp through the
 # speed window is shorter than the 3 tr the check waits, and with 0.006 the
-# open loop field outruns the rotor.
+# open loop field outruns the rotor. rot_tr_vel 500: after main's 2 Nov
+# curpid and id_acim template changes (cur_ff/cur_ind off), 600 runs into
+# the voltage limit at 566 rad/s and the check never ends.
 title idacim rotating tr check
 config conf/fanuc_a05_spindle_foc_enc.txt
 f4 link id_acim
@@ -13,7 +15,7 @@ f4 idacim0.n_freq = 100
 f4 idacim0.n_cur = 7
 f4 idacim0.n_pp = 2
 f4 idacim0.spin = 1
-f4 idacim0.rot_tr_vel = 600
+f4 idacim0.rot_tr_vel = 500
 plant jl=0.003 r=1.0 ld=0.0012 lmr=0.0216 tr=0.053 i_knee=0 lmr_sat=0 tr_sat=0 i_dip=0 lmr_dip=0 tr_dip=0 jm=0.0008 f=0.06 d=0.00016 dt_shape=1 dt_i0=0.85 dt_eff=1.057e-6
 at 0.1 f4 fault0.en = 1
 at 0.2 f4 idacim0.state = 1.2

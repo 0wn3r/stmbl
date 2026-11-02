@@ -36,6 +36,12 @@ fb_switch0.mot_abs_pos = enc_fb0.iabs_pos
 enc_fb0.off_k = 0.0002 # single ended sin/cos: offsets tracked, ~1 s
 adc0.sin_gain = 1.5 # magnetic encoder, low amp
 adc0.cos_gain = 1.5
+# amplitude window checked at any speed, the alpha 2 sensor's values
+enc_fb0.min_amp = 0.25 # [est] alpha 2 amp 0.40-0.54
+enc_fb0.max_amp = 0.9
+enc_fb0.amp_vel = 0
+enc_fb0.amp_inst = 1 # each sample, amp0 lags 2 ms
+enc_fb0.amp_n = 2 # 0.4 ms
 enc_fb0.vel = vel0.vel
 # drive: v4.0 board, IRAM256-2067A (30 A peak)
 link ocdac
