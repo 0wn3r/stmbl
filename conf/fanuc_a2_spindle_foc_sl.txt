@@ -25,6 +25,15 @@
 # ways, no fault (encoder only as a check)
 # 2 Nov: drop_k from idacim, cur_ff + cur_ind 1
 #   (bench A/B on curpid 3f237ef)
+# 2 Nov bench (6297044, 61d97df): 0 to 830 rad/s
+#   2.6 s at max_acc 500, handover 30 rad/s,
+#   peak 24.6 A, no fault. sl_seq0.acc 100 is the
+#   I/f start only (500 gave a 31 A handover
+#   spike); acc_run = conf0.max_acc (sl_acim).
+#   fluxopt0.min stays 1: 0.6 peaked 30.3 A.
+#   vel_bw 59.85 kept (id_pid 49.46 was worse).
+#   Above ~5500 rpm the speed lags the ramp up to
+#   65 rad/s: pid on acim_fw0.t_lim (power limit).
 # variant: rotor flux FOC sensorless (S3): I/f
 # start, observer above w_hand. No encoder.
 # i_f, align, w_hand, hyst, obs0.bw derived
@@ -63,6 +72,10 @@ ramp0.max_vel = conf0.max_vel
 ramp0.max_acc = conf0.max_acc
 ramp0.max_dec = conf0.max_acc
 ramp0.en_delay = 0.3 # flux builds before the ramp
+ramp0.j = 0.0131 # conf0.j + j_sys, with tool
+ramp0.p_acc = 2700 # drive power - drag at max_vel
+ramp0.p_dec = 3000 # regen power when braking
+sl_seq0.acc = 100 # I/f start only
 fault0.en = ramp0.en_out
 pid0.pos_en = 0
 conf0.j_sys = 0
