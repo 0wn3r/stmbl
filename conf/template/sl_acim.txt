@@ -9,6 +9,8 @@
 # then acim_flux0.tr_ks 1 trims tr from the slip error in steady holds.
 # command through ramp0: sl_seq0.vel_cmd = ramp0.vel_cmd (sensorless
 # links vel0.vel); pid takes sl_seq0.vel_ref, keep no pid0.vel_ext_cmd line.
+# sl_seq0.acc (100) is the I/f start only; after the handover vel_ref
+# ramps at acc_run = conf0.max_acc, so ramp0 sets the run-up.
 link sensorless
 sl_seq0.i_f = acim_foc0.id_n
 sl_seq0.tr = acim_flux0.tr
@@ -18,6 +20,7 @@ sl_seq0.q_in = acim_foc0.q_cmd
 obs0.slip = acim_flux0.slip
 sl_seq0.slip_max = acim_flux0.slip_max
 obs0.bw = sl_seq0.obs_bw
+sl_seq0.acc_run = conf0.max_acc
 acim_flux0.slip_err = sl_seq0.slip_err
 # no tr MRAS here: the observer frame does not depend on tr, so the
 # reactive power residual has no tr in it and the MRAS would only drift

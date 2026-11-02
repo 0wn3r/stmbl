@@ -3,7 +3,8 @@
 # direction, so sl_seq stays on the observer. idm starts once pid is enabled.
 # J and d come out as usual. f and o are both a constant torque here and
 # split arbitrarily: read f + o, and take f from an encoder run.
-# Set sl_seq0.acc >= idm0.max_acc, or sl_seq's ramp cuts the profile.
+# Set sl_seq0.acc_run (sl_acim: conf0.max_acc; 0 = sl_seq0.acc)
+# >= idm0.max_acc, or sl_seq's ramp cuts the profile.
 link id_sys
 idm0.en = sl_seq0.pid_en
 idm0.vel_offset = 125

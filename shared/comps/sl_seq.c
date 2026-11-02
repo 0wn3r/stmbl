@@ -24,8 +24,14 @@
 *    with f seeded from obs0.vel_m.
 *
 * `vel_ref` and `acc_ref` replace the command into pid: they follow f in I/f
-* and, from the handover, ramp from the observed speed to vel_cmd at `acc`,
-* so the handover is bumpless and pid gets acceleration feedforward.
+* and, from the handover, ramp from the observed speed to vel_cmd at
+* `acc_run` (`acc` while that is 0), so the handover is bumpless and pid gets
+* acceleration feedforward. `acc` only needs to suit the I/f start: a fast
+* I/f leaves the frame far ahead of the rotor and the handover then steps
+* the current (spindle bench 2 Nov: acc 500 overshot to 66 rad/s, a 31 A
+* spike, fault 16 at fluxopt 0.6; acc 100 clean). The sl_acim template links
+* `acc_run` to conf0.max_acc, so after the handover the ramp in front
+* (ramp0) is the limit: 0 to 8000 rpm took 8.5 s at acc 100 without it.
 *
 * Encoder plausibility guard (optional, `enc_tol` > 0, needs `vel_enc` from
 * an encoder with the same sign and scale as obs0.vel_m, e.g. a spindle
@@ -70,6 +76,7 @@ HAL_PIN(polecount);   // *parameter*, pole pairs
 HAL_PIN(i_f);         // *parameter*, align and I/f current on d [A peak], default 3, sl_acim links acim_foc0.id_n
 HAL_PIN(align_time);  // *parameter*, [s], 0 = 3 * tr
 HAL_PIN(acc);         // *parameter*, I/f acceleration [rad/s^2 mech]
+HAL_PIN(acc_run);     // *parameter*, acceleration of vel_ref after the handover [rad/s^2 mech], 0 = acc
 HAL_PIN(w_hand);      // *parameter*, handover speed [rad/s mech], 0 = from e_min and the flux
 HAL_PIN(hyst);        // *parameter*, fall back below w_hand - hyst [rad/s mech], 0 = w_hand / 3
 HAL_PIN(lock_time);   // *parameter*, obs free running before handover [s]
@@ -221,7 +228,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // speed command for pid: f until the handover, then from the observed speed
   // toward vel_cmd at acc, with the slope as acceleration feedforward, so pid
   // neither sees a step nor has to build the inertia torque on its integrator
-  float ref = state == 3 ? ctx->ref + LIMIT(PIN(vel_cmd) - ctx->ref, MAX(PIN(acc), 0.0) * period) : f;
+  float acc_run = PIN(acc_run) > 0.0 ? PIN(acc_run) : MAX(PIN(acc), 0.0);
+  float ref     = state == 3 ? ctx->ref + LIMIT(PIN(vel_cmd) - ctx->ref, acc_run * period) : f;
   PIN(acc_ref) = state == 3 || state == 2 ? (ref - (state == 3 ? ctx->ref : PIN(vel_ref))) / period : 0.0;
   ctx->ref     = ref;
   PIN(vel_ref) = ref;

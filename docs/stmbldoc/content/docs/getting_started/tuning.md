@@ -536,15 +536,15 @@ The observer needs `conf0.r`, `conf0.l`, `conf0.lq`, `conf0.polecount` (and `hv0
 ### ACIM
 
 1. Identify with `id_acim` (with the rotating test for `id_n`, `lmr_sat`, and `conf0.j` if an encoder is available).
-2. Config: `link pid`, `link acim_foc`, `link sl_acim`, with `conf0.lq = 0`. The template links `sl_seq0.i_f = acim_foc0.id_n`; `sl_seq0.align_time` 0 is 3 x `acim_flux0.tr`, `w_hand` 0 is where the emf is 5 x `obs0.e_min` (flux `lmr` x `i_f`), `hyst` 0 is `w_hand` / 3, and the template links `obs0.bw = sl_seq0.obs_bw` (5 x `w_hand` x polecount). Override any of these in the config if the start needs it. `sl_acim` turns the tr MRAS off (`acim_flux0.tr_ki = 0`).
+2. Config: `link pid`, `link acim_foc`, `link sl_acim`, with `conf0.lq = 0`. The template links `sl_seq0.i_f = acim_foc0.id_n`; `sl_seq0.align_time` 0 is 3 x `acim_flux0.tr`, `w_hand` 0 is where the emf is 5 x `obs0.e_min` (flux `lmr` x `i_f`), `hyst` 0 is `w_hand` / 3, and the template links `obs0.bw = sl_seq0.obs_bw` (5 x `w_hand` x polecount). Override any of these in the config if the start needs it. `sl_seq0.acc` (100 rad/s^2) is the I/f start only, keep it there: a fast I/f steps the current at the handover (spindle: acc 500 gave a 31 A spike). After the handover `sl_seq0.acc_run`, linked to `conf0.max_acc`, lets `ramp0` set the run-up. `sl_acim` turns the tr MRAS off (`acim_flux0.tr_ki = 0`).
 3. Optional, with a spindle encoder: `sl_seq0.vel_enc = vel1.vel`, `sl_seq0.enc_tol = 1`, then `acim_flux0.tr_ks = 1` trims `tr` from the slip error.
-4. Load inertia without encoder (`id_sys_sl`): needs `conf0.j` in the config. First `sl_seq0.acc` must be at least `idm0.max_acc` (250), or the ramp cuts the profile. Then:
+4. Load inertia without encoder (`id_sys_sl`): needs `conf0.j` in the config. First `sl_seq0.acc_run` (`conf0.max_acc` from `sl_acim`) must be at least `idm0.max_acc` (250), or the ramp cuts the profile. Then:
 
 ```python
 link id_sys_sl
 stop
 start
-sl_seq0.acc = 250
+sl_seq0.acc_run = 250
 fault0.en = 1
 ```
 
