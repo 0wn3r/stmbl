@@ -26,6 +26,7 @@
 * iq += (uq - r * iq - vel * (ld * id + psi)) / lq * period * ksp;
 * ```
 * - `1 / ld` and `1 / lq` are cached and only recomputed when the pins change.
+* - Voltage the model lacks (the dead time, an `r` or `psi` error) shifts every prediction by about `u * period / l`, and the integrators then hold the prediction, not the measured current, on the command (in the sim an 8 A step settled at 7.05 A on a 0.73 mH motor with 10 V of dead time). So each prediction is compared with the next measurement, the error is averaged at `kpe` (1/s) into `id_c` / `iq_c` (internal) and added to the prediction. They are reset in voltage mode and while disabled. `kpe` 0 gives the plain model predictor.
 *
 * 3. **PI controller** (rt):
 * - Proportional part plus feed forward, each axis first limited to +-`pwm_volt`:
@@ -49,6 +50,7 @@
 *
 * 6. **Parameters**:
 * - nrt_init defaults: `kci` 2000 1/s (a 1.3x overshoot cuts the voltage in about 1 ms at 15 kHz), `scale` 1. `ff` and `kind` default to 0.
+* - `r` is floored at 0.1 Ohm and `ld`/`lq` at 0.1 mH, so an unset (0) value cannot zero the gain or blow up the predictor's `1 / l`. The inductance floor used to be 1 mH, which silently raised motors below it (the a2 spindle, 0.747 mH): 34 % more proportional gain than `cur_bw` asks for and a predictor that corrected only 75 % of the step.
 * - On the F3, `r`, `ld` (= `l`), `lq`, `psi`, `cur_bw`, `ff` (= `cur_ff`), `kind` (= `cur_ind`) and `max_cur` come from the F4 via `ls0`, and `pwm_volt` from `ls0` (DC link voltage, phase mode and `hv0.duty_max`).
 *
 * {{% hint warning %}}
@@ -82,8 +84,8 @@ HAL_PIN(pwm_volt);  // *input*, Maximum length of the output voltage vector (V)
 
 // d, q resistance and inductance
 HAL_PIN(r);   // *parameter*, Winding resistance (Ohm), min 0.1, default 0.5
-HAL_PIN(ld);  // *parameter*, D-axis inductance (H), min 0.001, default 0.01
-HAL_PIN(lq);  // *parameter*, Q-axis inductance (H), min 0.001, default 0.01
+HAL_PIN(ld);  // *parameter*, D-axis inductance (H), min 0.0001, default 0.01
+HAL_PIN(lq);  // *parameter*, Q-axis inductance (H), min 0.0001, default 0.01
 
 // torque constant
 HAL_PIN(psi);  // *parameter*, Magnet flux linkage (Vs/rad), default 0.05
@@ -105,6 +107,7 @@ HAL_PIN(iq_error);  // *output*, Q-axis current error (A), 0 in voltage mode
 HAL_PIN(vlim_mode);  // *parameter*, Voltage vector limit, 0 = d first (default), 1 = proportional with the integrators held while sat
 HAL_PIN(sat_hyst);   // *parameter*, sat clears below (1 - sat_hyst) * pwm_volt, default 0.05
 HAL_PIN(sat);        // *output*, 1 while the voltage vector is at the limit (with sat_hyst), 0 in voltage mode
+HAL_PIN(kpe);        // *parameter*, Predictor error correction rate (1/s), 0 = off, default 300
 
 struct curpid_ctx_t {
   float id_error_sum;
@@ -113,6 +116,8 @@ struct curpid_ctx_t {
   float ld_last, ld_inv;  // 1 / ld, 1 / lq recomputed only when the pin changes:
   float lq_last, lq_inv;  // two divisions a tick otherwise, ~14 cycles each
   uint32_t sat;           // the vector limit is in force, with hysteresis
+  float id_p, iq_p;       // last tick's prediction, compared with this tick's measurement
+  float id_c, iq_c;       // the predictor's averaged error, added to the prediction
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -129,6 +134,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(ksp)    = 1.0;
   PIN(scale)    = 1.0;
   PIN(sat_hyst) = 0.05;
+  PIN(kpe)      = 300.0;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -136,8 +142,8 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   struct curpid_pin_ctx_t *pins = (struct curpid_pin_ctx_t *)pin_ptr;
 
   float r  = MAX(PIN(r), 0.1);
-  float ld = MAX(PIN(ld), 0.001);
-  float lq = MAX(PIN(lq), 0.001);
+  float ld = MAX(PIN(ld), 0.0001);
+  float lq = MAX(PIN(lq), 0.0001);
   if(ld != ctx->ld_last) {
     ctx->ld_last = ld;
     ctx->ld_inv  = 1.0 / ld;
@@ -196,9 +202,20 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float indd  = vel * psi_q;
   float indq  = vel * psi_d;
 
-  // predictor to cancel pwm delay
-  id += (PIN(ud) - r * id + indd) * ctx->ld_inv * period * PIN(ksp);
-  iq += (PIN(uq) - r * iq - indq) * ctx->lq_inv * period * PIN(ksp);
+  // predictor to cancel pwm delay. Voltage the model lacks (dead time, an
+  // r or psi error) shifts every prediction by about u * period / l, and
+  // the integrators then hold the prediction, not the current, on the
+  // command: 1 A on the spindle at standstill. So the prediction's own
+  // error against the next measurement is averaged into id_c / iq_c.
+  float id_m = id;
+  float iq_m = iq;
+  float kpe  = PIN(kpe) * period;
+  ctx->id_c += kpe * (id - ctx->id_p);
+  ctx->iq_c += kpe * (iq - ctx->iq_p);
+  id += (PIN(ud) - r * id + indd) * ctx->ld_inv * period * PIN(ksp) + ctx->id_c;
+  iq += (PIN(uq) - r * iq - indq) * ctx->lq_inv * period * PIN(ksp) + ctx->iq_c;
+  ctx->id_p = id;
+  ctx->iq_p = iq;
 
   float id_error = idc - id;
   float iq_error = iqc - iq;
@@ -257,6 +274,12 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     ctx->iq_error_sum = 0.0;
     id_error          = 0.0;
     iq_error          = 0.0;
+  }
+
+  if(PIN(cmd_mode) == VOLT_MODE || PIN(en) <= 0.0) {
+    ctx->id_c = ctx->iq_c = 0.0;
+    ctx->id_p = id_m;
+    ctx->iq_p = iq_m;
   }
 
   if(PIN(en) <= 0.0) {
