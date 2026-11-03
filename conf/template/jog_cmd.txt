@@ -1,7 +1,15 @@
+# Drive-local moves: jog from Servoterm (jog) and point to point moves to
+# stp0.target (stp), at stp0.max_vel / max_acc, S-curve with stp0.max_jerk.
+# The planner's velocity and acceleration go to pid0 as feed forward, through
+# rev0 like the position, instead of vel0's derivative of it, which lags.
 load jog
 load stp
 jog0.rt_prio = 2
 stp0.rt_prio = 2.1
 stp0.jog = jog0.jog
 rev0.in = stp0.mpos
+rev0.in_d = stp0.vel_cmd
+rev0.in_dd = stp0.acc_cmd
+pid0.vel_ext_cmd = rev0.out_d
+pid0.acc_ext_cmd = rev0.out_dd
 fault0.cmd_error = 0

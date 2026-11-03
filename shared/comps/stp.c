@@ -6,7 +6,7 @@
 
 /**
 * ## Brief
-* `stp` is a simple point to point trajectory planner with velocity and acceleration limits, soft limits and a jog input. F4 component, used in `conf/template/jog_cmd.txt` (`stp0.jog = jog0.jog`, `rev0.in = stp0.mpos`) and `conf/festo.txt`.
+* `stp` is a simple point to point trajectory planner with velocity and acceleration limits, soft limits and a jog input. F4 component, used in `conf/template/jog_cmd.txt` (`stp0.jog = jog0.jog`, `rev0.in` / `in_d` / `in_dd` = `stp0.mpos` / `vel_cmd` / `acc_cmd`, which rev0 passes to pid0 as feed forward) and `conf/festo.txt`.
 *
 * ## Component Explanation
 * All work is done in `rt`. Positions are not wrapped, only `mpos` is.
