@@ -37,11 +37,18 @@
 * - Integral part: `sum += cur_bw * r * error * period`, limited to +-(`pwm_volt` - proportional part), and added to the output. So the zero of the PI sits at `r / l`, and `cur_bw` is the closed loop bandwidth (rad/s).
 * - `id_error`/`iq_error` show the error against the predicted current.
 *
+* - **Deadbeat mode** (`mpc` > 0, a bench test option): a model predictive (continuous set, one step deadbeat) law on the predicted current replaces the PI. It uses the whole motor model (`r`, `ld`, `lq`, `psi`, cross coupling) whatever `ff` and `kind` are:
+* ```c
+* ud = (mpc * id_error - id_c) * ld / period + r * id - vel * lq * iq;
+* uq = (mpc * iq_error - iq_c) * lq / period + r * iq + vel * (ld * id + psi);
+* ```
+* - `mpc` is the share of the error closed each tick; 0.4 rises about like `cur_bw` 5000. `id_c` / `iq_c`, the predictor's correction per tick, stand for the voltage the model lacks and are taken out, so there are no integrators (they are held at 0) and disturbances are rejected at `kpe`, not at `cur_bw`. On the F3 `mpc` is not sent by the F4: set it in RAM with `hv curpid0.mpc = 0.4`; an F3 reset clears it.
+*
 * 4. **Voltage vector limit** (rt):
 * - The sum is then limited as one vector of length `pwm_volt`. With `vlim_mode` 0 (default), d first: `ud` is clamped to +-`pwm_volt`, and `uq` to what is left of the circle, `sqrt(pwm_volt^2 - ud^2)`. So d keeps what it needs for the flux (and field weakening), q gets the rest.
 * - With `vlim_mode` 1, proportional: a vector longer than `pwm_volt` is scaled down as a whole, keeping its angle, so d and q lose the same share (the way the Fanuc HRV loop limits it). Torque holds up better in deep field weakening, the d (flux) error grows instead.
 * - `sat` is 1 from the tick the unlimited vector reaches `pwm_volt` until it falls below (1 - `sat_hyst`) of it. In `vlim_mode` 1 the integrators stop integrating while `sat` is 1 (on top of the back-calculation), so they do not creep along the limit.
-* - Anti-windup by back-calculation: each integrator takes back what the limit cut from its axis, so it holds at the limit instead of winding up.
+* - Anti-windup by back-calculation: each integrator takes back what the limit cut from its axis, so it holds at the limit instead of winding up (not in deadbeat mode, which has none).
 * - `ud`/`uq` are the limited vector, which is what the PWM stage can pass, so the predictor, the integrators and the F4 (via `ls0.ud_fb/uq_fb`) all see the voltage actually applied. On the F3 `pwm_volt` is `duty_max * udc / sqrt(3)`, inside the SVM hexagon.
 *
 * 5. **Modes and enable** (rt):
@@ -108,6 +115,7 @@ HAL_PIN(vlim_mode);  // *parameter*, Voltage vector limit, 0 = d first (default)
 HAL_PIN(sat_hyst);   // *parameter*, sat clears below (1 - sat_hyst) * pwm_volt, default 0.05
 HAL_PIN(sat);        // *output*, 1 while the voltage vector is at the limit (with sat_hyst), 0 in voltage mode
 HAL_PIN(kpe);        // *parameter*, Predictor error correction rate (1/s), 0 = off, default 300
+HAL_PIN(mpc);        // *parameter*, Deadbeat (model predictive) control, share of the error closed per tick (0..1), 0 = PI (default), test only
 
 struct curpid_ctx_t {
   float id_error_sum;
@@ -223,8 +231,18 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float ud = LIMIT(ff * r * idc - kind * indd + PIN(cur_bw) * ld * id_error, max_volt);
   float uq = LIMIT(ff * r * iqc + kind * indq + PIN(cur_bw) * lq * iq_error, max_volt);
 
-  int prop = PIN(vlim_mode) > 0.0;
-  if(prop && ctx->sat) {
+  float mpc = CLAMP(PIN(mpc), 0.0, 1.0);
+  int prop  = PIN(vlim_mode) > 0.0;
+  if(mpc > 0.0) {
+    // deadbeat on the predicted current with the whole model: close mpc of
+    // the error in one tick and cancel the voltage the predictor found
+    // missing (id_c / iq_c per tick), so no integrators
+    float k           = mpc / period;
+    ud                = (k * id_error - ctx->id_c / period) * ld + r * id - vel * lq * iq;
+    uq                = (k * iq_error - ctx->iq_c / period) * lq + r * iq + vel * (ld * id + PIN(psi));
+    ctx->id_error_sum = 0.0;
+    ctx->iq_error_sum = 0.0;
+  } else if(prop && ctx->sat) {
     // held: only the back-calculation below moves them
   } else if(PIN(cur_bw) * r > 0.0) {
     ctx->id_error_sum = LIMIT(ctx->id_error_sum + PIN(cur_bw) * r * id_error * period, max_volt - ud);
@@ -261,8 +279,10 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
     float uq_max = sqrtf(MAX(m2 - ud_lim * ud_lim, 0.0));
     uq_lim       = LIMIT(uq, uq_max);
   }
-  ctx->id_error_sum += ud_lim - ud;
-  ctx->iq_error_sum += uq_lim - uq;
+  if(mpc <= 0.0) {
+    ctx->id_error_sum += ud_lim - ud;
+    ctx->iq_error_sum += uq_lim - uq;
+  }
   ud = ud_lim;
   uq = uq_lim;
 
