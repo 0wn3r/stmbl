@@ -2,11 +2,20 @@
 # stp0.target (stp), at stp0.max_vel / max_acc, S-curve with stp0.max_jerk.
 # The planner's velocity and acceleration go to pid0 as feed forward, through
 # rev0 like the position, instead of vel0's derivative of it, which lags.
+# With fb_switch0.track_fb > 0 (feedback keeps its reference), stp0.pos and
+# target follow the feedback while pid0 is off, so an enable starts where the
+# motor is; limits and targets are then in the feedback's frame (rad).
+# Linked at the console, the new components run only after stop and start;
+# on a drive with sserial in the config that drops the LinuxCNC link and HV.
 load jog
 load stp
 jog0.rt_prio = 2
 stp0.rt_prio = 2.1
 stp0.jog = jog0.jog
+stp0.en = fault0.en_pid
+stp0.pos_fb = fb_switch0.pos_fb
+stp0.fb_rev = conf0.cmd_rev
+stp0.track = fb_switch0.track_fb
 rev0.in = stp0.mpos
 rev0.in_d = stp0.vel_cmd
 rev0.in_dd = stp0.acc_cmd

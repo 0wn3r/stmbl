@@ -29,7 +29,8 @@ So **check that HV is on before** blaming the link, suggesting `hv_update` or re
 
 - Move the axis from the drive (without LinuxCNC) only through a ramped planner, for example `link jog_cmd` (`stp0.target`, `stp0.max_vel`, `stp0.max_acc`, optionally `stp0.max_jerk` for an S-curve). Never step a position command directly.
 - `link jog_cmd` also feeds the planner's velocity and acceleration to pid0 as feed forward (`pid0.vel_ext_cmd = rev0.out_d`, `acc_ext_cmd = rev0.out_dd`, in place of vel0). Link it after `sserial`, or it is overridden by the LinuxCNC path (Y, 3 Nov, with these links: 2 um rms, 5 um peak).
-- Set `stp0.min_pos` / `stp0.max_pos` to the free travel before the first move. The planner works in motor rad, relative to where the encoder counts from.
+- Set `stp0.min_pos` / `stp0.max_pos` to the free travel before the first move. The planner works in motor rad from its own position, `stp0.pos`: read it before setting limits and targets. With `fb_switch0.track_fb` 0 it starts at 0 and the feedback is moved onto it while disabled; with `track_fb` 1 it follows the feedback while disabled (wrapped to +-pi).
+- `link jog_cmd` at the console needs `stop` and `start` before the new components run. With `sserial` in the running config that drops the LinuxCNC link and HV: take sserial out first.
 - If the config contains `sserial0` lines, LinuxCNC owns enable and command. Take them out (and keep a copy) before drive-local tests, flashing or `stop` / `start` runs, and put them back afterwards.
 
 ## Configs

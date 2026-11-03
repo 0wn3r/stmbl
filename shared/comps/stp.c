@@ -11,6 +11,10 @@
 * ## Component Explanation
 * All work is done in `rt`. Positions are not wrapped, only `mpos` is.
 *
+* 0. **Disabled** (`en` <= 0 and `track` > 0):
+* - `pos` and `target` follow the feedback, `pos_fb` (negated if `fb_rev` > 0, to undo `rev0` on the command path), and `vel_cmd`, `acc_cmd`, `vel_ext_cmd` are 0, so an enable starts where the motor is. The planner's frame is then the feedback's (`pos_fb` is wrapped to +-pi): set `min_pos` / `max_pos` and `target` in it.
+* - This is for `fb_switch0.track_fb` > 0, where the feedback keeps its own reference and the command has to follow it. With `track_fb` 0 `fb_switch` moves the feedback onto the command while disabled, so there is no jump, and following it here would make a loop: `fb_switch` computes `pos_fb` from last period's offset, so `pos` and `pos_fb` would swap between two values every period. The `jog_cmd` template links `track` to `fb_switch0.track_fb`.
+*
 * 1. **Target generation**:
 * - `target` is moved by `vel_ext_cmd + jog * max_vel` (limited to 0.99 * `max_vel`) and `acc_ext_cmd` (limited to 0.99 * `max_acc`). `vel_ext_cmd` itself is integrated with `acc_ext_cmd` and written back.
 * - `target` is clamped to `min_pos`..`max_pos`.
@@ -39,6 +43,10 @@ HAL_PIN(target);       // *input/output*, Target position, clamped and moved by 
 HAL_PIN(vel_ext_cmd);  // *input/output*, External velocity, integrated from acc_ext_cmd (rad/s)
 HAL_PIN(acc_ext_cmd);  // *input*, External acceleration (rad/s^2)
 HAL_PIN(jog);          // *input*, Jog -1..1, multiplied with max_vel
+HAL_PIN(en);           // *input*, 0 = disabled: pos and target follow pos_fb if track > 0, default 1
+HAL_PIN(track);        // *parameter*, > 0: follow pos_fb while disabled, for fb_switch0.track_fb > 0
+HAL_PIN(pos_fb);       // *input*, Position feedback in the command frame after rev0 (rad)
+HAL_PIN(fb_rev);       // *parameter*, pos_fb is negated if > 0, set it to rev0.rev
 
 HAL_PIN(pos);      // *output*, Planned position, not wrapped (rad)
 HAL_PIN(mpos);     // *output*, Planned position, wrapped (rad, +-pi)
@@ -70,6 +78,7 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   // struct stp_ctx_t *ctx      = (struct stp_ctx_t *)ctx_ptr;
   struct stp_pin_ctx_t *pins = (struct stp_pin_ctx_t *)pin_ptr;
   PIN(target)                = 0.0;
+  PIN(en)                    = 1.0;
   PIN(max_vel)               = 1.0 * 2.0 * M_PI;
   PIN(max_acc)               = 10.0 * 2.0 * M_PI;
   PIN(max_pos)               = 10.0 * 2.0 * M_PI;
@@ -82,6 +91,16 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   float max_acc = MAX(PIN(max_acc), 0.01);
   float max_vel = MAX(PIN(max_vel), 0.01);
+
+  // disabled: start the next move where the motor is
+  if(PIN(en) <= 0.0 && PIN(track) > 0.0) {
+    float fb         = PIN(fb_rev) > 0.0 ? -PIN(pos_fb) : PIN(pos_fb);
+    PIN(target)      = fb;
+    PIN(pos)         = fb;
+    PIN(vel_cmd)     = 0.0;
+    PIN(acc_cmd)     = 0.0;
+    PIN(vel_ext_cmd) = 0.0;
+  }
 
   // jog input
   float acc_ext_cmd = LIMIT(PIN(acc_ext_cmd), PIN(max_acc) * 0.99);
