@@ -27,7 +27,8 @@ So **check that HV is on before** blaming the link, suggesting `hv_update` or re
 
 ## Drive-local moves
 
-- Move the axis from the drive (without LinuxCNC) only through a ramped planner, for example `link jog_cmd` (`stp0.target`, `stp0.max_vel`, `stp0.max_acc`). Never step a position command directly.
+- Move the axis from the drive (without LinuxCNC) only through a ramped planner, for example `link jog_cmd` (`stp0.target`, `stp0.max_vel`, `stp0.max_acc`, optionally `stp0.max_jerk` for an S-curve). Never step a position command directly.
+- `link jog_cmd` only moves `rev0.in`: the feed forward still comes from vel0's derivative of it (which lags) or, with `sserial` linked, from the LinuxCNC path. For a drive-local response test link `rev0.in_d = stp0.vel_cmd`, `rev0.in_dd = stp0.acc_cmd`, `pid0.vel_ext_cmd = rev0.out_d` and `pid0.acc_ext_cmd = rev0.out_dd` (Y, 3 Nov: 2 um rms, 5 um peak with them).
 - Set `stp0.min_pos` / `stp0.max_pos` to the free travel before the first move. The planner works in motor rad, relative to where the encoder counts from.
 - If the config contains `sserial0` lines, LinuxCNC owns enable and command. Take them out (and keep a copy) before drive-local tests, flashing or `stop` / `start` runs, and put them back afterwards.
 
