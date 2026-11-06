@@ -1,0 +1,24 @@
+# dob's crash estimate on the Y config: a 60 rad move at 600 rad/s2 must not
+# set dob0.crash, a 3 Nm load torque step at 1.2 s must, within 20 ms.
+# Plant friction is the Y id_sys fit (coulomb and viscous), which shows in
+# d_est over the move and is what crash_tau has to drop out.
+# 6 Nov: move max abs(crash_d) 1.39 Nm, step trips after 13 ms, peak 2.76 Nm.
+title Y crash estimate: fast move, then a load torque step
+config conf/fanuc_a3-3000.txt
+plant f=0.526805 d=0.010228
+f4 fault0.en = 0
+f4 link jog_cmd
+f4 stp0.max_vel = 250
+f4 stp0.max_acc = 600
+f4 stp0.max_pos = 200
+f4 stp0.min_pos = -200
+f4 dob0.crash_lim = 1.5
+at 0.1 f4 fault0.en = 1
+at 0.3 f4 stp0.target = 60
+at 1.2 plant load=3
+at 1.4 plant load=0
+trace dob0.d_est dob0.crash_d dob0.crash stp0.vel_cmd stp0.acc_cmd pid0.pos_error fault0.state fault0.last_fault
+expect max fault0.last_fault < 0.5 from 0.15
+expect max dob0.crash < 0.5 from 0.1 to 1.2
+expect max dob0.crash > 0.5 from 1.2 to 1.22
+run 1.6

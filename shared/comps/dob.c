@@ -36,7 +36,13 @@
 * - While `hold` is 1 (pid0 at rest, position error inside its hold window) the estimate stops and the compensation slews at `hold_rate` so that `out` moves to `hold_o` (the moving offset `conf0.o`, about 0 on a horizontal axis). `d_est` follows the compensation, so the estimate goes on from there when the hold ends. If the axis creeps out of the window the hold ends at once.
 * - `max` must leave room for the slew: on Z (o 4.59, f 2.7) `max` 4 stopped it short, 8 did not.
 *
-* 5. **Results** (commit message): in the simulation on the Y axis the load step error was 2.5 to 3 times lower at `bw` 50 to 100 Hz, 200 Hz oscillated. On the Y axis bench, with the friction feedforward off, `bw` 50 halved the error.
+* 5. **Crash estimate** (`crash_lim` > 0, default 0 = off):
+* - A crash shows as a step of the disturbance on top of its usual level (friction, gravity on Z, a steady cut). `crash_d` is `d_est` less its own slow average (first order, time constant `crash_tau`), so slowly changing loads drop out and a sudden one stands out. Friction that changes with speed shows as disturbance over a move, so the default `crash_tau` is short (0.1 s): in the sim on the Y config a 600 rad/s^2 move gives up to 1.4 Nm, a 3 Nm load step trips after 13 ms at `crash_lim` 1.5.
+* - `crash` is 1 while `abs(crash_d)` has been above `crash_lim` for longer than `crash_time`, and stays 1 for at least 0.1 s after (100 frames at the 1 kHz sserial rate), so LinuxCNC sees it: link it to a free sserial input, e.g. `sserial0.in2 = dob0.crash`. The drive itself does nothing on it; the reaction (feed hold, e-stop, backing off) is LinuxCNC's.
+* - For the first 0.1 s after an enable the average follows `d_est` directly and `crash` stays 0, so the standing load (gravity on Z) does not read as a step.
+* - An error in `j` shows as disturbance during accelerations (`j` error times the acceleration): set `crash_lim` above what fast moves give, from `crash_d` on a scope. The estimate works with `k` 0 too, but needs `en` and `j`.
+*
+* 6. **Results** (commit message): in the simulation on the Y axis the load step error was 2.5 to 3 times lower at `bw` 50 to 100 Hz, 200 Hz oscillated. On the Y axis bench, with the friction feedforward off, `bw` 50 halved the error.
 *
 * {{% hint warning %}}
 * `j` must be set, or dob stays off. With no inertia the model would read the drive's own torque command as disturbance (`d` = `-u`) and `k` would cancel it.
@@ -57,12 +63,21 @@ HAL_PIN(en);     // *input*, Enable, 0 = pass-through
 HAL_PIN(hold);       // *input*, Standstill hold, pid0.hold (with pid0.hold_en 2)
 HAL_PIN(hold_o);     // *parameter*, Torque the hold moves out to (Nm), conf0.o
 HAL_PIN(hold_rate);  // *parameter*, Slew rate of out to hold_o (Nm/s), default 20
+HAL_PIN(crash_d);     // *output*, d_est less its slow average (Nm)
+HAL_PIN(crash_tau);   // *parameter*, Time constant of that average (s), default 0.1
+HAL_PIN(crash_lim);   // *parameter*, Crash level on crash_d (Nm), 0 = off (default)
+HAL_PIN(crash_time);  // *parameter*, Time crash_d must stay above crash_lim (s), default 0.005
+HAL_PIN(crash);       // *output*, 1 = crash, held at least 0.1 s, for LinuxCNC (e.g. sserial0.in2)
 
 struct dob_ctx_t {
   float last_w;
   float last_u;
   uint32_t have;
   float c;  // compensation applied, k * d_est clamped, or slewed while holding
+  float d_avg;     // slow average of d_est
+  float arm;       // time since enable, the average follows d_est until 0.1 s
+  float over;      // time crash_d has been above crash_lim
+  float crash_on;  // time left of the crash flag
 };
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -70,7 +85,9 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   PIN(bw)        = 20.0;
   PIN(k)         = 0.0;
   PIN(max)       = 0.0;
-  PIN(hold_rate) = 20.0;
+  PIN(hold_rate)  = 20.0;
+  PIN(crash_tau)  = 0.1;
+  PIN(crash_time) = 0.005;
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
@@ -80,12 +97,18 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   float w = PIN(vel);
 
   if(PIN(en) <= 0.0 || PIN(j) <= 0.0 || !ctx->have) {
-    PIN(d_est)  = 0.0;
-    ctx->have   = PIN(en) > 0.0 && PIN(j) > 0.0;
-    ctx->last_w = w;
-    ctx->last_u = PIN(in);
-    PIN(out)    = PIN(in);
-    ctx->c      = 0.0;
+    PIN(d_est)    = 0.0;
+    ctx->have     = PIN(en) > 0.0 && PIN(j) > 0.0;
+    ctx->last_w   = w;
+    ctx->last_u   = PIN(in);
+    PIN(out)      = PIN(in);
+    ctx->c        = 0.0;
+    ctx->d_avg    = 0.0;
+    ctx->arm      = 0.0;
+    ctx->over     = 0.0;
+    PIN(crash_d)  = 0.0;
+    PIN(crash)    = 0.0;
+    ctx->crash_on = 0.0;
     return;
   }
 
@@ -111,6 +134,26 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
   ctx->c      = c;
   PIN(out)    = PIN(in) - c;
   ctx->last_u = PIN(out);
+
+  // crash estimate: the disturbance less its slow average
+  if(ctx->arm < 0.1) {
+    ctx->arm += period;
+    ctx->d_avg = PIN(d_est);
+  } else {
+    ctx->d_avg += (PIN(d_est) - ctx->d_avg) * period / MAX(PIN(crash_tau), period);
+  }
+  PIN(crash_d) = PIN(d_est) - ctx->d_avg;
+  if(PIN(crash_lim) > 0.0 && ctx->arm >= 0.1 && ABS(PIN(crash_d)) > PIN(crash_lim)) {
+    ctx->over += period;
+  } else {
+    ctx->over = 0.0;
+  }
+  if(ctx->over > PIN(crash_time)) {
+    ctx->crash_on = 0.1;
+  } else {
+    ctx->crash_on = MAX(ctx->crash_on - period, 0.0);
+  }
+  PIN(crash) = ctx->crash_on > 0.0;
 }
 
 hal_comp_t dob_comp_struct = {
