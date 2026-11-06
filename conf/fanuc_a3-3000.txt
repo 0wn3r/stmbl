@@ -40,7 +40,6 @@ link sserial
 # feedback: absolute encoder, linrev in mm
 # the scale comes from LinuxCNC:
 #   setp hm2_7i94.0.stbl.0.N.scale 10
-encf0.pos_offset = 0
 linrev0.abs_en = 1
 linrev0.abs_rev = encf0.turns
 linrev0.abs_pos = encf0.pos

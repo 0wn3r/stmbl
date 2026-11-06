@@ -11,7 +11,7 @@
 
 /**
 * ## Brief
-* `encf` reads Fanuc serial absolute encoders (tested with the Aa64 type, A860-360) on the FB0 connector of the F4 board. It is loaded by `conf/template/fanuc_fb0.txt` (used e.g. by `conf/fanuc_a6-2000.txt`), which links `encf0.pos`/`abs_pos`/`state` to `fb_switch0.mot_*` and `encf0.com_pos` to `fb_switch0.com_pos`/`com_abs_pos`, and sets `encf0.hold = fault0.en_out`.
+* `encf` reads Fanuc serial absolute encoders (tested with the Aa64 type, A860-360) on the FB0 connector of the F4 board. It is loaded by `conf/template/fanuc_fb0.txt` (used e.g. by `conf/fanuc_a6-2000.txt`), which links `encf0.pos`/`abs_pos`/`state` to `fb_switch0.mot_*` and `encf0.com_pos` to `fb_switch0.com_pos`/`com_abs_pos`.
 *
 * ## Component Explanation
 *
@@ -34,18 +34,17 @@
 * - `abs_pos = pos22 * 2 * pi / 2^22` and `com_pos = com * 2 * pi / 1024` (rad), wrapped to [-pi, pi) by sign-extending the integer count (same result as `mod()` without the `fmodf`). According to the Mesa notes the commutation track has four 0..1023 cycles per turn and is always absolute.
 *
 * 5. **Position, turns and state (rt, on every valid frame)**:
-* - `pos` is the 22 bit count shifted by `pos_offset * 64` and wrapped as a 22 bit count to [-pi, pi). The offset applies in every state; `pos_offset` = 0 gives `pos = abs_pos`.
-* - The encoder steps its own turn count where its unsigned count wraps (`abs_pos` = 0), half a turn away from the +-pi wrap. `encf` keeps a turn count referenced to the +-pi wrap of `abs_pos` (the encoder's count, + 1 on the negative half) and takes it from the encoder only while `abs_pos` is more than a quarter turn from 0, so a few counts of mismatch at the encoder's own step cannot glitch it. `turns` is then shifted so that it steps exactly where `pos` wraps and equals the encoder's count at `pos = pos_offset`. `pos_offset` = 32768 puts the wrap of `pos` at the encoder's own step.
-* - The count is taken from the encoder at once, whatever the position, after more than 10 frames without a valid frame (and at start), for 3 frames after the un-indexed bit changes, and on a jump of `pos` of more than 1/32 turn between two frames. This follows the encoder when it re-references its position and turns at the first index after a battery loss (it clears the un-indexed bit one frame before the count jumps).
-* - `hold` > 0 (the template links `fault0.en_out`, so while the drive is enabled): a re-reference at the index would step `pos` and `turns` by up to a turn, and the position loop would pull the motor back by that much. Instead, a step that motion does not explain (more than 1/32 turn per frame, or during the re-take frames a change of more than 2^12 counts, 1/1024 turn, from the previous frame's motion) is added to an offset, output on `hold_off` in turns, which is added to `pos` and `turns` so they stay continuous. The offset is dropped when `hold` goes to 0, so the new reference shows while the drive is disabled. `abs_pos` and `com_pos` are never offset and stay true for commutation.
-* - `state = 1` while the encoder reports un-indexed, during those 3 re-take frames and for the frame in which a held offset is dropped (so `linrev` re-takes its turns), else 3. An encoder that is indexed at power up reads 3 from the first frame; after the first index crossing `state` reads 3 from the frame after the re-reference, so `fb_switch` does not switch commutation to `abs_pos` from the old count.
+* - As in the Fanuc servo DSP, the encoder's 16 bit turn count and 22 bit count are read once, `acc = turns * 2^22 + count`: at start and after more than 10 frames without a valid one. On every other valid frame only the change of the count, wrapped to +-half a turn, is added, so `pos` and `turns` are continuous and the encoder's own turn step (a few counts off its count wrap) never matters.
+* - `pos` = `acc` wrapped to [-pi, pi), `turns` steps exactly where `pos` wraps and is wrapped to 16 bits like the encoder's count, so after a reset the same position is read back. An encoder that is indexed from power up gives `pos = abs_pos`.
+* - A change of more than 1/32 turn per frame (about 9000 rpm at 5 kHz) is not motion: the encoder re-references its count and turns at the first index after a battery loss (it clears the un-indexed bit one frame before the count jumps). That frame counts as moving like the one before, so the position loop never sees the jump, and `pos`/`turns` keep the old reference until the next reset. The turn count is lost with the battery anyway: re-zero in LinuxCNC. `abs_pos` and `com_pos` are always the encoder's own values, for commutation.
+* - `state = 1` while the encoder reports un-indexed and for 3 frames after the un-indexed bit changes, else 3. An encoder that is indexed at power up reads 3 from the first frame; after the first index crossing `state` reads 3 only after `abs_pos` has jumped, so `fb_switch` does not switch commutation to `abs_pos` from the old count.
 * - Until then `fb_switch` commutates from the commutation track (`com_pos` + `conf0.com_fb_offset`, measured by `id_pmsm`), see `fanuc_fb0.txt`. For a multiturn position link `linrev0.abs_rev = encf0.turns`, `linrev0.abs_pos = encf0.pos`, `linrev0.abs_state = encf0.state`.
 *
 * 6. **Debug output (nrt)**:
 * - The raw 76 bit frame is printed as a string of 0/1.
 *
 * {{% hint warning %}}
-* The turn and re-take state is kept in file-static variables, so only one `encf` instance works. The TX enable (PD15), SPI3 and TIM4 pins are hard coded for the V4 board. The frame layout was only verified for Aa64 encoders; for Aa1000 (A860-370) the extra low resolution bits are not used.
+* The capture buffers are file-static and the TX enable (PD15), SPI3 and TIM4 pins are hard coded for the V4 board. The frame layout was only verified for Aa64 encoders; for Aa1000 (A860-370) the extra low resolution bits are not used.
 * {{% /hint %}}
 */
 
@@ -54,20 +53,16 @@ HAL_COMP(encf);
 HAL_PIN(error);       // *output*, 1 = no valid frame (too short or CRC error)
 HAL_PIN(dma);         // *output*, Number of captured edges in the last frame
 
-HAL_PIN(pos);         // *output*, Single-turn position shifted by pos_offset (rad, +-pi)
+HAL_PIN(pos);         // *output*, Continuous position (rad, +-pi), wraps where turns steps
 HAL_PIN(abs_pos);     // *output*, Raw single-turn position from the encoder (rad, +-pi)
-HAL_PIN(state);       // *output*, 1 = not indexed, re-referencing or error, 3 = indexed and valid
-HAL_PIN(turns);       // *output*, Multiturn counter, steps where pos wraps (signed, -32768..32767)
+HAL_PIN(state);       // *output*, 1 = not indexed, just indexed or error, 3 = indexed and valid
+HAL_PIN(turns);       // *output*, Multiturn counter, steps where pos wraps, 16 bit like the encoder (-32768..32767)
 HAL_PIN(com_pos);     // *output*, Commutation track position (rad, +-pi per 1024 counts)
 HAL_PIN(index);       // *output*, Un-indexed bit, 1 = encoder not yet indexed
 HAL_PIN(batt);        // *output*, Battery fail bit
 HAL_PIN(req_len);     // *parameter*, 16 bit SPI word used as request pulse (default 2046)
 HAL_PIN(req_sync);    // *parameter*, 1 = the request goes out at the start of the next frt timer interrupt (TIM5, default), 0 = from the rt code
 HAL_PIN(req_phase);   // *output*, debug, TIM5 count when the rt armed the request (0..ARR, one frt period)
-
-HAL_PIN(pos_offset);  // *parameter*, Offset of pos and of the turns step, 1/65536 turn (default 0)
-HAL_PIN(hold);        // *input*, Template: fault0.en_out. While > 0, an index re-reference is held as an offset on pos/turns
-HAL_PIN(hold_off);    // *output*, Held re-reference offset (turns), 0 when none
 
 HAL_PIN(send_step);   // *parameter*, Print the raw frame every send_step nrt calls (off below 50)
 HAL_PIN(crc_ok);      // *output*, Counter of frames with correct CRC
@@ -146,19 +141,17 @@ static union {
 } data;
 static uint8_t print_buf[10];
 
-// turn count referenced to the +-pi wrap of pos, see rt_func
-static int32_t turns_pi;
-static uint32_t turns_age;
-static uint32_t last_no_index;
-static int32_t last_sp;
-static uint32_t retake;
-static int64_t last_tot;   // pos/turns as one count, last good frame
-static int32_t last_step;  // its motion over the last good frame
-static int64_t hold_off;   // offset that keeps the output continuous
-static uint32_t have_tot;
+struct encf_ctx_t {
+  int64_t acc;      // position as one count (turns * 2^22 + count), continuous
+  uint32_t last;    // 22 bit count of the last good frame
+  int32_t step;     // its motion per frame
+  uint32_t age;     // frames since the last good one
+  uint32_t settle;  // frames of state 1 left after the un-indexed bit changed
+  uint32_t last_no_index;
+};
 
 static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  // struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
+  struct encf_ctx_t *ctx = (struct encf_ctx_t *)ctx_ptr;
   struct encf_pin_ctx_t *pins = (struct encf_pin_ctx_t *)pin_ptr;
   LL_GPIO_InitTypeDef GPIO_InitStruct;
   LL_GPIO_StructInit(&GPIO_InitStruct);
@@ -237,17 +230,15 @@ static void nrt_init(void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
   LL_GPIO_SetOutputPin(GPIOD, LL_GPIO_PIN_15);  //tx enable
 
-  PIN(pos_offset) = 0;
-  PIN(req_len)    = 2046;
-  PIN(req_sync)   = 1.0;
-  turns_pi        = 0;
-  turns_age       = 1000;
-  last_no_index   = 0;
-  last_sp         = 0;
-  retake          = 0;
-  hold_off        = 0;
-  have_tot        = 0;
-  PIN(freq)       = 1024000;
+  PIN(req_len)       = 2046;
+  PIN(req_sync)      = 1.0;
+  PIN(freq)          = 1024000;
+  ctx->acc           = 0;
+  ctx->last          = 0;
+  ctx->step          = 0;
+  ctx->age           = 1000;
+  ctx->settle        = 0;
+  ctx->last_no_index = 0;
 }
 
 // crc5 of four bits (MSB first) from a zero register
@@ -280,7 +271,7 @@ static inline void set_bits(uint32_t *w, int a, int b) {
 }
 
 static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
-  // struct encf_ctx_t *ctx      = (struct encf_ctx_t *)ctx_ptr;
+  struct encf_ctx_t *ctx      = (struct encf_ctx_t *)ctx_ptr;
   struct encf_pin_ctx_t *pins = (struct encf_pin_ctx_t *)pin_ptr;
 
   uint32_t count = ARRAY_SIZE(tim_data) - LL_DMA_GetDataLength(DMA1, LL_DMA_STREAM_0);
@@ -358,98 +349,57 @@ static void rt_func(float period, void *ctx_ptr, hal_pin_inst_t *pin_ptr) {
 
       PIN(abs_pos) = wrap_bits(pos, 22);
 
-      // The encoder steps its turn count where the unsigned 22 bit count
-      // wraps (abs_pos = 0), half a turn away from the +-pi wrap of abs_pos.
-      // turns_pi counts turns at the +-pi wrap instead: turns + 1 on the
-      // negative half. Near abs_pos = 0 the encoder's own step may land a
-      // few counts off, so there the last value is held; it can only
-      // change at +-pi, a quarter turn or more away (a frame moves at most
-      // about 0.01 turn at 3000 rpm).
-      int32_t sp = (int32_t)(pos << 10) >> 10;  // signed count, abs_pos
-      // The encoder re-references its count at the first index: on X the
-      // no_index flag clears one frame before pos and turns jump. Take its
-      // turns at once for a few frames after the flag changes, and on any
-      // pos jump larger than a frame of motion can explain (2^17 counts is
-      // 1/32 turn, about 9000 rpm at 5 kHz), instead of holding a value
-      // from the old reference.
-      if(data.fanuc.no_index != last_no_index) {
-        retake = 3;
-      }
-      last_no_index = data.fanuc.no_index;
-      int32_t jump  = (int32_t)((uint32_t)(sp - last_sp) << 10) >> 10;
-      if(turns_age <= 10 && (jump > (1 << 17) || jump < -(1 << 17))) {
-        retake = MAX(retake, 1);
-      }
-      last_sp = sp;
-      if(retake || turns_age > 10 || sp < -(1 << 20) || sp >= (1 << 20)) {
-        turns_pi = (int32_t)data.fanuc.turns + (sp < 0);
-      }
-      if(retake) {
-        retake--;
-      }
-      turns_age = 0;
-
-      // pos_offset (in 16 bit counts) shifts pos in every state; turns
-      // steps exactly where pos wraps. The constant term makes turns equal
-      // the encoder's own count at pos = pos_offset (abs_pos 0 and just
-      // above): pos_offset = 0 reads the encoder's turns on the positive
-      // half, and 32768 gives the same pos and turns as before.
-      int32_t off   = (int32_t)PIN(pos_offset) << 6;
-      int32_t x     = sp + off;
-      int32_t t     = (int16_t)(uint16_t)(turns_pi + ((x + (1 << 21)) >> 22) - ((off + (1 << 21)) >> 22));
-      int32_t xw    = (int32_t)((uint32_t)x << 10) >> 10;
-      int64_t tot   = (int64_t)t * (1 << 22) + xw;
-      uint32_t gap  = turns_age + 1;  // frames since the last good one
-      // While hold (the drive enabled), a re-reference at the index would
-      // step pos and turns by up to a turn and the position loop would pull
-      // the motor back by that much. Keep the output continuous instead: a
-      // step no motion explains (more than 1/32 turn per frame, or during
-      // the re-take frames a change of more than 2^12 counts from the last
-      // frame's motion) goes into hold_off, the frame counts as moving like
-      // the one before. hold_off drops when hold does, so the new reference
-      // shows while disabled, with state 1 for that frame so linrev re-takes
-      // its turns. abs_pos and com_pos stay true for commutation.
-      int32_t release = 0;
-      if(have_tot) {
-        int64_t step = tot - last_tot;
-        int64_t dev  = step - (int64_t)last_step * gap;
-        int64_t lim  = (int64_t)(1 << 17) * gap;
-        int jumped   = step > lim || step < -lim || (retake && (dev > (1 << 12) || dev < -(1 << 12)));
-        if(PIN(hold) > 0.0) {
-          if(jumped) {
-            hold_off -= dev;
-          } else {
-            last_step = step / gap;
-          }
+      // Like the Fanuc servo DSP: the encoder's turns and count are read
+      // once, at start and after more than 10 frames without a good one;
+      // after that only the wrapped 22 bit change of the count is added, so
+      // pos and turns are continuous. A change of more than 1/32 turn per
+      // frame (about 9000 rpm at 5 kHz) is not motion but the encoder
+      // re-referencing at its first index after a battery loss: the frame
+      // counts as moving like the one before, so the position loop never
+      // sees the jump. The new reference shows after a reset.
+      uint32_t gap = ctx->age + 1;
+      if(ctx->age > 10) {
+        ctx->acc  = (int64_t)(int16_t)data.fanuc.turns * (1 << 22) + pos;
+        ctx->step = 0;
+      } else {
+        int32_t d = (int32_t)((pos - ctx->last) << 10) >> 10;  // -2^21..2^21
+        if(d > (1 << 17) * (int32_t)gap || d < -(1 << 17) * (int32_t)gap) {
+          d = ctx->step * (int32_t)gap;
         } else {
-          release   = hold_off != 0;
-          hold_off  = 0;
-          last_step = jumped ? 0 : step / gap;
+          ctx->step = d / (int32_t)gap;
         }
+        ctx->acc += d;
       }
-      last_tot = tot;
-      have_tot = 1;
-      int64_t out    = tot + hold_off;
-      PIN(pos)       = wrap_bits((uint32_t)out, 22);
-      PIN(turns)     = (int16_t)(uint16_t)((out + (1 << 21)) >> 22);
-      PIN(hold_off)  = (float)hold_off / (float)(1 << 22);
-      // absolute only once the re-reference is through: no_index clears a
-      // frame before abs_pos jumps, and fb_switch commutates from abs_pos as
-      // soon as this reads 3, so hold 1 through the re-take frames
-      PIN(state) = (PIN(index) > 0.0 || retake || release) ? 1 : 3;
+      ctx->last = pos;
+      ctx->age  = 0;
 
+      // pos wraps at +-pi, turns steps there; turns wraps at 16 bits like
+      // the encoder's own count, so a reset reads the same position back
+      PIN(pos)   = wrap_bits((uint32_t)ctx->acc, 22);
+      PIN(turns) = (int16_t)(uint16_t)((ctx->acc + (1 << 21)) >> 22);
+
+      // abs_pos jumps a frame after the un-indexed bit clears, and fb_switch
+      // commutates from abs_pos once this reads 3: hold 1 for 3 frames
+      if(data.fanuc.no_index != ctx->last_no_index) {
+        ctx->settle = 3;
+      }
+      ctx->last_no_index = data.fanuc.no_index;
+      PIN(state)         = (data.fanuc.no_index || ctx->settle) ? 1 : 3;
+      if(ctx->settle) {
+        ctx->settle--;
+      }
       pos          = data.fanuc.com_pos;
       PIN(com_pos) = wrap_bits(pos, 10);
       PIN(error)   = 0;
     } else {
-      turns_age += turns_age < 1000;
+      ctx->age += ctx->age < 1000;
       PIN(crc_er)
       ++;
       PIN(state) = 1;
       PIN(error) = 1;
     }
   } else {
-    turns_age += turns_age < 1000;
+    ctx->age += ctx->age < 1000;
     PIN(error) = 1;
     PIN(state) = 1;
   }
@@ -483,6 +433,6 @@ hal_comp_t encf_comp_struct = {
     .frt_start = 0,
     .rt_stop   = 0,
     .frt_stop  = 0,
-    .ctx_size  = 0,
+    .ctx_size  = sizeof(struct encf_ctx_t),
     .pin_count = sizeof(struct encf_pin_ctx_t) / sizeof(struct hal_pin_inst_t),
 };
